@@ -1262,6 +1262,7 @@ public type ComponentInDB record {
     string component_id;
     string project_id;
     string component_name;
+    string component_display_name?;
     string component_description?;
     string component_type;
     string component_created_by?;
