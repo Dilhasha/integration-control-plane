@@ -823,7 +823,7 @@ public type Component record {
     @sql:Column {
         name: "component_type"
     }
-    RuntimeType componentType?;
+    RuntimeType componentType;
     string labels?;
 
     // System Component Flag
@@ -1263,7 +1263,7 @@ public type ComponentInDB record {
     string project_id;
     string component_name;
     string component_description?;
-    string component_type?;
+    string component_type;
     string component_created_by?;
     string component_created_at?;
     string component_updated_at?;

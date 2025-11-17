@@ -1181,6 +1181,13 @@ isolated function validateHeartbeatData(types:Heartbeat heartbeat) returns error
         return error(string `Invalid component configuration detected: ${heartbeat.component}`, componentId);
     }
     heartbeat.component = componentId;
+    types:Component|error componentById = getComponentById(componentId);
+    if componentById is error {
+        return error(string `Invalid component configuration detected: ${heartbeat.component}`, componentById);
+    }
+    if componentById.componentType != heartbeat.runtimeType {
+        return error(string `Component type mismatch for component ${heartbeat.component}. Expected: ${componentById.componentType}, Got: ${heartbeat.runtimeType}`);
+    }
 
     // Validate that all runtimes in the same component have consistent services and listeners
     // check validateComponentRuntimeConsistency(componentId, heartbeat.artifacts);
@@ -2167,7 +2174,7 @@ public isolated function deleteProject(string projectId) returns error? {
 // Create a new component in the components table
 public isolated function createComponent(types:ComponentInput component) returns types:Component|error? {
     string componentId = uuid:createType1AsString();
-    string componentTypeValue = component.componentType is types:RuntimeType ? component.componentType.toString() : "BI";
+    string componentTypeValue = component.componentType.toString();
     sql:ParameterizedQuery insertQuery = `INSERT INTO components (component_id, project_id, name, description, component_type, created_by) 
                                           VALUES (${componentId}, ${component.projectId}, ${component.name}, ${component.description}, ${componentTypeValue}, ${component.createdBy})`;
     var result = dbClient->execute(insertQuery);
@@ -2353,6 +2360,7 @@ public isolated function getComponentsByProjectIds(string[] projectIds, types:Co
 
                 // Component Metadata
                 name: component.component_name,
+                componentType: component.component_type == "MI" ? types:MI : types:BI,
                 handler: component.component_name, // Using component name as handler
                 displayName: component.component_name, // Using component name as display name
                 displayType: "service", // Default to "service"
