@@ -2647,12 +2647,15 @@ public isolated function deleteComponent(string componentId) returns error? {
 }
 
 // Update component name and/or description
-public isolated function updateComponent(string componentId, string? name, string? description, string updatedBy) returns error? {
+public isolated function updateComponent(string componentId, string? name, string? displayName, string? description, string updatedBy) returns error? {
     sql:ParameterizedQuery whereClause = ` WHERE component_id = ${componentId} `;
     sql:ParameterizedQuery updateFields = ` SET updated_at = CURRENT_TIMESTAMP, updated_by = ${updatedBy} `;
 
     if name is string {
         updateFields = sql:queryConcat(updateFields, `, name = ${name} `);
+    }
+    if displayName is string {
+        updateFields = sql:queryConcat(updateFields, `, display_name = ${displayName} `);
     }
     if description is string {
         updateFields = sql:queryConcat(updateFields, `, description = ${description} `);
