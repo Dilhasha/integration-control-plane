@@ -369,6 +369,39 @@ export const ARTIFACT_TYPE_TO_SOURCE_TYPE: Record<string, string> = {
   Automation: 'automation',
 };
 
+export interface GqlArtifactParam {
+  name: string;
+  value: string;
+}
+
+const ARTIFACT_PARAMS_QUERY = `
+  query ArtifactParams($componentId: String!, $artifactType: String!, $artifactName: String!, $environmentId: String, $runtimeId: String) {
+    artifactParametersByComponent(
+      componentId: $componentId,
+      artifactType: $artifactType,
+      artifactName: $artifactName,
+      environmentId: $environmentId,
+      runtimeId: $runtimeId
+    ) {
+      name
+      value
+    }
+  }`;
+
+export function useArtifactParams(componentId: string, artifactType: string, artifactName: string, envId: string) {
+  return useQuery({
+    queryKey: ['artifactParams', componentId, artifactType, artifactName, envId],
+    queryFn: () =>
+      gql<{ artifactParametersByComponent: GqlArtifactParam[] }>(ARTIFACT_PARAMS_QUERY, {
+        componentId,
+        artifactType,
+        artifactName,
+        environmentId: envId,
+      }).then((d) => d.artifactParametersByComponent),
+    enabled: !!componentId && !!artifactType && !!artifactName && !!envId,
+  });
+}
+
 // ── Refresh environment artifacts ──
 
 export function useRefreshEnvironmentArtifacts() {

@@ -40,6 +40,8 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
   const overviewFields = (config?.overviewFields ?? '').split(', ').filter(Boolean);
   const showTracingToggle = ['RestApi', 'ProxyService', 'InboundEndpoint'].includes(artifactType);
   const showRuntimesButton = true; // Show View Runtimes button for all entry points
+  const showParametersButton = artifactType === 'InboundEndpoint';
+  const showSourceButton = artifactType === 'RestApi';
   const showStatisticsToggle = ['RestApi', 'ProxyService', 'InboundEndpoint'].includes(artifactType);
   const toEnabled = (value: unknown) => {
     if (typeof value === 'boolean') return value;
@@ -134,8 +136,18 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
               <Switch size="small" checked={statisticsEnabled} onChange={(e) => handleToggleStatistics(e.target.checked)} disabled={updateStatisticsStatus.isPending} aria-label="Enable statistics" />
             </Stack>
           )}
+          {showSourceButton && (
+            <Button variant="outlined" size="small" onClick={() => onOpenDrawerTab('Source')} sx={{ ml: 'auto' }}>
+              View Source
+            </Button>
+          )}
+          {showParametersButton && (
+            <Button variant="outlined" size="small" onClick={() => onOpenDrawerTab('Parameters')} sx={{ ml: 'auto' }}>
+              View Parameters
+            </Button>
+          )}
           {showRuntimesButton && (
-            <Button variant="outlined" size="small" onClick={() => onOpenDrawerTab('Runtimes')} sx={{ ml: 'auto' }}>
+            <Button variant="outlined" size="small" onClick={() => onOpenDrawerTab('Runtimes')} sx={{ ml: showSourceButton || showParametersButton ? 0 : 'auto' }}>
               View Runtimes
             </Button>
           )}

@@ -46,7 +46,7 @@ import { useEffect, useState } from 'react';
 import { useArtifactTypes, useArtifacts, ARTIFACT_QUERY_MAP, type GqlArtifact } from '../api/queries';
 import { useUpdateArtifactStatus, useUpdateListenerState } from '../api/mutations';
 import SearchField from './SearchField';
-import { ArtifactSource, ArtifactApiDefinition, ArtifactEndpoints, ArtifactWsdl, ArtifactValue, ArtifactCarbonArtifacts, ArtifactRuntimes, AutomationExecutions } from './ArtifactTabs';
+import { ArtifactSource, ArtifactApiDefinition, ArtifactEndpoints, ArtifactWsdl, ArtifactValue, ArtifactCarbonArtifacts, ArtifactRuntimes, InboundEndpointParameters, AutomationExecutions } from './ArtifactTabs';
 import { ARTIFACT_ICONS, ARTIFACT_TABS, DEFAULT_ARTIFACT_TABS, ENTRY_POINT_TYPE_SET, formatArtifactTypeName, typePlural, type SelectedArtifact, type TabProps } from './artifact-config';
 
 function ListenerConfirmDialog({ open, action, listenerName, onConfirm, onCancel }: { open: boolean; action: 'START' | 'STOP'; listenerName: string; onConfirm: () => void; onCancel: () => void }) {
@@ -294,6 +294,8 @@ export function ArtifactDetail({ selected, onClose }: { selected: SelectedArtifa
         return <ArtifactCarbonArtifacts {...tabProps} />;
       case 'Runtimes':
         return <ArtifactRuntimes {...tabProps} />;
+      case 'Parameters':
+        return <InboundEndpointParameters {...tabProps} />;
       case 'Executions':
         return <AutomationExecutions {...tabProps} />;
       default:

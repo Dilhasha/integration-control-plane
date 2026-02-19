@@ -17,7 +17,7 @@
  */
 
 import { Box, Chip, CircularProgress, Stack, Typography } from '@wso2/oxygen-ui';
-import { useArtifactSource, useLocalEntryValue, ARTIFACT_TYPE_TO_SOURCE_TYPE } from '../api/queries';
+import { useArtifactSource, useArtifactParams, useLocalEntryValue, ARTIFACT_TYPE_TO_SOURCE_TYPE } from '../api/queries';
 import CodeViewer from './CodeViewer';
 import DataTable, { emptySx } from './DataTable';
 import type { TabProps } from './artifact-config';
@@ -128,6 +128,16 @@ export function ArtifactRuntimes({ artifact }: TabProps) {
       emptyMsg="No runtimes found."
     />
   );
+}
+
+export function InboundEndpointParameters({ artifact, envId, componentId, artifactType }: TabProps) {
+  const artifactName = artifact.name?.toString() ?? '';
+  const backendType = ARTIFACT_TYPE_TO_SOURCE_TYPE[artifactType] ?? artifactType.toLowerCase();
+  const { data: params, isLoading, error } = useArtifactParams(componentId, backendType, artifactName, envId);
+  if (isLoading) return <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />;
+  if (error) return <Typography sx={emptySx}>Failed to load parameters.</Typography>;
+  if (!params || params.length === 0) return <Typography sx={emptySx}>No parameters found.</Typography>;
+  return <DataTable headers={['Name', 'Value']} rows={params.map((p) => [p.name, p.value])} emptyMsg="No parameters found." />;
 }
 
 export function AutomationExecutions({ artifact }: TabProps) {

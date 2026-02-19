@@ -53,6 +53,7 @@ export const ARTIFACT_ICONS: Record<string, JSX.Element> = {
 
 export const ARTIFACT_TABS: Record<string, string[]> = {
   RestApi: ['Source', 'Runtimes'],
+  InboundEndpoint: ['Source', 'Parameters', 'Runtimes'],
   ProxyService: ['Endpoints', 'WSDL', 'Runtimes'],
   Task: ['Runtimes'],
   LocalEntry: ['Value', 'Runtimes'],
