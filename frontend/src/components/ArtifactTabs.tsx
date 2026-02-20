@@ -130,6 +130,18 @@ export function ArtifactRuntimes({ artifact }: TabProps) {
   );
 }
 
+function parseNestedParams(value: string): Array<{ name: string; value: string }> | null {
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'object' && item !== null && 'name' in item && 'value' in item)) {
+      return parsed as Array<{ name: string; value: string }>;
+    }
+  } catch {
+    // not valid JSON
+  }
+  return null;
+}
+
 export function InboundEndpointParameters({ artifact, envId, componentId, artifactType }: TabProps) {
   const artifactName = artifact.name?.toString() ?? '';
   const backendType = ARTIFACT_TYPE_TO_SOURCE_TYPE[artifactType] ?? artifactType.toLowerCase();
@@ -137,7 +149,27 @@ export function InboundEndpointParameters({ artifact, envId, componentId, artifa
   if (isLoading) return <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />;
   if (error) return <Typography sx={emptySx}>Failed to load parameters.</Typography>;
   if (!params || params.length === 0) return <Typography sx={emptySx}>No parameters found.</Typography>;
-  return <DataTable headers={['Name', 'Value']} rows={params.map((p) => [p.name, p.value])} emptyMsg="No parameters found." />;
+  return (
+    <DataTable
+      headers={['Name', 'Value']}
+      rows={params.map((p) => {
+        const nested = p.key === 'parameters' ? parseNestedParams(p.value) : null;
+        return [
+          p.key,
+          nested ? (
+            <DataTable
+              headers={['Name', 'Value']}
+              rows={nested.map((n) => [n.name, n.value])}
+              emptyMsg="No parameters found."
+            />
+          ) : (
+            p.value
+          ),
+        ];
+      })}
+      emptyMsg="No parameters found."
+    />
+  );
 }
 
 export function AutomationExecutions({ artifact }: TabProps) {

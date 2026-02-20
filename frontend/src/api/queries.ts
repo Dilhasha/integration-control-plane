@@ -370,7 +370,7 @@ export const ARTIFACT_TYPE_TO_SOURCE_TYPE: Record<string, string> = {
 };
 
 export interface GqlArtifactParam {
-  name: string;
+  key: string;
   value: string;
 }
 
@@ -383,7 +383,7 @@ const ARTIFACT_PARAMS_QUERY = `
       environmentId: $environmentId,
       runtimeId: $runtimeId
     ) {
-      name
+      key
       value
     }
   }`;
