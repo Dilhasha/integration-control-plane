@@ -42,6 +42,7 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
   const showRuntimesButton = true; // Show View Runtimes button for all entry points
   const showParametersButton = artifactType === 'InboundEndpoint';
   const showSourceButton = artifactType === 'RestApi';
+  const showWsdlButton = artifactType === 'ProxyService';
   const showStatisticsToggle = ['RestApi', 'ProxyService', 'InboundEndpoint'].includes(artifactType);
   const toEnabled = (value: unknown) => {
     if (typeof value === 'boolean') return value;
@@ -146,8 +147,13 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
               View Parameters
             </Button>
           )}
+          {showWsdlButton && (
+            <Button variant="outlined" size="small" onClick={() => onOpenDrawerTab('WSDL')} sx={{ ml: 'auto' }}>
+              View WSDL
+            </Button>
+          )}
           {showRuntimesButton && (
-            <Button variant="outlined" size="small" onClick={() => onOpenDrawerTab('Runtimes')} sx={{ ml: showSourceButton || showParametersButton ? 0 : 'auto' }}>
+            <Button variant="outlined" size="small" onClick={() => onOpenDrawerTab('Runtimes')} sx={{ ml: showSourceButton || showParametersButton || showWsdlButton ? 0 : 'auto' }}>
               View Runtimes
             </Button>
           )}

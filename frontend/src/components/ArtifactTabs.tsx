@@ -17,7 +17,7 @@
  */
 
 import { Box, Chip, CircularProgress, Stack, Typography } from '@wso2/oxygen-ui';
-import { useArtifactSource, useArtifactParams, useLocalEntryValue, ARTIFACT_TYPE_TO_SOURCE_TYPE } from '../api/queries';
+import { useArtifactSource, useArtifactWsdl, useArtifactParams, useLocalEntryValue, ARTIFACT_TYPE_TO_SOURCE_TYPE } from '../api/queries';
 import CodeViewer from './CodeViewer';
 import DataTable, { emptySx } from './DataTable';
 import type { TabProps } from './artifact-config';
@@ -93,11 +93,11 @@ export function ServiceResources({ artifact }: TabProps) {
 }
 
 export function ArtifactWsdl({ envId, componentId, artifactType, artifact }: TabProps) {
-  const sourceType = ARTIFACT_TYPE_TO_SOURCE_TYPE[artifactType] ?? artifactType.toLowerCase();
-  const { data: source, isLoading, error } = useArtifactSource(envId, componentId, sourceType, artifact.name?.toString() ?? '');
+  const backendType = ARTIFACT_TYPE_TO_SOURCE_TYPE[artifactType] ?? artifactType.toLowerCase();
+  const { data: wsdl, isLoading, error } = useArtifactWsdl(componentId, backendType, artifact.name?.toString() ?? '', envId);
   if (isLoading) return <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />;
-  if (error || !source) return <Typography sx={emptySx}>No WSDL content available.</Typography>;
-  return <CodeViewer code={source} language="xml" />;
+  if (error || !wsdl) return <Typography sx={emptySx}>No WSDL content available.</Typography>;
+  return <CodeViewer code={wsdl} language="xml" />;
 }
 
 export function ArtifactValue({ artifact, envId, componentId }: TabProps) {

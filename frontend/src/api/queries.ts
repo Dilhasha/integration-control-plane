@@ -334,6 +334,38 @@ export function useArtifactSource(envId: string, componentId: string, artifactTy
   });
 }
 
+const ARTIFACT_WSDL_QUERY = `
+  query ArtifactWsdl(
+      $componentId: String!,
+      $artifactType: String!,
+      $artifactName: String!,
+      $environmentId: String,
+      $runtimeId: String
+    ) {
+      artifactWsdlByComponent(
+        componentId: $componentId,
+        artifactType: $artifactType,
+        artifactName: $artifactName,
+        environmentId: $environmentId,
+        runtimeId: $runtimeId
+      )
+    }`;
+
+export function useArtifactWsdl(componentId: string, artifactType: string, artifactName: string, envId: string, runtimeId?: string) {
+  return useQuery({
+    queryKey: ['artifactWsdl', componentId, artifactType, artifactName, envId, runtimeId],
+    queryFn: () =>
+      gql<{ artifactWsdlByComponent: string }>(ARTIFACT_WSDL_QUERY, {
+        componentId,
+        artifactType,
+        artifactName,
+        environmentId: envId,
+        runtimeId,
+      }).then((d) => d.artifactWsdlByComponent),
+    enabled: !!componentId && !!artifactType && !!artifactName && !!envId,
+  });
+}
+
 const LOCAL_ENTRY_VALUE_QUERY = `
   query LocalEntryValue($componentId: String!, $entryName: String!, $environmentId: String) {
     localEntryValueByComponent(componentId: $componentId, entryName: $entryName, environmentId: $environmentId)
