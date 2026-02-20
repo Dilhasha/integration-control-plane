@@ -276,8 +276,8 @@ task initAllH2Databases {
         logger.quiet('╔════════════════════════════════════════╗')
         logger.quiet('║  All H2 Databases Initialized! ✓      ║')
         logger.quiet('╠════════════════════════════════════════╣')
-        logger.quiet('║  • Main DB: database/icpdb.mv.db      ║')
-        logger.quiet('║  • Credentials: database/credentialsdb║')
+        logger.quiet('║  • Main DB: database/icp_db.mv.db     ║')
+        logger.quiet('║  • Credentials: database/credentials_db║')
         logger.quiet('╚════════════════════════════════════════╝')
     }
 }

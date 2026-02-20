@@ -206,24 +206,24 @@ task packageICP {
             
             
             // Copy database files if they exist
-            if (file('icp_server/database/icpdb.mv.db').exists()) {
+            if (file('icp_server/database/icp_db.mv.db').exists()) {
                 def dbDir = file("${rootDir}/bin/database")
                 if (!dbDir.exists()) {
                     dbDir.mkdirs()
                 }
                 copy {
-                    from 'icp_server/database/icpdb.mv.db'
+                    from 'icp_server/database/icp_db.mv.db'
                     into dbDir
                 }
             }
 
-            if (file('icp_server/database/credentialsdb.mv.db').exists()) {
+            if (file('icp_server/database/credentials_db.mv.db').exists()) {
                 def dbDir = file("${rootDir}/bin/database")
                 if (!dbDir.exists()) {
                     dbDir.mkdirs()
                 }
                 copy {
-                    from 'icp_server/database/credentialsdb.mv.db'
+                    from 'icp_server/database/credentials_db.mv.db'
                     into dbDir
                 }
             }
