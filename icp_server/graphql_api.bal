@@ -15,10 +15,10 @@
 // under the License.
 
 import icp_server.auth;
+import icp_server.mi_management;
 import icp_server.storage;
 import icp_server.types;
 
-import ballerina/data.jsondata;
 import ballerina/graphql;
 import ballerina/http;
 import ballerina/lang.value;
@@ -1960,64 +1960,37 @@ service /graphql on graphqlListener {
                 artifactName = artifactName);
 
         // Create management API client (toggle insecure TLS via configuration)
-        http:Client|error mgmtClient = artifactsApiAllowInsecureTLS
+        http:Client|error mgmtClientResult = artifactsApiAllowInsecureTLS
             ? new (baseUrl, {secureSocket: {enable: false}})
             : new (baseUrl);
-        if mgmtClient is error {
-            log:printError("Failed to create management API client", mgmtClient);
+        if mgmtClientResult is error {
+            log:printError("Failed to create management API client", mgmtClientResult);
             return error("Failed to create management API client");
         }
-        // Generate an HMAC JWT (same mechanism as heartbeat) to call the ICP internal API
+        http:Client mgmtClient = mgmtClientResult;
+
+        // Generate an HMAC JWT to call the MI Management API (same mechanism as /icp/artifacts)
         string hmacToken = check storage:issueRuntimeHmacToken();
 
-        // Fetch artifact source via ICP Internal API (/icp/artifacts)
-        string artifactPath = string `${ICP_ARTIFACTS_PATH}?type=${artifactType}&name=${artifactName}`;
-        // Log outbound request details (truncate token for safety)
-        log:printDebug("Sending ICP internal API artifact request",
+        // Fetch artifact metadata via MI Management API (/management/...)
+        // NOTE: The management API returns operational metadata (status, URL, tracing info)
+        // rather than the artifact source XML that /icp/artifacts returns.
+        // The returned JSON string shape depends on the artifact type.
+        log:printDebug("Fetching artifact details via MI management API",
                 runtimeId = runtime.runtimeId,
                 managementUrl = baseUrl,
-                artifactPath = artifactPath,
-                accept = "application/json"
+                artifactType = artifactType,
+                artifactName = artifactName
         );
-        http:Response|error artifactResponse = mgmtClient->get(artifactPath, {
-            "Authorization": string `Bearer ${hmacToken}`,
-            "Accept": "application/json"
-        });
+        string artifactDetails = check mi_management:fetchArtifactDetails(
+                mgmtClient, hmacToken, artifactType, artifactName);
 
-        if artifactResponse is error {
-            log:printError("Failed to fetch artifact from management API", artifactResponse);
-            return error("Failed to fetch artifact from management API");
-        }
-
-        if artifactResponse.statusCode != http:STATUS_OK {
-            string|error errPayload = artifactResponse.getTextPayload();
-            if errPayload is error {
-                log:printError("ICP internal API artifact fetch returned non-OK status",
-                        status = artifactResponse.statusCode.toString(),
-                        runtimeId = runtime.runtimeId,
-                        artifactType = artifactType,
-                        artifactName = artifactName);
-                return error(string `ICP internal API artifact fetch failed with status ${artifactResponse.statusCode}`);
-            }
-            log:printError("ICP internal API artifact fetch returned non-OK status",
-                    status = artifactResponse.statusCode.toString(),
-                    runtimeId = runtime.runtimeId,
-                    artifactType = artifactType,
-                    artifactName = artifactName,
-                    response = errPayload);
-            return error(string `ICP internal API artifact fetch failed with status ${artifactResponse.statusCode}: ${errPayload}`);
-        }
-
-        // Parse JSON body and extract only the `configuration` field
-        json artifactConfigJson = check artifactResponse.getJsonPayload();
-        types:ArtifactResponse artifactConfig = check jsondata:parseAsType(artifactConfigJson);
-
-        log:printInfo("Successfully fetched artifact source",
+        log:printInfo("Successfully fetched artifact details from MI management API",
                 runtimeId = runtime.runtimeId,
-                artifactType = artifactConfig.'type,
-                artifactName = artifactConfig.name,
-                sourceLength = artifactConfig.configuration.length());
-        return artifactConfig.configuration;
+                artifactType = artifactType,
+                artifactName = artifactName,
+                responseLength = artifactDetails.length());
+        return artifactDetails;
     }
 
     // Get WSDL for any supported artifact by type and name via ICP internal API
@@ -2063,74 +2036,41 @@ service /graphql on graphqlListener {
         string baseUrl = check storage:buildManagementBaseUrl(runtime.managementHostname, runtime.managementPort);
 
         // Normalize artifact type
-        string t = artifactType.toLowerAscii();
-        string artifactPath;
-        if t == "dataservice" || t == "data-service" || t == "datasvc" {
-            // Data Services use 'service' param in ICP API
-            artifactPath = string `${ICP_ARTIFACTS_PATH}/wsdl?service=${artifactName}`;
-        } else if t == "proxy-service" {
-            artifactPath = string `${ICP_ARTIFACTS_PATH}/wsdl?proxy=${artifactName}`;
-        } else {
-            // Generic pattern for future artifact types
-            artifactPath = string `${ICP_ARTIFACTS_PATH}/wsdl?type=${t}&name=${artifactName}`;
-        }
-
-        log:printInfo("Fetching artifact WSDL from management API",
+        log:printInfo("Fetching artifact WSDL via MI management API",
                 runtimeId = runtime.runtimeId,
                 managementUrl = baseUrl,
                 artifactType = artifactType,
-                artifactName = artifactName,
-                path = artifactPath);
+                artifactName = artifactName);
 
-        // Create management API client (toggle insecure TLS via configuration)
-        http:Client|error mgmtClient = artifactsApiAllowInsecureTLS
+        // Create MI management API client (toggle insecure TLS via configuration)
+        http:Client|error mgmtClientResult = artifactsApiAllowInsecureTLS
             ? new (baseUrl, {secureSocket: {enable: false}})
             : new (baseUrl);
-        if mgmtClient is error {
-            log:printError("Failed to create management API client", mgmtClient);
+        if mgmtClientResult is error {
+            log:printError("Failed to create management API client", mgmtClientResult);
             return error("Failed to create management API client");
         }
+        http:Client mgmtClient = mgmtClientResult;
 
-        // Generate an HMAC JWT to call the ICP internal API
+        // Generate an HMAC JWT to call the MI Management API
         string hmacToken = check storage:issueRuntimeHmacToken();
 
-        http:Response|error wsdlResponse = mgmtClient->get(artifactPath, {
-            "Authorization": string `Bearer ${hmacToken}`,
-            "Accept": "application/xml"
-        });
+        // Step 1: Retrieve the WSDL URL from the MI Management API
+        // (management API returns wsdl1_1 / wsdl2_0 URLs, not the WSDL content directly)
+        string wsdlUrl = check mi_management:fetchArtifactWsdlUrl(
+                mgmtClient, hmacToken, artifactType, artifactName);
 
-        if wsdlResponse is error {
-            log:printError("Failed to fetch WSDL from management API", wsdlResponse);
-            return error("Failed to fetch WSDL from management API");
-        }
+        log:printDebug("Retrieved WSDL URL from MI management API",
+                runtimeId = runtime.runtimeId,
+                artifactType = artifactType,
+                artifactName = artifactName,
+                wsdlUrl = wsdlUrl);
 
-        if wsdlResponse.statusCode != http:STATUS_OK {
-            string|error errPayload = wsdlResponse.getTextPayload();
-            if errPayload is error {
-                log:printError("ICP internal API WSDL fetch returned non-OK status",
-                        status = wsdlResponse.statusCode.toString(),
-                        runtimeId = runtime.runtimeId,
-                        artifactType = artifactType,
-                        artifactName = artifactName);
-                return error(string `ICP internal API WSDL fetch failed with status ${wsdlResponse.statusCode}`);
-            }
-            log:printError("ICP internal API WSDL fetch returned non-OK status",
-                    status = wsdlResponse.statusCode.toString(),
-                    runtimeId = runtime.runtimeId,
-                    artifactType = artifactType,
-                    artifactName = artifactName,
-                    response = errPayload);
-            return error(string `ICP internal API WSDL fetch failed with status ${wsdlResponse.statusCode}: ${errPayload}`);
-        }
+        // Step 2: Fetch the actual WSDL XML content from the URL
+        // The WSDL URL is typically on the MI HTTP service port (e.g. :8290), not the management port
+        string wsdlXml = check mi_management:fetchWsdlContent(wsdlUrl, artifactsApiAllowInsecureTLS);
 
-        // Return raw XML as string
-        string|error wsdlXml = wsdlResponse.getTextPayload();
-        if wsdlXml is error {
-            log:printError("Failed to read WSDL text payload", wsdlXml);
-            return error("Failed to read WSDL payload");
-        }
-
-        log:printInfo("Successfully fetched artifact WSDL",
+        log:printInfo("Successfully fetched artifact WSDL via MI management API",
                 runtimeId = runtime.runtimeId,
                 artifactType = artifactType,
                 artifactName = artifactName,
@@ -2177,60 +2117,38 @@ service /graphql on graphqlListener {
         // Build management API base URL
         string baseUrl = check storage:buildManagementBaseUrl(runtime.managementHostname, runtime.managementPort);
 
-        log:printInfo("Fetching local entry from runtime management API",
+        log:printInfo("Fetching local entry info via MI management API",
                 runtimeId = runtime.runtimeId,
                 managementUrl = baseUrl,
                 entryName = entryName);
 
-        // Create management API client (toggle insecure TLS via configuration)
-        http:Client|error mgmtClient = artifactsApiAllowInsecureTLS
+        // Create MI management API client (toggle insecure TLS via configuration)
+        http:Client|error mgmtClientResult = artifactsApiAllowInsecureTLS
             ? new (baseUrl, {secureSocket: {enable: false}})
             : new (baseUrl);
-        if mgmtClient is error {
-            log:printError("Failed to create management API client", mgmtClient);
+        if mgmtClientResult is error {
+            log:printError("Failed to create management API client", mgmtClientResult);
             return error("Failed to create management API client");
         }
+        http:Client mgmtClient = mgmtClientResult;
 
-        // Generate an HMAC JWT (same mechanism as heartbeat) to call the ICP internal API
+        // Generate an HMAC JWT to call the MI Management API
         string hmacToken = check storage:issueRuntimeHmacToken();
 
-        // Fetch local entry via ICP Internal API (/icp/artifacts/local-entry)
-        string artifactPath = string `${ICP_ARTIFACTS_PATH}/local-entry?name=${entryName}`;
-        log:printDebug("Sending ICP internal API local entry request",
+        // Fetch local entry info via MI Management API (/management/local-entries?name=...)
+        // NOTE: The management API returns {name, type} but NOT the entry value.
+        // The returned string is a JSON object: {"name": "...", "type": "Inline Text"}
+        mi_management:MgmtLocalEntryInfo leInfo = check mi_management:fetchLocalEntryInfo(
+                mgmtClient, hmacToken, entryName);
+
+        log:printInfo("Successfully fetched local entry info from MI management API",
                 runtimeId = runtime.runtimeId,
-                managementUrl = baseUrl,
-                artifactPath = artifactPath,
-                accept = "application/json"
-        );
-        http:Response|error leResponse = mgmtClient->get(artifactPath, {
-            "Authorization": string `Bearer ${hmacToken}`,
-            "Accept": "application/json"
-        });
+                entryName = leInfo.name,
+                entryType = leInfo.'type ?: "unknown");
 
-        if leResponse is error {
-            log:printError("Failed to fetch local entry from management API", leResponse);
-            return error("Failed to fetch local entry from management API");
-        }
-
-        if leResponse.statusCode != http:STATUS_OK {
-            string|error errPayload = leResponse.getTextPayload();
-            if errPayload is error {
-                log:printError("ICP internal API local entry fetch returned non-OK status",
-                        status = leResponse.statusCode.toString(),
-                        runtimeId = runtime.runtimeId,
-                        entryName = entryName);
-                return error(string `ICP internal API local entry fetch failed with status ${leResponse.statusCode}`);
-            }
-            log:printError("ICP internal API local entry fetch returned non-OK status",
-                    status = leResponse.statusCode.toString(),
-                    runtimeId = runtime.runtimeId,
-                    entryName = entryName,
-                    response = errPayload);
-            return error(string `ICP internal API local entry fetch failed with status ${leResponse.statusCode}: ${errPayload}`);
-        }
-        json payloadJson = check leResponse.getJsonPayload();
-        types:LocalEntryValue payload = check jsondata:parseAsType(payloadJson);
-        return payload.value;
+        // Return the local entry type as a JSON string since the management API
+        // does not expose the entry value (use icp/artifacts API for the value)
+        return string `{"name":"${leInfo.name}","type":"${leInfo.'type ?: ""}"}`;
     }
 
     // Get Inbound Endpoint parameters from management API via ICP internal API
@@ -2268,91 +2186,38 @@ service /graphql on graphqlListener {
         // Build management API base URL
         string baseUrl = check storage:buildManagementBaseUrl(runtime.managementHostname, runtime.managementPort);
 
-        log:printInfo("Fetching inbound endpoint parameters from management API",
+        log:printInfo("Fetching inbound endpoint info via MI management API",
                 runtimeId = runtime.runtimeId,
                 managementUrl = baseUrl,
                 inboundName = inboundName);
 
-        http:Client|error mgmtClient = artifactsApiAllowInsecureTLS
+        http:Client|error mgmtClientResult = artifactsApiAllowInsecureTLS
             ? new (baseUrl, {secureSocket: {enable: false}})
             : new (baseUrl);
-        if mgmtClient is error {
-            log:printError("Failed to create management API client", mgmtClient);
+        if mgmtClientResult is error {
+            log:printError("Failed to create management API client", mgmtClientResult);
             return error("Failed to create management API client");
         }
+        http:Client mgmtClient = mgmtClientResult;
 
         string hmacToken = check storage:issueRuntimeHmacToken();
-        string artifactPath = string `${ICP_ARTIFACTS_PATH}/inbound/parameters?name=${inboundName}`;
-        log:printDebug("Sending ICP internal API inbound parameters request",
-                runtimeId = runtime.runtimeId,
-                managementUrl = baseUrl,
-                artifactPath = artifactPath,
-                accept = "application/json"
-        );
-        http:Response|error resp = mgmtClient->get(artifactPath, {
-            "Authorization": string `Bearer ${hmacToken}`,
-            "Accept": "application/json"
-        });
 
-        if resp is error {
-            log:printError("Failed to fetch inbound parameters from management API", resp);
-            return error("Failed to fetch inbound parameters from management API");
-        }
+        // Fetch inbound endpoint info via MI Management API (/management/inbound-endpoints?...)
+        // NOTE: The management API returns {name, protocol} only — it does NOT expose the
+        // detailed inbound endpoint parameters. The returned Parameter list reflects what
+        // the management API provides.
+        mi_management:MgmtInboundEndpointInfo inboundInfo = check mi_management:fetchInboundEndpointInfo(
+                mgmtClient, hmacToken, inboundName);
 
-        if resp.statusCode != http:STATUS_OK {
-            string|error errPayload = resp.getTextPayload();
-            if errPayload is error {
-                log:printError("Inbound parameters fetch returned non-OK status",
-                        status = resp.statusCode.toString(),
-                        runtimeId = runtime.runtimeId,
-                        inboundName = inboundName);
-                return error(string `Inbound parameters fetch failed with status ${resp.statusCode}`);
-            }
-            log:printError("Inbound parameters fetch returned non-OK status",
-                    status = resp.statusCode.toString(),
-                    runtimeId = runtime.runtimeId,
-                    inboundName = inboundName,
-                    response = errPayload);
-            return error(string `Inbound parameters fetch failed with status ${resp.statusCode}: ${errPayload}`);
-        }
-
-        // Parse JSON payload and convert to Parameter[]
-        json payload = check resp.getJsonPayload();
+        // Convert management API response fields to Parameter[] format
         types:Parameter[] params = [];
-
-        if payload is map<json> {
-            // Shape: {"param1": "value1", "param2": 123, ...}
-            foreach var [k, v] in payload.entries() {
-                string valStr;
-                if v is string {
-                    valStr = v;
-                } else {
-                    valStr = v.toJsonString();
-                }
-                params.push({key: k, value: valStr});
-            }
-        } else if payload is json[] {
-            // Shape: [{"key":"...","value":"..."}] or [{"name":"...","paramValue":...}]
-            foreach json item in payload {
-                if item is map<json> {
-                    json kJson = item["key"] ?: item["name"];
-                    json vJson = item["value"] ?: item["paramValue"];
-                    if kJson is string && vJson != () {
-                        string vStr = vJson is string ? vJson : vJson.toJsonString();
-                        params.push({key: kJson, value: vStr});
-                    }
-                }
-            }
-        } else if payload is string {
-            // Edge: payload already a string; expose as a single entry
-            params.push({key: "payload", value: payload});
-        } else {
-            log:printWarn("Unexpected inbound parameters JSON shape", inboundName = inboundName);
+        if inboundInfo.protocol is string {
+            params.push({key: "protocol", value: <string>inboundInfo.protocol});
         }
 
-        log:printInfo("Successfully fetched inbound endpoint parameters",
+        log:printInfo("Successfully fetched inbound endpoint info from MI management API",
                 runtimeId = runtime.runtimeId,
-                inboundName = inboundName,
+                inboundName = inboundInfo.name,
                 paramCount = params.length());
         return params;
     }
@@ -2398,98 +2263,37 @@ service /graphql on graphqlListener {
         // Build management API base URL
         string baseUrl = check storage:buildManagementBaseUrl(runtime.managementHostname, runtime.managementPort);
 
-        log:printInfo("Fetching artifact parameters from management API",
+        log:printInfo("Fetching artifact parameters via MI management API",
                 runtimeId = runtime.runtimeId,
                 managementUrl = baseUrl,
                 artifactType = artifactType,
                 artifactName = artifactName);
 
-        // Create management API client (toggle insecure TLS via configuration)
-        http:Client|error mgmtClient = artifactsApiAllowInsecureTLS
+        // Create MI management API client (toggle insecure TLS via configuration)
+        http:Client|error mgmtClientResult = artifactsApiAllowInsecureTLS
             ? new (baseUrl, {secureSocket: {enable: false}})
             : new (baseUrl);
-        if mgmtClient is error {
-            log:printError("Failed to create management API client", mgmtClient);
+        if mgmtClientResult is error {
+            log:printError("Failed to create management API client", mgmtClientResult);
             return error("Failed to create management API client");
         }
+        http:Client mgmtClient = mgmtClientResult;
 
-        // Generate an HMAC JWT (same mechanism as heartbeat) to call the ICP internal API
+        // Generate an HMAC JWT to call the MI Management API
         string hmacToken = check storage:issueRuntimeHmacToken();
 
-        // Fetch parameters via ICP Internal API (/icp/artifacts/parameters)
-        string artifactPath = string `${ICP_ARTIFACTS_PATH}/parameters?type=${artifactType}&name=${artifactName}`;
-        log:printDebug("Sending ICP internal API artifact parameters request",
-                runtimeId = runtime.runtimeId,
-                managementUrl = baseUrl,
-                artifactPath = artifactPath,
-                accept = "application/json");
+        // Fetch artifact parameter metadata via MI Management API
+        // NOTE: The management API does not have a dedicated parameters endpoint.
+        // fetchArtifactParameterInfo extracts available metadata fields from the
+        // appropriate management API endpoint and converts them to Parameter format.
+        mi_management:MgmtArtifactParameter[] mgmtParams = check mi_management:fetchArtifactParameterInfo(
+                mgmtClient, hmacToken, artifactType, artifactName);
 
-        http:Response|error resp = mgmtClient->get(artifactPath, {
-            "Authorization": string `Bearer ${hmacToken}`,
-            "Accept": "application/json"
-        });
+        // Convert MgmtArtifactParameter[] to types:Parameter[]
+        types:Parameter[] params = from mi_management:MgmtArtifactParameter p in mgmtParams
+            select {key: p.key, value: p.value};
 
-        if resp is error {
-            log:printError("Failed to fetch artifact parameters from management API", resp);
-            return error("Failed to fetch artifact parameters from management API");
-        }
-
-        if resp.statusCode != http:STATUS_OK {
-            string|error errPayload = resp.getTextPayload();
-            if errPayload is error {
-                log:printError("Artifact parameters fetch returned non-OK status",
-                        status = resp.statusCode.toString(),
-                        runtimeId = runtime.runtimeId,
-                        artifactType = artifactType,
-                        artifactName = artifactName);
-                return error(string `Artifact parameters fetch failed with status ${resp.statusCode}`);
-            }
-            log:printError("Artifact parameters fetch returned non-OK status",
-                    status = resp.statusCode.toString(),
-                    runtimeId = runtime.runtimeId,
-                    artifactType = artifactType,
-                    artifactName = artifactName,
-                    response = errPayload);
-            return error(string `Artifact parameters fetch failed with status ${resp.statusCode}: ${errPayload}`);
-        }
-
-        // Parse JSON payload and convert to Parameter[] (same logic as inbound)
-        json payload = check resp.getJsonPayload();
-        types:Parameter[] params = [];
-
-        if payload is map<json> {
-            foreach var [k, v] in payload.entries() {
-                string valStr;
-                if v is string {
-                    valStr = v;
-                } else {
-                    valStr = v.toJsonString();
-                }
-                params.push({key: k, value: valStr});
-            }
-        } else if payload is json[] {
-            foreach json item in payload {
-                if item is map<json> {
-                    // 1. Resolve the key using the Elvis operator for fallbacks
-                    json kJson = item["key"] ?: item["name"];
-
-                    // 2. Resolve the value (checking "value" then "paramValue")
-                    json vJson = item["value"] ?: item["paramValue"];
-
-                    // 3. Process only if we have a valid key and a non-null value
-                    if kJson is string && vJson != () {
-                        string vStr = vJson is string ? vJson : vJson.toJsonString();
-                        params.push({key: kJson, value: vStr});
-                    }
-                }
-            }
-        } else if payload is string {
-            params.push({key: "payload", value: payload});
-        } else {
-            log:printWarn("Unexpected artifact parameters JSON shape", artifactType = artifactType, artifactName = artifactName);
-        }
-
-        log:printInfo("Successfully fetched artifact parameters",
+        log:printInfo("Successfully fetched artifact parameters from MI management API",
                 runtimeId = runtime.runtimeId,
                 artifactType = artifactType,
                 artifactName = artifactName,
