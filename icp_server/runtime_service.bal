@@ -120,55 +120,40 @@ service /icp on httpListener {
 // ---------------------------------------------------------------------------
 // Record type to hold parsed secret components
 type ParsedSecret record {|
-    string? secretId;
-    string actualSecret;
+    string keyId;  // Key ID as per RFC 7515 (can be empty string)
+    string keyMaterial;
 |};
 
-// Parses an HMAC secret that may contain a secretId prefix (format: secretId.actualSecret).
-// If the secret contains a period, splits it and returns both parts.
-// Otherwise, returns the entire string as the actualSecret with no secretId.
-// Validates that the actualSecret is at least 32 bytes (256 bits) as required for HS256.
+// Parses an HMAC secret in the format: keyId.keyMaterial
+// The keyId (Key ID) can be empty (e.g., ".keyMaterial"), but the period is required.
+// Validates that the keyMaterial is at least 32 bytes (256 bits) as required for HS256.
 isolated function parseHmacSecret(string hmacSecret) returns ParsedSecret|error {
     int? periodIndex = hmacSecret.indexOf(".");
-    if periodIndex is int && periodIndex > 0 {
-        string secretId = hmacSecret.substring(0, periodIndex);
-        string actualSecret = hmacSecret.substring(periodIndex + 1);
 
-        // Validate that actualSecret is non-empty after splitting
-        if actualSecret.length() == 0 {
-            log:printError(string `Invalid HMAC secret format: actualSecret is empty after splitting. Secret format must be 'secretId.actualSecret' where actualSecret is non-empty.`);
-            return error(string `Invalid HMAC secret: actualSecret cannot be empty (format: ${secretId}.)`);
-        }
-
-        // Validate minimum secret length for HS256 (32 bytes / 256 bits)
-        if actualSecret.length() < 32 {
-            log:printError(string `Invalid HMAC secret: actualSecret too short (${actualSecret.length()} bytes, minimum 32 bytes required for HS256)`);
-            return error(string `Invalid HMAC secret: actualSecret must be at least 32 bytes (current: ${actualSecret.length()} bytes)`);
-        }
-
-        log:printDebug(string `Parsed HMAC secret with secretId prefix: secretId=${secretId}, secretLength=${actualSecret.length()}`);
-        return {
-            secretId: secretId,
-            actualSecret: actualSecret
-        };
+    // Period is required in the secret format
+    if periodIndex is () {
+        log:printError(string `Invalid HMAC secret format: missing period separator. Secret format must be 'keyId.keyMaterial' (keyId can be empty: '.keyMaterial')`);
+        return error("Invalid HMAC secret: format must be 'keyId.keyMaterial' with period separator");
     }
 
-    // Validate that hmacSecret is non-empty in the no-period case
-    if hmacSecret.length() == 0 {
-        log:printError(string `Invalid HMAC secret: secret cannot be empty`);
-        return error("Invalid HMAC secret: secret cannot be empty");
+    string keyId = hmacSecret.substring(0, periodIndex);
+    string keyMaterial = hmacSecret.substring(periodIndex + 1);
+
+    // Validate that keyMaterial is non-empty after splitting
+    if keyMaterial.length() == 0 {
+        log:printError(string `Invalid HMAC secret format: keyMaterial is empty after splitting. Secret format must be 'keyId.keyMaterial' where keyMaterial is non-empty.`);
+        return error(string `Invalid HMAC secret: keyMaterial cannot be empty (format: ${keyId}.)`);
     }
 
     // Validate minimum secret length for HS256 (32 bytes / 256 bits)
-    if hmacSecret.length() < 32 {
-        log:printError(string `Invalid HMAC secret: secret too short (${hmacSecret.length()} bytes, minimum 32 bytes required for HS256)`);
-        return error(string `Invalid HMAC secret: secret must be at least 32 bytes (current: ${hmacSecret.length()} bytes)`);
+    if keyMaterial.length() < 32 {
+        log:printError(string `Invalid HMAC secret: keyMaterial too short (${keyMaterial.length()} bytes, minimum 32 bytes required for HS256)`);
+        return error(string `Invalid HMAC secret: keyMaterial must be at least 32 bytes (current: ${keyMaterial.length()} bytes)`);
     }
 
-    log:printDebug(string `Parsed HMAC secret without secretId prefix, secretLength=${hmacSecret.length()}`);
     return {
-        secretId: (),
-        actualSecret: hmacSecret
+        keyId: keyId,
+        keyMaterial: keyMaterial
     };
 }
 
@@ -187,40 +172,26 @@ isolated function validateRuntimeJwt(http:Request request, string hmacSecret) re
 
     string jwtToken = authHeader.substring(7);
 
-    // Parse the secret to extract secretId (if present) and actualSecret
+    // Parse the secret to extract keyId and keyMaterial
     ParsedSecret|error parsedResult = parseHmacSecret(hmacSecret);
     if parsedResult is error {
         log:printError(string `Failed to parse HMAC secret: ${parsedResult.message()}`);
         return <http:Unauthorized>{body: "Invalid server configuration"};
     }
     ParsedSecret parsedSecret = parsedResult;
-    log:printDebug(string `Validating JWT with secretId=${parsedSecret.secretId ?: "none"}`);
 
     jwt:ValidatorConfig validatorConfig = {
         issuer: jwtIssuer,
         audience: jwtAudience,
         clockSkew: jwtClockSkewSeconds,
-        signatureConfig: {secret: parsedSecret.actualSecret}
+        keyId: parsedSecret.keyId,
+        signatureConfig: {secret: parsedSecret.keyMaterial}
     };
 
     jwt:Payload|jwt:Error validatedPayload = jwt:validate(jwtToken, validatorConfig);
     if validatedPayload is jwt:Error {
         log:printWarn(string `JWT validation failed: ${validatedPayload.message()}`);
         return <http:Unauthorized>{body: "Invalid or expired token"};
-    }
-
-    log:printDebug(string `JWT signature validated successfully`);
-
-    // If a secretId prefix was present, verify it matches the JWT claim
-    string? expectedSecretId = parsedSecret.secretId;
-    if expectedSecretId is string {
-        anydata secretIdClaim = validatedPayload["secretId"];
-        if !(secretIdClaim is string && secretIdClaim == expectedSecretId) {
-            string claimValue = secretIdClaim is string ? secretIdClaim : "missing or invalid";
-            log:printDebug(string `secretId mismatch: expected ${expectedSecretId}, got ${claimValue}`);
-            return <http:Unauthorized>{body: "Invalid secretId claim"};
-        }
-        log:printDebug(string `secretId claim validated successfully: ${expectedSecretId}`);
     }
 
     // Enforce the runtime_agent scope
