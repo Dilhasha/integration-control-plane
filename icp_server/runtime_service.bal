@@ -127,17 +127,44 @@ type ParsedSecret record {|
 // Parses an HMAC secret that may contain a secretId prefix (format: secretId.actualSecret).
 // If the secret contains a period, splits it and returns both parts.
 // Otherwise, returns the entire string as the actualSecret with no secretId.
-isolated function parseHmacSecret(string hmacSecret) returns ParsedSecret {
+// Validates that the actualSecret is at least 32 bytes (256 bits) as required for HS256.
+isolated function parseHmacSecret(string hmacSecret) returns ParsedSecret|error {
     int? periodIndex = hmacSecret.indexOf(".");
     if periodIndex is int && periodIndex > 0 {
         string secretId = hmacSecret.substring(0, periodIndex);
         string actualSecret = hmacSecret.substring(periodIndex + 1);
+
+        // Validate that actualSecret is non-empty after splitting
+        if actualSecret.length() == 0 {
+            log:printError(string `Invalid HMAC secret format: actualSecret is empty after splitting. Secret format must be 'secretId.actualSecret' where actualSecret is non-empty.`);
+            return error(string `Invalid HMAC secret: actualSecret cannot be empty (format: ${secretId}.)`);
+        }
+
+        // Validate minimum secret length for HS256 (32 bytes / 256 bits)
+        if actualSecret.length() < 32 {
+            log:printError(string `Invalid HMAC secret: actualSecret too short (${actualSecret.length()} bytes, minimum 32 bytes required for HS256)`);
+            return error(string `Invalid HMAC secret: actualSecret must be at least 32 bytes (current: ${actualSecret.length()} bytes)`);
+        }
+
         log:printDebug(string `Parsed HMAC secret with secretId prefix: secretId=${secretId}, secretLength=${actualSecret.length()}`);
         return {
             secretId: secretId,
             actualSecret: actualSecret
         };
     }
+
+    // Validate that hmacSecret is non-empty in the no-period case
+    if hmacSecret.length() == 0 {
+        log:printError(string `Invalid HMAC secret: secret cannot be empty`);
+        return error("Invalid HMAC secret: secret cannot be empty");
+    }
+
+    // Validate minimum secret length for HS256 (32 bytes / 256 bits)
+    if hmacSecret.length() < 32 {
+        log:printError(string `Invalid HMAC secret: secret too short (${hmacSecret.length()} bytes, minimum 32 bytes required for HS256)`);
+        return error(string `Invalid HMAC secret: secret must be at least 32 bytes (current: ${hmacSecret.length()} bytes)`);
+    }
+
     log:printDebug(string `Parsed HMAC secret without secretId prefix, secretLength=${hmacSecret.length()}`);
     return {
         secretId: (),
@@ -161,7 +188,12 @@ isolated function validateRuntimeJwt(http:Request request, string hmacSecret) re
     string jwtToken = authHeader.substring(7);
 
     // Parse the secret to extract secretId (if present) and actualSecret
-    ParsedSecret parsedSecret = parseHmacSecret(hmacSecret);
+    ParsedSecret|error parsedResult = parseHmacSecret(hmacSecret);
+    if parsedResult is error {
+        log:printError(string `Failed to parse HMAC secret: ${parsedResult.message()}`);
+        return <http:Unauthorized>{body: "Invalid server configuration"};
+    }
+    ParsedSecret parsedSecret = parsedResult;
     log:printDebug(string `Validating JWT with secretId=${parsedSecret.secretId ?: "none"}`);
 
     jwt:ValidatorConfig validatorConfig = {
