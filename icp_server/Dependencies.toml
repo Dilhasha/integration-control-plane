@@ -561,7 +561,7 @@ dependencies = [
 [[package]]
 org = "ballerinax"
 name = "mssql"
-version = "1.16.4"
+version = "1.16.5"
 dependencies = [
 	{org = "ballerina", name = "crypto"},
 	{org = "ballerina", name = "jballerina.java"},
@@ -584,7 +584,7 @@ modules = [
 [[package]]
 org = "ballerinax"
 name = "mysql"
-version = "1.16.2"
+version = "1.16.3"
 dependencies = [
 	{org = "ballerina", name = "crypto"},
 	{org = "ballerina", name = "io"},
@@ -609,7 +609,7 @@ modules = [
 [[package]]
 org = "ballerinax"
 name = "postgresql"
-version = "1.16.3"
+version = "1.16.4"
 dependencies = [
 	{org = "ballerina", name = "crypto"},
 	{org = "ballerina", name = "io"},

@@ -1279,24 +1279,64 @@ public isolated function sendArtifactTracingChange(types:Runtime runtime, string
     return;
 }
 
+// Record type to hold parsed secret components
+type ParsedSecret record {|
+    string? secretId;
+    string actualSecret;
+|};
+
+// Parses an HMAC secret that may contain a secretId prefix (format: secretId.actualSecret).
+// If the secret contains a period, splits it and returns both parts.
+// Otherwise, returns the entire string as the actualSecret with no secretId.
+isolated function parseHmacSecret(string hmacSecret) returns ParsedSecret {
+    int? periodIndex = hmacSecret.indexOf(".");
+    if periodIndex is int && periodIndex > 0 {
+        string secretId = hmacSecret.substring(0, periodIndex);
+        string actualSecret = hmacSecret.substring(periodIndex + 1);
+        log:printDebug(string `Parsed HMAC secret with secretId prefix: secretId=${secretId}, secretLength=${actualSecret.length()}`);
+        return {
+            secretId: secretId,
+            actualSecret: actualSecret
+        };
+    }
+    log:printDebug(string `Parsed HMAC secret without secretId prefix, secretLength=${hmacSecret.length()}`);
+    return {
+        secretId: (),
+        actualSecret: hmacSecret
+    };
+}
+
 // Helper: generate HMAC JWT used to call a specific runtime's management API.
 // Resolves the per-component-per-environment secret stored in component_environment_secrets
 // via resolveRuntimeJwtSecretByRuntimeId so each runtime is authenticated with its own key.
 public isolated function issueRuntimeHmacToken(string runtimeId) returns string|error {
     string hmacSecret = check resolveRuntimeJwtSecretByRuntimeId(runtimeId);
+
+    // Parse the secret to extract secretId (if present) and actualSecret
+    ParsedSecret parsed = parseHmacSecret(hmacSecret);
+    log:printDebug(string `Issuing JWT for runtime ${runtimeId} with secretId=${parsed.secretId ?: "none"}`);
+
     jwt:IssuerConfig issConfig = {
         username: "icp-artifact-fetcher",
         issuer: jwtIssuer,
         expTime: <decimal>defaultTokenExpiryTime,
         audience: jwtAudience,
-        signatureConfig: {algorithm: jwt:HS256, config: hmacSecret}
+        signatureConfig: {algorithm: jwt:HS256, config: parsed.actualSecret}
     };
     issConfig.customClaims["scope"] = "runtime_agent";
+
+    // If a secretId was present, add it as a custom claim
+    string? secretId = parsed.secretId;
+    if secretId is string {
+        issConfig.customClaims["secretId"] = secretId;
+        log:printDebug(string `Added secretId claim to JWT: ${secretId}`);
+    }
 
     string|jwt:Error hmacToken = jwt:issue(issConfig);
     if hmacToken is jwt:Error {
         log:printError("Failed to generate HMAC JWT for internal ICP API", hmacToken);
         return error("Failed to generate authentication token");
     }
+    log:printDebug(string `Successfully issued JWT token for runtime ${runtimeId}`);
     return hmacToken;
 }

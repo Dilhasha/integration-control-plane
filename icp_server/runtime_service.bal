@@ -116,6 +116,36 @@ service /icp on httpListener {
 }
 
 // ---------------------------------------------------------------------------
+// JWT Secret Parsing Helper
+// ---------------------------------------------------------------------------
+// Record type to hold parsed secret components
+type ParsedSecret record {|
+    string? secretId;
+    string actualSecret;
+|};
+
+// Parses an HMAC secret that may contain a secretId prefix (format: secretId.actualSecret).
+// If the secret contains a period, splits it and returns both parts.
+// Otherwise, returns the entire string as the actualSecret with no secretId.
+isolated function parseHmacSecret(string hmacSecret) returns ParsedSecret {
+    int? periodIndex = hmacSecret.indexOf(".");
+    if periodIndex is int && periodIndex > 0 {
+        string secretId = hmacSecret.substring(0, periodIndex);
+        string actualSecret = hmacSecret.substring(periodIndex + 1);
+        log:printDebug(string `Parsed HMAC secret with secretId prefix: secretId=${secretId}, secretLength=${actualSecret.length()}`);
+        return {
+            secretId: secretId,
+            actualSecret: actualSecret
+        };
+    }
+    log:printDebug(string `Parsed HMAC secret without secretId prefix, secretLength=${hmacSecret.length()}`);
+    return {
+        secretId: (),
+        actualSecret: hmacSecret
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Custom per-environment JWT validator
 // ---------------------------------------------------------------------------
 // Extracts the bearer token from the Authorization header and validates it
@@ -130,17 +160,35 @@ isolated function validateRuntimeJwt(http:Request request, string hmacSecret) re
 
     string jwtToken = authHeader.substring(7);
 
+    // Parse the secret to extract secretId (if present) and actualSecret
+    ParsedSecret parsedSecret = parseHmacSecret(hmacSecret);
+    log:printDebug(string `Validating JWT with secretId=${parsedSecret.secretId ?: "none"}`);
+
     jwt:ValidatorConfig validatorConfig = {
         issuer: jwtIssuer,
         audience: jwtAudience,
         clockSkew: jwtClockSkewSeconds,
-        signatureConfig: {secret: hmacSecret}
+        signatureConfig: {secret: parsedSecret.actualSecret}
     };
 
     jwt:Payload|jwt:Error validatedPayload = jwt:validate(jwtToken, validatorConfig);
     if validatedPayload is jwt:Error {
-        log:printDebug(string `JWT validation failed: ${validatedPayload.message()}`);
+        log:printWarn(string `JWT validation failed: ${validatedPayload.message()}`);
         return <http:Unauthorized>{body: "Invalid or expired token"};
+    }
+
+    log:printDebug(string `JWT signature validated successfully`);
+
+    // If a secretId prefix was present, verify it matches the JWT claim
+    string? expectedSecretId = parsedSecret.secretId;
+    if expectedSecretId is string {
+        anydata secretIdClaim = validatedPayload["secretId"];
+        if !(secretIdClaim is string && secretIdClaim == expectedSecretId) {
+            string claimValue = secretIdClaim is string ? secretIdClaim : "missing or invalid";
+            log:printDebug(string `secretId mismatch: expected ${expectedSecretId}, got ${claimValue}`);
+            return <http:Unauthorized>{body: "Invalid secretId claim"};
+        }
+        log:printDebug(string `secretId claim validated successfully: ${expectedSecretId}`);
     }
 
     // Enforce the runtime_agent scope
