@@ -19,7 +19,8 @@
 import { Button, Checkbox, Chip, CircularProgress, FormControlLabel, IconButton, ListItemText, MenuItem, PageContent, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { ChevronDown, ChevronRight, Copy, Download, RefreshCw, ScrollText, X } from '@wso2/oxygen-ui-icons-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { useProjectByHandler, useComponentByHandler, useComponents, useEnvironments } from '../api/queries';
+import { Link } from 'react-router';
+import { useProjectByHandler, useComponentByHandler, useComponents, useEnvironments, useRuntimes } from '../api/queries';
 import { useInfiniteLogs, type LogRow, type LogsRequest } from '../api/logs';
 import EmptyListing from '../components/EmptyListing';
 import NotFound from '../components/NotFound';
@@ -184,6 +185,22 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
 
   const componentIds = !hasComponent(scope) && integrationFilter !== 'all' ? [integrationFilter] : allComponentIds;
 
+  // Fetch runtimes to check if they are MI type (for per-runtime log download link)
+  const firstComponentId = allComponentIds[0] ?? '';
+  const firstEnvId = environments[0]?.id ?? '';
+  const { data: runtimes = [] } = useRuntimes(firstEnvId, projectId, firstComponentId);
+  const hasMIRuntimes = useMemo(() => runtimes.some((r) => r.runtimeType === 'MI'), [runtimes]);
+
+  // Determine which component to link to for per-runtime logs
+  const runtimeLinkComponent = useMemo(() => {
+    const isComponentScope = hasComponent(scope);
+    if (isComponentScope) return singleComponent;
+    if (integrationFilter !== 'all') {
+      return allComponents.find((c) => c.id === integrationFilter);
+    }
+    return allComponents[0];
+  }, [singleComponent, integrationFilter, allComponents]);
+
   const selectedEnvIds = envFilter.length > 0 ? envFilter : environments.map((e) => e.id);
   const selectedEnvs = environments.filter((e) => selectedEnvIds.includes(e.id));
   const primaryEnv = selectedEnvs[0];
@@ -223,7 +240,15 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
 
   const { data, isLoading, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteLogs(logsRequest, autoFetch ? AUTO_FETCH_INTERVAL : false);
 
+  // Disable auto-fetch when observability service is unavailable
+  useEffect(() => {
+    if (error && (error as Error).message?.includes('Observability service is unavailable')) {
+      setAutoFetch(false);
+    }
+  }, [error]);
+
   const logs = useMemo(() => data?.pages.flat() ?? [], [data]);
+  const filtersDisabled = !!error;
 
   const filteredLogs = logs;
 
@@ -284,7 +309,7 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
         <Typography variant="h1">Runtime Logs</Typography>
         {!hasComponent(scope) && (
-          <Select value={integrationFilter} onChange={(e) => setIntegrationFilter(e.target.value as string)} size="small" sx={{ minWidth: 200 }} inputProps={{ 'aria-label': 'Integration' }}>
+          <Select value={integrationFilter} onChange={(e) => setIntegrationFilter(e.target.value as string)} size="small" sx={{ minWidth: 200 }} inputProps={{ 'aria-label': 'Integration' }} disabled={filtersDisabled}>
             <MenuItem value="all">All Integrations</MenuItem>
             {allComponents.map((c) => (
               <MenuItem key={c.id} value={c.id}>
@@ -312,7 +337,8 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
             }}
             size="small"
             sx={{ minWidth: 160 }}
-            inputProps={{ 'aria-label': 'Environment' }}>
+            inputProps={{ 'aria-label': 'Environment' }}
+            disabled={filtersDisabled}>
             {environments.map((e) => (
               <MenuItem key={e.id} value={e.id}>
                 <Checkbox checked={envFilter.includes(e.id)} size="small" sx={{ p: 0, mr: 1 }} />
@@ -334,7 +360,8 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
           }}
           size="small"
           sx={{ minWidth: 120 }}
-          inputProps={{ 'aria-label': 'Log level' }}>
+          inputProps={{ 'aria-label': 'Log level' }}
+          disabled={filtersDisabled}>
           {LOG_LEVELS.map((l) => (
             <MenuItem key={l} value={l}>
               <Checkbox checked={levelFilter.includes(l)} size="small" sx={{ p: 0, mr: 1 }} />
@@ -356,7 +383,8 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
             }}
             size="small"
             sx={{ minWidth: 160 }}
-            inputProps={{ 'aria-label': 'Time range' }}>
+            inputProps={{ 'aria-label': 'Time range' }}
+            disabled={filtersDisabled}>
             {TIME_PRESETS.map((p) => (
               <MenuItem key={p.label} value={p.label}>
                 {p.label}
@@ -366,36 +394,36 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
           </Select>
           {timePreset !== '' && (
             <Tooltip title="Clear time filter (defaults to 30 days)">
-              <IconButton size="small" onClick={() => setTimePreset('')}>
+              <IconButton size="small" onClick={() => setTimePreset('')} disabled={filtersDisabled}>
                 <X size={14} />
               </IconButton>
             </Tooltip>
           )}
         </Stack>
 
-        <Select value={sortDir} onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')} size="small" sx={{ minWidth: 120 }} inputProps={{ 'aria-label': 'Sort direction' }}>
+        <Select value={sortDir} onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')} size="small" sx={{ minWidth: 120 }} inputProps={{ 'aria-label': 'Sort direction' }} disabled={filtersDisabled}>
           <MenuItem value="desc">Newest first</MenuItem>
           <MenuItem value="asc">Oldest first</MenuItem>
         </Select>
 
-        <SearchField value={searchPhrase} onChange={setSearchPhrase} placeholder="Search logs..." sx={{ minWidth: 200, flex: 1 }} />
+        <SearchField value={searchPhrase} onChange={setSearchPhrase} placeholder="Search logs..." sx={{ minWidth: 200, flex: 1 }} disabled={filtersDisabled} />
 
-        <FormControlLabel control={<Checkbox checked={autoFetch} onChange={(_, c) => setAutoFetch(c)} size="small" />} label="Auto Fetch" sx={{ mr: 0, whiteSpace: 'nowrap' }} slotProps={{ typography: { variant: 'body2' } }} />
+        <FormControlLabel control={<Checkbox checked={autoFetch} onChange={(_, c) => setAutoFetch(c)} size="small" disabled={filtersDisabled} />} label="Auto Fetch" sx={{ mr: 0, whiteSpace: 'nowrap' }} slotProps={{ typography: { variant: 'body2' } }} />
         <Tooltip title="Download logs">
-          <IconButton size="small" aria-label="Download logs" onClick={() => downloadLogs(filteredLogs)} disabled={filteredLogs.length === 0}>
+          <IconButton size="small" aria-label="Download logs" onClick={() => downloadLogs(filteredLogs)} disabled={filtersDisabled || filteredLogs.length === 0}>
             <Download size={18} />
           </IconButton>
         </Tooltip>
-        <Button variant="outlined" size="small" onClick={() => refetch()} disabled={!logsRequest} startIcon={<RefreshCw size={14} />}>
+        <Button variant="outlined" size="small" onClick={() => refetch()} disabled={filtersDisabled || !logsRequest} startIcon={<RefreshCw size={14} />}>
           Refresh
         </Button>
       </Stack>
 
       {timePreset === 'custom' && (
         <Stack direction="row" gap={1.5} sx={{ mb: 2 }} alignItems="center">
-          <TextField type="datetime-local" size="small" label="Start" value={customStart} onChange={(e) => setCustomStart(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-          <TextField type="datetime-local" size="small" label="End" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} />
-          <Button variant="contained" size="small" onClick={() => refetch()}>
+          <TextField type="datetime-local" size="small" label="Start" value={customStart} onChange={(e) => setCustomStart(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} disabled={filtersDisabled} />
+          <TextField type="datetime-local" size="small" label="End" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} slotProps={{ inputLabel: { shrink: true } }} disabled={filtersDisabled} />
+          <Button variant="contained" size="small" onClick={() => refetch()} disabled={filtersDisabled}>
             Apply
           </Button>
         </Stack>
@@ -405,12 +433,41 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
         <CircularProgress size={28} sx={{ display: 'block', mx: 'auto', my: 6 }} />
       ) : error ? (
         <Stack alignItems="center" gap={2} sx={{ py: 6 }}>
-          <Typography color="error" textAlign="center">
-            Failed to fetch logs: {(error as Error).message ?? 'Service unavailable'}
-          </Typography>
-          <Button variant="contained" startIcon={<RefreshCw size={16} />} onClick={() => refetch()}>
-            Retry
-          </Button>
+          {(error as Error).message?.includes('Observability service is unavailable') ? (
+            <>
+              <ScrollText size={48} style={{ color: '#78909c' }} />
+              <Typography variant="h6" textAlign="center">
+                Observability Service Not Configured
+              </Typography>
+              <Typography color="text.secondary" textAlign="center" sx={{ maxWidth: 600 }}>
+                Please ensure the Observability backend is configured and running to view logs.
+              </Typography>
+              {hasMIRuntimes && runtimeLinkComponent?.handler && (
+                <Typography color="text.secondary" textAlign="center" sx={{ maxWidth: 600 }}>
+                  You can still download{' '}
+                  <Link
+                    to={
+                      hasComponent(scope)
+                        ? resourceUrl(scope, 'runtimes')
+                        : resourceUrl({ level: 'components', org: scope.org, project: scope.project, component: runtimeLinkComponent.handler }, 'runtimes')
+                    }
+                    style={{ textDecoration: 'underline', cursor: 'pointer' }}>
+                    per-runtime logs
+                  </Link>
+                  .
+                </Typography>
+              )}
+            </>
+          ) : (
+            <>
+              <Typography color="error" textAlign="center">
+                Failed to fetch logs: {(error as Error).message ?? 'Service unavailable'}
+              </Typography>
+              <Button variant="contained" startIcon={<RefreshCw size={16} />} onClick={() => refetch()}>
+                Retry
+              </Button>
+            </>
+          )}
         </Stack>
       ) : filteredLogs.length === 0 ? (
         <EmptyListing icon={<ScrollText size={48} />} title="No logs found" description="Try a different time range or filters." />

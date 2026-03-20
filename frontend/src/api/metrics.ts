@@ -51,17 +51,42 @@ export interface MetricsResponse {
 }
 
 async function fetchMetrics(req: MetricsRequest): Promise<MetricsResponse> {
-  const res = await authenticatedFetch(observabilityMetricsApiUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`${res.status}: ${body}`);
+  // Add timeout to fail fast when observability service is unavailable
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+  try {
+    const res = await authenticatedFetch(observabilityMetricsApiUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const text = await res.text();
+      let errorMessage = text;
+      try {
+        const errorJson = JSON.parse(text);
+        errorMessage = errorJson.message || text;
+      } catch {
+        // If JSON parsing fails, use the raw text
+      }
+      const error = new Error(errorMessage);
+      (error as any).status = res.status;
+      throw error;
+    }
+    const json: MetricsResponse = await res.json();
+    return json;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    // Handle abort/timeout errors
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Observability service is unavailable. Request timed out.');
+    }
+    throw error;
   }
-  const json: MetricsResponse = await res.json();
-  return json;
 }
 
 export function useMetrics(req: MetricsRequest | null) {
@@ -70,5 +95,7 @@ export function useMetrics(req: MetricsRequest | null) {
     queryFn: () => fetchMetrics(req!),
     enabled: !!req,
     refetchInterval: false,
+    retry: false, // Disable retries for faster failure when observability service is unavailable
+    staleTime: 0, // Always fetch fresh data
   });
 }

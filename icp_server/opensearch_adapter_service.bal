@@ -94,7 +94,8 @@ type OpenSearchResponse record {
 };
 
 // Initialized in init() with resolved (decrypted) credentials
-final http:Client opensearchClient;
+// This client is optional - if initialization fails, OpenSearch endpoints will return service unavailable
+final http:Client? opensearchClient;
 
 // HTTP service configuration
 listener http:Listener openSerachObservabilityListener = new (defaultOpensearchAdaptorPort,
@@ -165,7 +166,18 @@ service /observability on openSerachObservabilityListener {
             return error(errorMessage);
         }
 
-        OpenSearchResponse searchResponse = check opensearchClient->post(indexPattern, searchRequest);
+        // Check if opensearch client is available
+        http:Client? httpClient = opensearchClient;
+        if httpClient is () {
+            log:printError("OpenSearch client is not configured or unavailable");
+            return error("OpenSearch service is unavailable. Please ensure OpenSearch is configured and running.");
+        }
+
+        OpenSearchResponse|error searchResponse = httpClient->post(indexPattern, searchRequest);
+        if searchResponse is error {
+            log:printError(string `Failed to query OpenSearch: ${searchResponse.message()}`);
+            return error("OpenSearch service is unavailable. Please ensure OpenSearch is configured and running.");
+        }
         log:printDebug("Search returned " + searchResponse.hits.total.value.toString() + " results");
 
         // Build response columns
@@ -298,11 +310,18 @@ isolated function fetchBIMetrics(types:MetricEntryRequest metricRequest) returns
     json metricsQuery = check getBIMetricQuery(metricRequest);
     log:printDebug("BI OpenSearch metrics query: " + metricsQuery.toJsonString());
 
+    // Check if opensearch client is available
+    http:Client? httpClient = opensearchClient;
+    if httpClient is () {
+        log:printError("OpenSearch client is not configured or unavailable");
+        return error("OpenSearch service is unavailable. Please ensure OpenSearch is configured and running.");
+    }
+
     // Execute the query
-    json|error biResponseResult = opensearchClient->post("/ballerina-metrics-logs-*/_search", metricsQuery);
+    json|error biResponseResult = httpClient->post("/ballerina-metrics-logs-*/_search", metricsQuery);
     if biResponseResult is error {
-        log:printError("Error fetching BI metrics from OpenSearch: " + biResponseResult.toString());
-        return error("Failed to fetch BI metrics");
+        log:printError(string `Failed to query OpenSearch for BI metrics: ${biResponseResult.message()}`);
+        return error("OpenSearch service is unavailable. Please ensure OpenSearch is configured and running.");
     }
 
     // Parse the response and build metrics
@@ -454,11 +473,18 @@ isolated function fetchMIMetrics(types:MetricEntryRequest metricRequest) returns
     json miQuery = check getMIMetricQuery(metricRequest);
     log:printDebug("MI OpenSearch metrics query: " + miQuery.toJsonString());
 
+    // Check if opensearch client is available
+    http:Client? httpClient = opensearchClient;
+    if httpClient is () {
+        log:printError("OpenSearch client is not configured or unavailable");
+        return error("OpenSearch service is unavailable. Please ensure OpenSearch is configured and running.");
+    }
+
     // Execute the query
-    json|error miResponseResult = opensearchClient->post("/mi-metrics-logs-*/_search", miQuery);
+    json|error miResponseResult = httpClient->post("/mi-metrics-logs-*/_search", miQuery);
     if miResponseResult is error {
-        log:printError("Error fetching MI metrics from OpenSearch: " + miResponseResult.toString());
-        return error("Failed to fetch MI metrics");
+        log:printError(string `Failed to query OpenSearch for MI metrics: ${miResponseResult.message()}`);
+        return error("OpenSearch service is unavailable. Please ensure OpenSearch is configured and running.");
     }
     json miResponseJson = miResponseResult;
 

@@ -26,9 +26,10 @@ type SearchFieldProps = {
   size?: 'small' | 'medium';
   fullWidth?: boolean;
   sx?: object;
+  disabled?: boolean;
 };
 
-export default function SearchField({ value, onChange, placeholder = 'Search...', size = 'small', fullWidth, sx }: SearchFieldProps) {
+export default function SearchField({ value, onChange, placeholder = 'Search...', size = 'small', fullWidth, sx, disabled }: SearchFieldProps) {
   return (
     <TextField
       fullWidth={fullWidth}
@@ -37,6 +38,7 @@ export default function SearchField({ value, onChange, placeholder = 'Search...'
       onChange={(e) => onChange(e.target.value)}
       size={size}
       sx={sx}
+      disabled={disabled}
       slotProps={{
         htmlInput: { 'aria-label': placeholder },
         input: {

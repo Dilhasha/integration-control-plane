@@ -70,7 +70,7 @@ isolated function generateObservabilityToken() returns string|error {
 }
 
 // Build secure socket configuration based on settings
-function getObservabilitySecureSocketConfig() returns http:ClientSecureSocket {
+isolated function getObservabilitySecureSocketConfig() returns http:ClientSecureSocket {
     if observabilitySecureSocket.allowInsecureTLS {
         return {enable: false};
     }
@@ -96,21 +96,35 @@ function getObservabilitySecureSocketConfig() returns http:ClientSecureSocket {
 
 // HTTP client for OpenSearch adapter with configurable settings
 // Token authentication added per request via Authorization header
-final http:Client observabilityHttpClient = check new (observabilityBackendURL,
-    {
-        timeout: observabilityClient.timeout,
-        retryConfig: {
-            count: observabilityClient.retryCount,
-            interval: observabilityClient.retryInterval,
-            backOffFactor: <float>observabilityClient.retryBackoffFactor,
-            maxWaitInterval: 20
-        },
-        poolConfig: {
-            maxActiveConnections: observabilityClient.maxPoolSize
-        },
-        secureSocket: getObservabilitySecureSocketConfig()
+// This client is optional - if initialization fails, observability endpoints will return service unavailable
+final http:Client? observabilityHttpClient = initObservabilityClient();
+
+isolated function initObservabilityClient() returns http:Client? {
+    // Initialize HTTP client - connection errors will be handled per-request
+    http:Client|error httpClient = new (observabilityBackendURL,
+        {
+            timeout: observabilityClient.timeout,
+            retryConfig: {
+                count: observabilityClient.retryCount,
+                interval: observabilityClient.retryInterval,
+                backOffFactor: <float>observabilityClient.retryBackoffFactor,
+                maxWaitInterval: 20
+            },
+            poolConfig: {
+                maxActiveConnections: observabilityClient.maxPoolSize
+            },
+            secureSocket: getObservabilitySecureSocketConfig()
+        }
+    );
+
+    if httpClient is error {
+        log:printWarn(string `Failed to initialize observability client: ${httpClient.message()}. Observability endpoints will be unavailable.`);
+        return ();
     }
-);
+
+    log:printInfo("Observability client initialized successfully");
+    return httpClient;
+}
 
 // HTTP service configuration
 listener http:Listener observabilityListener = new (observabilityServerPort,
@@ -148,7 +162,7 @@ service /icp/observability on observabilityListener {
         log:printInfo("Observability service started at " + serverHost + ":" + observabilityServerPort.toString());
     }
 
-    resource function post logs(http:Request request, types:ICPLogEntryRequest logRequest) returns types:LogEntriesResponse|error {
+    resource function post logs(http:Request request, types:ICPLogEntryRequest logRequest) returns types:LogEntriesResponse|http:ServiceUnavailable|error {
         log:printInfo("Received log request: " + logRequest.toString());
 
         // Transform ICPLogEntryRequest to LogEntryRequest by resolving component/environment filters to runtime IDs
@@ -192,13 +206,33 @@ service /icp/observability on observabilityListener {
 
         log:printInfo("Invoking observability adapter with " + runtimeIdList.length().toString() + " runtime IDs");
 
+        // Check if observability client is available
+        http:Client? httpClient = observabilityHttpClient;
+        if httpClient is () {
+            log:printWarn("Observability backend is not configured or unavailable");
+            return <http:ServiceUnavailable>{
+                body: {
+                    message: "Observability service is unavailable. Please ensure Observability backend is configured and running."
+                }
+            };
+        }
+
         // Generate fresh JWT token and invoke observability adapter service
         string token = check generateObservabilityToken();
         map<string|string[]> headers = {"Authorization": "Bearer " + token};
-        return check observabilityHttpClient->post(string `/observability/logs/${componentType.toString()}`, adaptorRequest, headers);
+        types:LogEntriesResponse|error response = httpClient->post(string `/observability/logs/${componentType.toString()}`, adaptorRequest, headers);
+        if response is error {
+            log:printWarn(string `Failed to fetch logs from observability backend: ${response.message()}`);
+            return <http:ServiceUnavailable>{
+                body: {
+                    message: "Observability service is unavailable. Please ensure Observability backend is configured and running."
+                }
+            };
+        }
+        return response;
     }
 
-    resource function post metrics(http:Request request, types:ICPMetricEntryRequest metricRequest) returns types:MetricEntriesResponse|error {
+    resource function post metrics(http:Request request, types:ICPMetricEntryRequest metricRequest) returns types:MetricEntriesResponse|http:ServiceUnavailable|error {
 
         log:printInfo("Received metric request: " + metricRequest.toString());
 
@@ -239,10 +273,30 @@ service /icp/observability on observabilityListener {
 
         log:printInfo("Invoking observability adapter with " + runtimeIdList.length().toString() + " runtime IDs for component type: " + componentType.toString());
 
+        // Check if observability client is available
+        http:Client? httpClient = observabilityHttpClient;
+        if httpClient is () {
+            log:printWarn("Observability backend is not configured or unavailable");
+            return <http:ServiceUnavailable>{
+                body: {
+                    message: "Observability service is unavailable. Please ensure Observability backend is configured and running."
+                }
+            };
+        }
+
         // Generate fresh JWT token and invoke observability adapter service with component type path param
         string token = check generateObservabilityToken();
         map<string|string[]> headers = {"Authorization": "Bearer " + token};
-        return check observabilityHttpClient->post(string `/observability/metrics/${componentType.toString()}`, adaptorRequest, headers);
+        types:MetricEntriesResponse|error response = httpClient->post(string `/observability/metrics/${componentType.toString()}`, adaptorRequest, headers);
+        if response is error {
+            log:printWarn(string `Failed to fetch metrics from observability backend: ${response.message()}`);
+            return <http:ServiceUnavailable>{
+                body: {
+                    message: "Observability service is unavailable. Please ensure Observability backend is configured and running."
+                }
+            };
+        }
+        return response;
     }
 }
 
