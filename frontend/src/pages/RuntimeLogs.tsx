@@ -185,13 +185,11 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
 
   const componentIds = !hasComponent(scope) && integrationFilter !== 'all' ? [integrationFilter] : allComponentIds;
 
-  // Fetch runtimes to check if they are MI type (for per-runtime log download link)
-  const firstComponentId = allComponentIds[0] ?? '';
-  const firstEnvId = environments[0]?.id ?? '';
-  const { data: runtimes = [] } = useRuntimes(firstEnvId, projectId, firstComponentId);
-  const hasMIRuntimes = useMemo(() => runtimes.some((r) => r.runtimeType === 'MI'), [runtimes]);
+  const selectedEnvIds = envFilter.length > 0 ? envFilter : environments.map((e) => e.id);
+  const selectedEnvs = environments.filter((e) => selectedEnvIds.includes(e.id));
+  const primaryEnv = selectedEnvs[0];
 
-  // Determine which component to link to for per-runtime logs
+  // Determine which component to use for runtime checks and linking (use same logic for both)
   const runtimeLinkComponent = useMemo(() => {
     const isComponentScope = hasComponent(scope);
     if (isComponentScope) return singleComponent;
@@ -201,9 +199,19 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
     return allComponents[0];
   }, [singleComponent, integrationFilter, allComponents]);
 
-  const selectedEnvIds = envFilter.length > 0 ? envFilter : environments.map((e) => e.id);
-  const selectedEnvs = environments.filter((e) => selectedEnvIds.includes(e.id));
-  const primaryEnv = selectedEnvs[0];
+  // Derive selected component ID and env ID from the same source used for runtimeLinkComponent
+  const selectedComponentId = useMemo(() => {
+    if (hasComponent(scope)) return singleComponent?.id ?? '';
+    if (integrationFilter !== 'all') return integrationFilter;
+    return allComponentIds[0] ?? '';
+  }, [scope, singleComponent, integrationFilter, allComponentIds]);
+
+  const selectedEnvId = primaryEnv?.id ?? '';
+
+  // Fetch runtimes to check if they are MI type (for per-runtime log download link)
+  // Use the same selected component and environment as the link will use
+  const { data: runtimes = [] } = useRuntimes(selectedEnvId, projectId, selectedComponentId);
+  const hasMIRuntimes = useMemo(() => runtimes.some((r) => r.runtimeType === 'MI'), [runtimes]);
   const componentIdsKey = componentIds.join(',');
   const envIdsKey = selectedEnvIds.join(',');
   const levelFilterKey = levelFilter.join(',');
@@ -446,11 +454,7 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
                 <Typography color="text.secondary" textAlign="center" sx={{ maxWidth: 600 }}>
                   You can still download{' '}
                   <Link
-                    to={
-                      hasComponent(scope)
-                        ? resourceUrl(scope, 'runtimes')
-                        : resourceUrl({ level: 'components', org: scope.org, project: scope.project, component: runtimeLinkComponent.handler }, 'runtimes')
-                    }
+                    to={hasComponent(scope) ? resourceUrl(scope, 'runtimes') : resourceUrl({ level: 'components', org: scope.org, project: scope.project, component: runtimeLinkComponent.handler }, 'runtimes')}
                     style={{ textDecoration: 'underline', cursor: 'pointer' }}>
                     per-runtime logs
                   </Link>

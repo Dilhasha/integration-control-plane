@@ -34,6 +34,30 @@ function normalizeServiceType(st?: string): string {
   return st.toUpperCase();
 }
 
+/**
+ * Check if an error indicates the observability service is unavailable (503).
+ * Returns true only for service unavailable errors, false for transient/network errors.
+ */
+function isUnavailable(error: unknown): boolean {
+  if (!error) return false;
+
+  // Check for 503 Service Unavailable status
+  if (typeof error === 'object' && error !== null && 'status' in error) {
+    const status = (error as any).status;
+    if (status === 503) return true;
+  }
+
+  // Check for error messages indicating unavailability
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    if (msg.includes('service is unavailable') || msg.includes('unavailable')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function sumTimeSeries(ts: Record<string, number>): number {
   let s = 0;
   for (const v of Object.values(ts)) s += v;
@@ -284,7 +308,7 @@ export default function Metrics(scope: ProjectScope | ComponentScope): JSX.Eleme
   const allInboundMetrics = useMemo(() => metricsData?.inboundMetrics ?? [], [metricsData]);
 
   const inboundMetrics = allInboundMetrics;
-  const filtersDisabled = !!error;
+  const filtersDisabled = isUnavailable(error);
 
   const { requestsData, latencyData, totalRequests, errorCount, errorPercentage, latestP95 } = useMemo(() => aggregate(inboundMetrics), [inboundMetrics]);
   const apis = useMemo(() => deriveApis(inboundMetrics, runtimeComponentMap), [inboundMetrics, runtimeComponentMap]);

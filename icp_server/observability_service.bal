@@ -40,8 +40,8 @@ type ObservabilitySecureSocketConfig record {|
 
 // Observability HTTP client configuration
 type ObservabilityClientConfig record {|
-    decimal timeout = 60; // Request timeout in seconds
-    int retryCount = 3; // Number of retry attempts
+    decimal timeout = 5; // Request timeout in seconds (fail fast for unavailable backend)
+    int retryCount = 0; // Number of retry attempts (disabled for fast failure)
     decimal retryInterval = 2; // Retry interval in seconds
     decimal retryBackoffFactor = 2.0; // Exponential backoff multiplier
     int maxPoolSize = 50; // Maximum connection pool size
@@ -101,15 +101,10 @@ final http:Client? observabilityHttpClient = initObservabilityClient();
 
 isolated function initObservabilityClient() returns http:Client? {
     // Initialize HTTP client - connection errors will be handled per-request
+    // No retries configured - fail fast on unreachable backend
     http:Client|error httpClient = new (observabilityBackendURL,
         {
             timeout: observabilityClient.timeout,
-            retryConfig: {
-                count: observabilityClient.retryCount,
-                interval: observabilityClient.retryInterval,
-                backOffFactor: <float>observabilityClient.retryBackoffFactor,
-                maxWaitInterval: 20
-            },
             poolConfig: {
                 maxActiveConnections: observabilityClient.maxPoolSize
             },
