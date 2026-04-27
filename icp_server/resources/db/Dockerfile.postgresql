@@ -20,6 +20,7 @@ ENV POSTGRES_USER=postgres
 ENV POSTGRES_PASSWORD=my-secret-pw
 ENV POSTGRES_DB=icp_database
 
-# Copy initialization script to docker-entrypoint-initdb.d
-# PostgreSQL will automatically execute .sql files in this directory
-COPY ./init-scripts/postgresql_init.sql /docker-entrypoint-initdb.d/
+# Copy initialization scripts to docker-entrypoint-initdb.d
+# PostgreSQL will automatically execute .sql files in alphabetical order
+COPY ./init-scripts/postgresql_init.sql /docker-entrypoint-initdb.d/01-postgresql_init.sql
+COPY ./init-scripts/credentials_postgresql_init.sql /docker-entrypoint-initdb.d/02-credentials_init.sql

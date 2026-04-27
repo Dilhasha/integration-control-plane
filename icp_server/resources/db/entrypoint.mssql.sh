@@ -51,17 +51,23 @@ if ! wait_for_sql_server; then
     exit 1
 fi
 
-# Run the initialization script
-if [ -f /docker-entrypoint-initdb.d/mssql_init.sql ]; then
-    echo "Running initialization script..."
-    if SQLCMDPASSWORD="$MSSQL_SA_PASSWORD" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -i /docker-entrypoint-initdb.d/mssql_init.sql; then
-        echo "Database initialization completed successfully"
-    else
-        echo "Database initialization failed"
-        exit 1
-    fi
+# Run all initialization scripts in alphabetical order
+if [ -d /docker-entrypoint-initdb.d ]; then
+    echo "Running initialization scripts..."
+    for script in /docker-entrypoint-initdb.d/*.sql; do
+        if [ -f "$script" ]; then
+            echo "Executing: $(basename "$script")"
+            if SQLCMDPASSWORD="$MSSQL_SA_PASSWORD" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -i "$script"; then
+                echo "$(basename "$script") completed successfully"
+            else
+                echo "$(basename "$script") failed"
+                exit 1
+            fi
+        fi
+    done
+    echo "All initialization scripts completed successfully"
 else
-    echo "No initialization script found, skipping..."
+    echo "No initialization scripts directory found, skipping..."
 fi
 
 echo "SQL Server is ready for connections"

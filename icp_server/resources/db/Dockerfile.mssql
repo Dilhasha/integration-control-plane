@@ -29,8 +29,9 @@ RUN mkdir -p /opt/mssql-tools18/bin && cd /opt/mssql-tools18/bin && wget https:/
 # Create directory for init scripts
 RUN mkdir -p /docker-entrypoint-initdb.d
 
-# Copy initialization script
-COPY ./init-scripts/mssql_init.sql /docker-entrypoint-initdb.d/
+# Copy initialization scripts (will be executed in alphabetical order)
+COPY ./init-scripts/mssql_init.sql /docker-entrypoint-initdb.d/01-mssql_init.sql
+COPY ./init-scripts/credentials_mssql_init.sql /docker-entrypoint-initdb.d/02-credentials_init.sql
 
 # Copy entrypoint script
 COPY ./entrypoint.mssql.sh /usr/local/bin/

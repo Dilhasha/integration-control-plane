@@ -1,0 +1,48 @@
+# ICP Server Configuration File - PostgreSQL Configuration
+# This file contains PostgreSQL-specific database configuration
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+logLevel = "INFO"
+enableAuditLogging = true
+enableMetrics = true
+
+# =============================================================================
+# AUTHENTICATION BACKEND CONFIGURATION
+# =============================================================================
+authBackendUrl = "https://localhost:9447"
+
+# =============================================================================
+# AUTH SERVICE CONFIGURATION
+# =============================================================================
+frontendJwtHMACSecret = "default-secret-key-at-least-32-characters-long-for-hs256"
+
+# =============================================================================
+# OPERATIONAL CONFIGURATION
+# =============================================================================
+schedulerIntervalSeconds = 30
+
+# =============================================================================
+# CREDENTIALS DATABASE CONFIGURATION - PostgreSQL
+# =============================================================================
+credentialsDbType = "postgresql"
+credentialsDbHost = "postgresql-db"
+credentialsDbPort = 5432
+credentialsDbName = "icp_database"
+credentialsDbUser = "postgres"
+credentialsDbPassword = "my-secret-pw"
+
+# =============================================================================
+# DATABASE CONFIGURATION - PostgreSQL
+# =============================================================================
+[icp_server.storage]
+dbType = "postgresql"
+dbHost = "postgresql-db"
+dbPort = 5432
+dbName = "icp_database"
+dbUser = "postgres"
+dbPassword = "my-secret-pw"
+maxOpenConnections = 10
+minIdleConnections = 5
+maxConnectionLifeTime = 1800.0

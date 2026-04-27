@@ -59,8 +59,15 @@ public client class DatabaseConnectionManager {
             log:printInfo("PostgreSQL Database initialized successfully.");
         } else {
             log:printInfo("Initializing H2 Database...");
-            self.dbClient = check new jdbc:Client(string `jdbc:h2:file:./database/${dbName};MODE=MySQL;AUTO_SERVER=TRUE`, dbUser, dbPassword);
-            log:printInfo("H2 Database initialized successfully.");
+            // Use TCP mode if connecting to a remote H2 server, otherwise use file mode
+            if dbHost == "localhost" || dbHost == "127.0.0.1" {
+                self.dbClient = check new jdbc:Client(string `jdbc:h2:file:./database/${dbName};MODE=MySQL;AUTO_SERVER=TRUE`, dbUser, dbPassword);
+                log:printInfo("H2 Database (file mode) initialized successfully.");
+            } else {
+                log:printInfo(string `Connecting to H2 TCP server: ${dbHost}:${dbPort}/${dbName}`);
+                self.dbClient = check new jdbc:Client(string `jdbc:h2:tcp://${dbHost}:${dbPort}/${dbName};MODE=MySQL`, dbUser, dbPassword);
+                log:printInfo("H2 Database (TCP mode) initialized successfully.");
+            }
         }
     }
 

@@ -1,0 +1,61 @@
+# Copyright (c) 2026, WSO2 Inc. (http://www.wso2.org) All Rights Reserved.
+#
+# WSO2 Inc. licenses this file to you under the Apache License,
+# Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+FROM eclipse-temurin:17-jre
+
+# Install H2 database and tools needed for healthcheck
+RUN apt-get update && \
+    apt-get install -y wget net-tools && \
+    wget https://repo1.maven.org/maven2/com/h2database/h2/2.2.224/h2-2.2.224.jar -O /opt/h2.jar && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create directory for database files and initialization scripts
+RUN mkdir -p /opt/h2-data /opt/init-scripts
+
+# Copy initialization scripts
+COPY ./init-scripts/h2_init.sql /opt/init-scripts/
+COPY ./init-scripts/credentials_h2_init.sql /opt/init-scripts/
+
+# Create initialization script (schema + admin user only, no test data)
+RUN echo '#!/bin/sh' > /opt/init-db.sh && \
+    echo 'java -cp /opt/h2.jar org.h2.tools.RunScript -url "jdbc:h2:tcp://localhost:9092/icp_database;MODE=MySQL" -user sa -password "" -script /opt/init-scripts/h2_init.sql' >> /opt/init-db.sh && \
+    echo 'java -cp /opt/h2.jar org.h2.tools.RunScript -url "jdbc:h2:tcp://localhost:9092/icp_credentials;MODE=MySQL" -user sa -password "" -script /opt/init-scripts/credentials_h2_init.sql' >> /opt/init-db.sh && \
+    chmod +x /opt/init-db.sh
+
+# Create startup script that starts H2 server and runs initialization
+RUN echo '#!/bin/sh' > /opt/start.sh && \
+    echo '# Start H2 server in the background' >> /opt/start.sh && \
+    echo 'java -cp /opt/h2.jar org.h2.tools.Server -tcp -tcpAllowOthers -tcpPort 9092 -baseDir /opt/h2-data -ifNotExists &' >> /opt/start.sh && \
+    echo 'H2_PID=$!' >> /opt/start.sh && \
+    echo 'echo "Waiting for H2 to start..."' >> /opt/start.sh && \
+    echo 'sleep 5' >> /opt/start.sh && \
+    echo '# Run initialization scripts' >> /opt/start.sh && \
+    echo 'if [ ! -f /opt/h2-data/.initialized ]; then' >> /opt/start.sh && \
+    echo '  echo "Initializing database..."' >> /opt/start.sh && \
+    echo '  /opt/init-db.sh' >> /opt/start.sh && \
+    echo '  touch /opt/h2-data/.initialized' >> /opt/start.sh && \
+    echo '  echo "Database initialization complete"' >> /opt/start.sh && \
+    echo 'else' >> /opt/start.sh && \
+    echo '  echo "Database already initialized"' >> /opt/start.sh && \
+    echo 'fi' >> /opt/start.sh && \
+    echo '# Wait for H2 server process' >> /opt/start.sh && \
+    echo 'wait $H2_PID' >> /opt/start.sh && \
+    chmod +x /opt/start.sh
+
+EXPOSE 9092
+
+CMD ["/opt/start.sh"]

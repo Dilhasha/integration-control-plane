@@ -1,0 +1,77 @@
+# Copyright (c) 2026, WSO2 Inc. (http://www.wso2.org) All Rights Reserved.
+#
+# WSO2 Inc. licenses this file to you under the Apache License,
+# Version 2.0 (the "License"); you may not use this file except
+# in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Docker Compose configuration for ICP with Microsoft SQL Server database
+# Usage: docker compose -f docker-compose-mssql.yml up --build
+
+services:
+  mssql-db:
+    build:
+      context: ./icp_server/resources/db
+      dockerfile: Dockerfile.mssql
+    container_name: icp-mssql-db
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStrong@Passw0rd"
+      MSSQL_DB: icp_database
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'SQLCMDPASSWORD="$$MSSQL_SA_PASSWORD" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -Q "SELECT 1" || exit 1',
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
+    networks:
+      - icp-network
+
+  icp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ICP_VERSION: 2.0.0-SNAPSHOT
+    container_name: icp-server-mssql
+    ports:
+      - "9445:9445"  # HTTPS
+      - "9446:9446"  # GraphQL
+      - "9449:9449"  # Observability
+    volumes:
+      # Mount logs directory for easy access
+      - ./logs:/home/wso2/wso2-integration-control-plane-2.0.0-SNAPSHOT/logs
+      # Mount MSSQL config override
+      - ./config/mssql-config.toml:/home/wso2/wso2-integration-control-plane-2.0.0-SNAPSHOT/conf/deployment.toml
+    environment:
+      - LOG_LEVEL=INFO
+    depends_on:
+      mssql-db:
+        condition: service_healthy
+    networks:
+      - icp-network
+    restart: unless-stopped
+
+volumes:
+  mssql-data:
+
+networks:
+  icp-network:
+    driver: bridge

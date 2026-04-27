@@ -1,0 +1,48 @@
+# ICP Server Configuration File - MySQL Configuration
+# This file contains MySQL-specific database configuration
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+logLevel = "INFO"
+enableAuditLogging = true
+enableMetrics = true
+
+# =============================================================================
+# AUTHENTICATION BACKEND CONFIGURATION
+# =============================================================================
+authBackendUrl = "https://localhost:9447"
+
+# =============================================================================
+# AUTH SERVICE CONFIGURATION
+# =============================================================================
+frontendJwtHMACSecret = "default-secret-key-at-least-32-characters-long-for-hs256"
+
+# =============================================================================
+# OPERATIONAL CONFIGURATION
+# =============================================================================
+schedulerIntervalSeconds = 30
+
+# =============================================================================
+# CREDENTIALS DATABASE CONFIGURATION - MySQL
+# =============================================================================
+credentialsDbType = "mysql"
+credentialsDbHost = "mysql-db"
+credentialsDbPort = 3306
+credentialsDbName = "icp_database"
+credentialsDbUser = "root"
+credentialsDbPassword = "my-secret-pw"
+
+# =============================================================================
+# DATABASE CONFIGURATION - MySQL
+# =============================================================================
+[icp_server.storage]
+dbType = "mysql"
+dbHost = "mysql-db"
+dbPort = 3306
+dbName = "icp_database"
+dbUser = "root"
+dbPassword = "my-secret-pw"
+maxOpenConnections = 10
+minIdleConnections = 5
+maxConnectionLifeTime = 1800.0

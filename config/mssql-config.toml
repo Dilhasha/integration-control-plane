@@ -1,0 +1,48 @@
+# ICP Server Configuration File - MSSQL Configuration
+# This file contains Microsoft SQL Server-specific database configuration
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+logLevel = "INFO"
+enableAuditLogging = true
+enableMetrics = true
+
+# =============================================================================
+# AUTHENTICATION BACKEND CONFIGURATION
+# =============================================================================
+authBackendUrl = "https://localhost:9447"
+
+# =============================================================================
+# AUTH SERVICE CONFIGURATION
+# =============================================================================
+frontendJwtHMACSecret = "default-secret-key-at-least-32-characters-long-for-hs256"
+
+# =============================================================================
+# OPERATIONAL CONFIGURATION
+# =============================================================================
+schedulerIntervalSeconds = 30
+
+# =============================================================================
+# CREDENTIALS DATABASE CONFIGURATION - MSSQL
+# =============================================================================
+credentialsDbType = "mssql"
+credentialsDbHost = "mssql-db"
+credentialsDbPort = 1433
+credentialsDbName = "icp_database"
+credentialsDbUser = "sa"
+credentialsDbPassword = "YourStrong@Passw0rd"
+
+# =============================================================================
+# DATABASE CONFIGURATION - MSSQL
+# =============================================================================
+[icp_server.storage]
+dbType = "mssql"
+dbHost = "mssql-db"
+dbPort = 1433
+dbName = "icp_database"
+dbUser = "sa"
+dbPassword = "YourStrong@Passw0rd"
+maxOpenConnections = 10
+minIdleConnections = 5
+maxConnectionLifeTime = 1800.0

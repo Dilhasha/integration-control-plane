@@ -1,0 +1,48 @@
+# ICP Server Configuration File - H2 Configuration
+# This file contains H2-specific database configuration
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+logLevel = "INFO"
+enableAuditLogging = true
+enableMetrics = true
+
+# =============================================================================
+# AUTHENTICATION BACKEND CONFIGURATION
+# =============================================================================
+authBackendUrl = "https://localhost:9447"
+
+# =============================================================================
+# AUTH SERVICE CONFIGURATION
+# =============================================================================
+frontendJwtHMACSecret = "default-secret-key-at-least-32-characters-long-for-hs256"
+
+# =============================================================================
+# OPERATIONAL CONFIGURATION
+# =============================================================================
+schedulerIntervalSeconds = 30
+
+# =============================================================================
+# CREDENTIALS DATABASE CONFIGURATION - H2
+# =============================================================================
+credentialsDbType = "h2"
+credentialsDbHost = "h2-db"
+credentialsDbPort = 9092
+credentialsDbName = "icp_credentials"
+credentialsDbUser = "sa"
+credentialsDbPassword = ""
+
+# =============================================================================
+# DATABASE CONFIGURATION - H2
+# =============================================================================
+[icp_server.storage]
+dbType = "h2"
+dbHost = "h2-db"
+dbPort = 9092
+dbName = "icp_database"
+dbUser = "sa"
+dbPassword = ""
+maxOpenConnections = 10
+minIdleConnections = 5
+maxConnectionLifeTime = 1800.0
