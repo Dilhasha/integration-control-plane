@@ -473,6 +473,96 @@ public type ControlCommandDBRecord record {
     string? payload?;
 };
 
+// Control Command History types (for detailed tracking with runtime-level results)
+public type RuntimeCommandResult record {|
+    string runtimeId;
+    string runtimeName;
+    string status; // "SUCCESS" | "FAILED"
+    int? httpStatus;
+    int? responseTimeMs;
+    string? errorMessage;
+|};
+
+public enum CommandStatus {
+    PENDING,
+    IN_PROGRESS,
+    COMPLETED,
+    FAILED,
+    PARTIAL_SUCCESS
+}
+
+public type ControlCommandHistory record {|
+    string commandId;
+    string operationType; // enable, disable, tracing_enable, tracing_disable, statistics_enable, statistics_disable, trigger
+    string artifactName;
+    string artifactType;
+    string componentId;
+    string environmentId;
+    string projectId;
+    string runtimeType; // MI | BI
+    string? initiatedBy;
+    time:Utc initiatedAt;
+    time:Utc? completedAt;
+    CommandStatus status;
+    int totalRuntimes;
+    int successCount;
+    int failedCount;
+    RuntimeCommandResult[] runtimeResults;
+    string? errorMessage;
+|};
+
+public type ControlCommandHistoryDBRecord record {|
+    @sql:Column {name: "command_id"}
+    string commandId;
+
+    @sql:Column {name: "operation_type"}
+    string operationType;
+
+    @sql:Column {name: "artifact_name"}
+    string artifactName;
+
+    @sql:Column {name: "artifact_type"}
+    string artifactType;
+
+    @sql:Column {name: "component_id"}
+    string componentId;
+
+    @sql:Column {name: "environment_id"}
+    string environmentId;
+
+    @sql:Column {name: "project_id"}
+    string projectId;
+
+    @sql:Column {name: "runtime_type"}
+    string runtimeType;
+
+    @sql:Column {name: "initiated_by"}
+    string? initiatedBy;
+
+    @sql:Column {name: "initiated_at"}
+    time:Utc initiatedAt;
+
+    @sql:Column {name: "completed_at"}
+    time:Utc? completedAt;
+
+    string status;
+
+    @sql:Column {name: "total_runtimes"}
+    int totalRuntimes;
+
+    @sql:Column {name: "success_count"}
+    int successCount;
+
+    @sql:Column {name: "failed_count"}
+    int failedCount;
+
+    @sql:Column {name: "runtime_results"}
+    string? runtimeResults; // JSON string
+
+    @sql:Column {name: "error_message"}
+    string? errorMessage;
+|};
+
 // GraphQL response types
 public type Runtime record {
     @sql:Column {
@@ -2308,6 +2398,8 @@ public type ArtifactStatusChangeResponse record {|
     int successCount; // Number of runtimes successfully updated
     int failedCount; // Number of runtimes that failed
     string[] details; // Detailed status per runtime
+    RuntimeCommandResult[] runtimeResults; // NEW: Runtime-level results for toast/activity panel
+    string? commandId; // NEW: Command ID for tracking in history
 |};
 
 // Input type for changing artifact tracing
@@ -2326,6 +2418,8 @@ public type ArtifactTracingChangeResponse record {|
     int successCount; // Number of runtimes successfully updated
     int failedCount; // Number of runtimes that failed
     string[] details; // Detailed status per runtime
+    RuntimeCommandResult[] runtimeResults; // NEW: Runtime-level results for toast/activity panel
+    string? commandId; // NEW: Command ID for tracking in history
 |};
 
 // Input type for changing artifact statistics
@@ -2344,6 +2438,8 @@ public type ArtifactStatisticsChangeResponse record {|
     int successCount; // Number of runtimes successfully updated
     int failedCount; // Number of runtimes that failed
     string[] details; // Detailed status per runtime
+    RuntimeCommandResult[] runtimeResults; // NEW: Runtime-level results for toast/activity panel
+    string? commandId; // NEW: Command ID for tracking in history
 |};
 
 // Input type for triggering task
@@ -2359,6 +2455,8 @@ public type ArtifactTriggerResponse record {|
     int successCount; // Number of runtimes successfully triggered
     int failedCount; // Number of runtimes that failed
     string[] details; // Detailed status per runtime
+    RuntimeCommandResult[] runtimeResults; // NEW: Runtime-level results for toast/activity panel
+    string? commandId; // NEW: Command ID for tracking in history
 |};
 
 // === Listener Control Types ===
@@ -2373,6 +2471,8 @@ public type ListenerControlResponse record {|
     boolean success;
     string message;
     string[] commandIds;
+    string? historyCommandId; // NEW: Command ID for tracking in history
+    int totalRuntimes; // NEW: Total number of runtimes affected
 |};
 
 public type UpdateLogLevelInput record {|

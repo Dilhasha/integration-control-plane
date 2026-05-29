@@ -1148,6 +1148,46 @@ CREATE INDEX idx_mi_issued_by ON mi_runtime_control_commands(issued_by);
 CREATE TRIGGER update_mi_runtime_control_commands_updated_at BEFORE UPDATE ON mi_runtime_control_commands
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Control Command History (for tracking all control operations with runtime-level results)
+CREATE TABLE control_command_history (
+    command_id CHAR(36) NOT NULL PRIMARY KEY,
+    operation_type VARCHAR(50) NOT NULL, -- enable, disable, tracing_enable, tracing_disable, statistics_enable, statistics_disable, trigger
+    artifact_name VARCHAR(200) NOT NULL,
+    artifact_type VARCHAR(100) NOT NULL,
+    component_id CHAR(36) NOT NULL,
+    environment_id CHAR(36) NOT NULL,
+    project_id CHAR(36) NOT NULL,
+    runtime_type VARCHAR(10) NOT NULL CHECK (runtime_type IN ('MI', 'BI')),
+    initiated_by CHAR(36) NULL,
+    initiated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'PARTIAL_SUCCESS')),
+    total_runtimes INT NOT NULL DEFAULT 0,
+    success_count INT NOT NULL DEFAULT 0,
+    failed_count INT NOT NULL DEFAULT 0,
+    runtime_results JSONB NULL, -- Array of {runtimeId, runtimeName, status, httpStatus, responseTimeMs, errorMessage}
+    error_message TEXT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_cch_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE,
+    CONSTRAINT fk_cch_environment FOREIGN KEY (environment_id) REFERENCES environments (environment_id) ON DELETE CASCADE,
+    CONSTRAINT fk_cch_project FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE,
+    CONSTRAINT fk_cch_initiated_by FOREIGN KEY (initiated_by) REFERENCES users (user_id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_cch_component_id ON control_command_history(component_id);
+CREATE INDEX idx_cch_environment_id ON control_command_history(environment_id);
+CREATE INDEX idx_cch_project_id ON control_command_history(project_id);
+CREATE INDEX idx_cch_status ON control_command_history(status);
+CREATE INDEX idx_cch_initiated_at ON control_command_history(initiated_at);
+CREATE INDEX idx_cch_initiated_by ON control_command_history(initiated_by);
+CREATE INDEX idx_cch_operation_type ON control_command_history(operation_type);
+CREATE INDEX idx_cch_artifact_name ON control_command_history(artifact_name);
+CREATE INDEX idx_cch_runtime_type ON control_command_history(runtime_type);
+
+CREATE TRIGGER update_control_command_history_updated_at BEFORE UPDATE ON control_command_history
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 -- ============================================================================
 -- AUDIT & EVENTS
 -- ============================================================================
