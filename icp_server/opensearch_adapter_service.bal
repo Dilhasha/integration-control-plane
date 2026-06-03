@@ -125,7 +125,7 @@ listener http:Listener openSerachObservabilityListener = new (defaultOpensearchA
         }
     ],
     cors: {
-        allowOrigins: corsAllowedOrigins,
+        allowOrigins: normalizedCorsAllowedOrigins,
         allowHeaders: ["Content-Type", "Authorization"]
     }
 }

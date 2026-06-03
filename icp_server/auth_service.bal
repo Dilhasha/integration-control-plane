@@ -39,7 +39,7 @@ isolated function extractClientIp(http:Request req) returns string? {
 
 @http:ServiceConfig {
     cors: {
-        allowOrigins: corsAllowedOrigins
+        allowOrigins: normalizedCorsAllowedOrigins
     }
 }
 service /auth on httpListener {

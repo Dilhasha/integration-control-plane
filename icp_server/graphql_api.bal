@@ -635,7 +635,7 @@ isolated function validateRegistryResourceAccess(
 @graphql:ServiceConfig {
     contextInit: utils:initGraphQLContext,
     cors: {
-        allowOrigins: corsAllowedOrigins
+        allowOrigins: normalizedCorsAllowedOrigins
     },
     auth: [
         {
