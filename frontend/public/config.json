@@ -4,5 +4,6 @@
   "VITE_OBSERVABILITY_URL": "https://localhost:9446/icp/observability",
   "VITE_WORKFLOW_URL": "https://localhost:9446/icp/workflow",
   "VITE_SSO_ENABLED": false,
+  "VITE_DISABLE_PASSWORD_LOGIN": false,
   "VITE_ICP_VERSION": "2.0.0-SNAPSHOT"
 }

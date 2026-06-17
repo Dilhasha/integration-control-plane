@@ -175,6 +175,7 @@ function updateFrontendConfig() returns error? {
         "VITE_OBSERVABILITY_URL": backendObservabilityEndpoint,
         "VITE_WS_URL": backendWsUrl,
         "VITE_SSO_ENABLED": ssoEnabled,
+        "VITE_DISABLE_PASSWORD_LOGIN": disablePasswordLogin,
         "VITE_ICP_VERSION": icpVersion
     };
 

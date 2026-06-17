@@ -175,6 +175,18 @@ function generateMockIdToken() returns string|error {
             "sub": TEST_USER_ID,
             "email": TEST_USER_EMAIL,
             "name": TEST_USER_NAME,
+            "groups": ["icp-platform-admins", "developers"],
+            "roles": "platform-admin",
+            "realm_access": {
+                "roles": ["realm-admin", "realm-auditor"]
+            },
+            "resource_access": {
+                "icp": {
+                    "roles": ["icp-admin", "icp-viewer"]
+                }
+            },
+            "invalid_claim": {"roles": ["not-a-string-root"]},
+            "mixed_values": ["valid", 100, true, "also-valid"],
             "iat": currentTimestamp,
             "exp": expiryTimestamp
         }

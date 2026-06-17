@@ -65,7 +65,9 @@ service /auth on httpListener {
     }
     resource function get capabilities() returns http:Ok {
         string[] caps;
-        if ldapUserStoreEnabled {
+        if disablePasswordLogin {
+            caps = [];
+        } else if ldapUserStoreEnabled {
             caps = ["authenticate"];
         } else {
             caps = [
@@ -79,8 +81,17 @@ service /auth on httpListener {
         return <http:Ok>{body: {capabilities: caps}};
     }
 
-    isolated resource function post login(types:Credentials credentials, http:Request req) returns http:Ok|http:Unauthorized|http:TooManyRequests|http:InternalServerError|error {
+    isolated resource function post login(types:Credentials credentials, http:Request req) returns http:Ok|http:Unauthorized|http:Forbidden|http:TooManyRequests|http:InternalServerError|error {
         log:printInfo("Login attempt for user", username = credentials.username);
+
+        if disablePasswordLogin {
+            log:printWarn("Password login rejected because it is disabled", username = credentials.username);
+            storage:logAuditEvent(storage:AUDIT_LOGIN_FAILURE, resourceType = storage:AUDIT_RESOURCE_SESSION,
+                    details = string `Password login rejected because password login is disabled for user '${credentials.username}'`,
+                    clientIp = extractClientIp(req));
+            return utils:createForbiddenError("Password login is disabled. Use SSO to sign in.");
+        }
+
         // Call the authentication backend to verify credentials
         http:Response|error authResponse = authBackendClient->post("/authenticate", credentials);
 
@@ -345,6 +356,13 @@ service /auth on httpListener {
                 log:printError("Error getting OIDC user details", userDetails);
                 return utils:createInternalServerError("Error getting user details");
             }
+        }
+
+        error? ssoAdminGrantResult = grantSuperAdminFromSSOClaims(userDetails.userId, userInfo.username, claims, ssoConfig);
+        if ssoAdminGrantResult is error {
+            log:printError("Error applying SSO super admin claim mapping", ssoAdminGrantResult,
+                    username = userInfo.username);
+            return utils:createInternalServerError("Error applying SSO admin access");
         }
 
         // Generate JWT token using V2 utility function with permissions
@@ -3205,3 +3223,49 @@ isolated function extractUserContextFromRequest(http:Request req) returns types:
     return userContext;
 }
 
+isolated function grantSuperAdminFromSSOClaims(string userId, string username, types:OIDCIdTokenClaims claims,
+        types:SSOConfig ssoConfig) returns error? {
+    if ssoConfig.adminClaim.trim() == "" || ssoConfig.adminValues.length() == 0 {
+        return;
+    }
+
+    string[] claimValues = auth:extractClaimValues(claims, ssoConfig.adminClaim);
+    if !hasMatchingSSOAdminValue(claimValues, ssoConfig.adminValues) {
+        log:printDebug("SSO admin claim did not match configured values", username = username,
+                claim = ssoConfig.adminClaim);
+        return;
+    }
+
+    string|error superAdminsGroupId = storage:getSuperAdminsGroupId();
+    if superAdminsGroupId is error {
+        return error("Could not resolve Super Admins group", superAdminsGroupId);
+    }
+
+    boolean|error alreadyMember = storage:isUserInGroup(userId, superAdminsGroupId);
+    if alreadyMember is error {
+        return error("Could not check Super Admins group membership", alreadyMember);
+    }
+    if alreadyMember {
+        log:printDebug("SSO user is already in Super Admins group", username = username);
+        return;
+    }
+
+    error? addResult = storage:addUserToGroup(userId, superAdminsGroupId);
+    if addResult is error {
+        return error("Could not add SSO user to Super Admins group", addResult);
+    }
+
+    log:printInfo("Granted Super Admins group membership from SSO claim", username = username,
+            claim = ssoConfig.adminClaim);
+}
+
+isolated function hasMatchingSSOAdminValue(string[] claimValues, string[] configuredAdminValues) returns boolean {
+    foreach string claimValue in claimValues {
+        foreach string configuredValue in configuredAdminValues {
+            if configuredValue.trim() != "" && claimValue == configuredValue.trim() {
+                return true;
+            }
+        }
+    }
+    return false;
+}

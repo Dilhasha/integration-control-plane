@@ -152,6 +152,9 @@ frontendJwtHMACSecret = "default-secret-key-at-least-32-characters-long-for-hs25
 # ssoUsernameClaim = "email"  # or "preferred_username"
 # ssoScopes = ["openid", "email", "profile"]
 # ssoAllowInsecureTLS = false  # For OIDC providers running with self-signed cert
+# disablePasswordLogin = false  # Set true to disable local username/password login
+# ssoAdminClaim = "groups"  # Required when disablePasswordLogin = true
+# ssoAdminValues = ["icp-platform-admins"]  # Required when disablePasswordLogin = true
 
 # Example configuration for Okta
 # ssoIssuer = "https://{your-domain}.okta.com/oauth2/default"

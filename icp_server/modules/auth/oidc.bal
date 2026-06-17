@@ -221,10 +221,76 @@ isolated function buildIdTokenClaims(jwt:Payload payload) returns types:OIDCIdTo
         iat: iat,
         email: email,
         name: name,
-        preferred_username: preferredUsername
+        preferred_username: preferredUsername,
+        rawClaims: payloadMap
     };
 
     return claims;
+}
+
+// Extract string values from a validated OIDC claim path.
+//
+// Supports top-level claims such as "groups" and nested paths such as
+// "realm_access.roles" or "resource_access.icp.roles". Missing claims and
+// unsupported shapes return an empty list so callers can treat absence as
+// "no mapped values".
+public isolated function extractClaimValues(types:OIDCIdTokenClaims claims, string claimPath) returns string[] {
+    string normalizedPath = claimPath.trim();
+    if normalizedPath == "" {
+        return [];
+    }
+
+    string[] pathSegments = re `\.`.split(normalizedPath);
+    json currentValue = claims.rawClaims;
+    foreach string segment in pathSegments {
+        string key = segment.trim();
+        if key == "" {
+            log:printDebug("Ignoring OIDC claim path with empty segment", claimPath = claimPath);
+            return [];
+        }
+        if currentValue is map<json> {
+            currentValue = currentValue[key];
+        } else {
+            log:printDebug("OIDC claim path cannot be resolved because an intermediate value is not an object",
+                    claimPath = claimPath);
+            return [];
+        }
+    }
+
+    return normalizeClaimValues(currentValue, normalizedPath);
+}
+
+isolated function normalizeClaimValues(json claimValue, string claimPath) returns string[] {
+    string[] values = [];
+
+    if claimValue is () {
+        return values;
+    }
+
+    if claimValue is string {
+        string trimmedValue = claimValue.trim();
+        if trimmedValue != "" {
+            values.push(trimmedValue);
+        }
+        return values;
+    }
+
+    if claimValue is json[] {
+        foreach json item in claimValue {
+            if item is string {
+                string trimmedValue = item.trim();
+                if trimmedValue != "" {
+                    values.push(trimmedValue);
+                }
+            } else if item !is () {
+                log:printDebug("Ignoring non-string value in OIDC claim array", claimPath = claimPath);
+            }
+        }
+        return values;
+    }
+
+    log:printDebug("Ignoring OIDC claim because it is not a string or string array", claimPath = claimPath);
+    return values;
 }
 
 // Extract user information from ID token claims

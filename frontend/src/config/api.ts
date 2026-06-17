@@ -29,6 +29,7 @@ interface RuntimeConfig {
   VITE_WORKFLOW_URL?: string;
   VITE_WS_URL?: string;
   VITE_SSO_ENABLED?: boolean;
+  VITE_DISABLE_PASSWORD_LOGIN?: boolean;
   VITE_ICP_VERSION?: string;
 }
 
@@ -39,6 +40,7 @@ export interface ApiConfig {
   workflowUrl: string;
   wsUrl: string;
   ssoEnabled: boolean;
+  disablePasswordLogin: boolean;
   version: string;
 }
 
@@ -57,6 +59,7 @@ const DEFAULT_CONFIG: ApiConfig = {
   workflowUrl: 'https://localhost:9446/icp/workflow',
   wsUrl: 'wss://localhost:9446/runtime-status',
   ssoEnabled: false,
+  disablePasswordLogin: false,
   version: '',
 };
 
@@ -80,6 +83,7 @@ export async function loadConfig(): Promise<void> {
       workflowUrl: config.VITE_WORKFLOW_URL || DEFAULT_CONFIG.workflowUrl,
       wsUrl: config.VITE_WS_URL || DEFAULT_CONFIG.wsUrl,
       ssoEnabled: config.VITE_SSO_ENABLED ?? DEFAULT_CONFIG.ssoEnabled,
+      disablePasswordLogin: config.VITE_DISABLE_PASSWORD_LOGIN ?? DEFAULT_CONFIG.disablePasswordLogin,
       version: config.VITE_ICP_VERSION || DEFAULT_CONFIG.version,
     };
 
@@ -114,6 +118,7 @@ export const oidcCallbackApiUrl = (): string => `${window.API_CONFIG.authBaseUrl
 export const changePasswordApiUrl = (): string => `${window.API_CONFIG.authBaseUrl}/change-password`;
 export const forceChangePasswordApiUrl = (): string => `${window.API_CONFIG.authBaseUrl}/force-change-password`;
 export const isSsoEnabled = (): boolean => window.API_CONFIG.ssoEnabled;
+export const isPasswordLoginDisabled = (): boolean => window.API_CONFIG.disablePasswordLogin;
 export const getIcpVersion = (): string => window.API_CONFIG.version;
 
 /**
