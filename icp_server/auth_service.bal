@@ -365,6 +365,13 @@ service /auth on httpListener {
             return utils:createInternalServerError("Error applying SSO admin access");
         }
 
+        error? federatedSyncResult = syncFederatedGroupsFromSSOClaims(userDetails.userId, userInfo.username, claims);
+        if federatedSyncResult is error {
+            log:printError("Error synchronizing SSO group memberships", federatedSyncResult,
+                    username = userInfo.username);
+            return utils:createInternalServerError("Error synchronizing SSO group access");
+        }
+
         // Generate JWT token using V2 utility function with permissions
         string|error jwtToken = auth:generateJWTTokenV2(
                 userDetails.userId,
@@ -1464,7 +1471,7 @@ service /auth on httpListener {
         }
 
         // Fetch current group memberships
-        types:Group[]|error currentGroups = storage:getUserGroups(userId);
+        types:Group[]|error currentGroups = storage:getUserManualGroups(userId);
         if currentGroups is error {
             log:printError("Failed to fetch current user groups", currentGroups, userId = userId);
             return utils:createInternalServerError("Failed to fetch current user groups");
@@ -1533,7 +1540,7 @@ service /auth on httpListener {
         }
 
         // Fetch final groups
-        types:Group[]|error finalGroups = storage:getUserGroups(userId);
+        types:Group[]|error finalGroups = storage:getUserManualGroups(userId);
         if finalGroups is error {
             log:printError("Failed to fetch final user groups", finalGroups, userId = userId);
             return utils:createInternalServerError("Failed to fetch final user groups");
@@ -3257,6 +3264,24 @@ isolated function grantSuperAdminFromSSOClaims(string userId, string username, t
 
     log:printInfo("Granted Super Admins group membership from SSO claim", username = username,
             claim = ssoConfig.adminClaim);
+}
+
+isolated function syncFederatedGroupsFromSSOClaims(string userId, string username,
+        types:OIDCIdTokenClaims claims) returns error? {
+    types:SSOGroupMapping[] mappings =
+        check storage:getSSOGroupMappingsByIssuer(storage:DEFAULT_ORG_ID, claims.iss);
+    types:FederatedGroupMembershipInput[] desiredMemberships =
+        auth:resolveFederatedGroupMemberships(claims, mappings);
+
+    check storage:reconcileFederatedGroupUserMappings(
+        storage:DEFAULT_ORG_ID,
+        claims.iss,
+        userId,
+        desiredMemberships
+    );
+
+    log:printDebug("Synchronized SSO group memberships", username = username,
+            issuer = claims.iss, membershipCount = desiredMemberships.length());
 }
 
 isolated function hasMatchingSSOAdminValue(string[] claimValues, string[] configuredAdminValues) returns boolean {

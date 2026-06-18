@@ -20,6 +20,7 @@ import ballerina/log;
 import ballerina/test;
 
 import icp_server.auth;
+import icp_server.storage;
 import icp_server.types;
 
 // Test configuration
@@ -374,6 +375,86 @@ function testOIDCClaimPathExtraction() {
             [], "Unsupported claim shapes should return an empty list");
     test:assertEquals(auth:extractClaimValues(claims, "mixed_values"),
             ["valid", "also-valid"], "Non-string values in arrays should be ignored");
+}
+
+@test:Config {
+    groups: ["oidc", "claims", "group-mapping"]
+}
+function testResolveFederatedGroupMemberships() {
+    types:OIDCIdTokenClaims claims = {
+        sub: TEST_USER_ID,
+        iss: MOCK_ISSUER,
+        aud: MOCK_CLIENT_ID,
+        exp: 2000000000,
+        iat: 1999999000,
+        rawClaims: {
+            "groups": ["developers", "auditors"],
+            "realm_access": {
+                "roles": ["realm-admin"]
+            }
+        }
+    };
+
+    types:SSOGroupMapping[] mappings = [
+        {
+            mappingId: "mapping-1",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: MOCK_ISSUER,
+            claimName: "groups",
+            claimValue: "developers",
+            groupId: "group-developers",
+            enabled: true
+        },
+        {
+            mappingId: "mapping-2",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: MOCK_ISSUER,
+            claimName: "realm_access.roles",
+            claimValue: "realm-admin",
+            groupId: "group-realm-admins",
+            enabled: true
+        },
+        {
+            mappingId: "mapping-3",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: MOCK_ISSUER,
+            claimName: "groups",
+            claimValue: "auditors",
+            groupId: "group-disabled",
+            enabled: false
+        },
+        {
+            mappingId: "mapping-4",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: "https://other-idp.example.com",
+            claimName: "groups",
+            claimValue: "developers",
+            groupId: "group-other-issuer",
+            enabled: true
+        }
+    ];
+
+    types:FederatedGroupMembershipInput[] memberships =
+        auth:resolveFederatedGroupMemberships(claims, mappings);
+
+    test:assertEquals(memberships.length(), 2,
+        "Only enabled mappings for the validated issuer should resolve");
+    test:assertTrue(hasDesiredFederatedMembership(memberships, "group-developers", "groups", "developers"),
+        "Flat group claims should resolve");
+    test:assertTrue(hasDesiredFederatedMembership(
+        memberships, "group-realm-admins", "realm_access.roles", "realm-admin"),
+        "Nested role claims should resolve");
+}
+
+function hasDesiredFederatedMembership(types:FederatedGroupMembershipInput[] memberships,
+        string groupId, string claimName, string claimValue) returns boolean {
+    foreach types:FederatedGroupMembershipInput membership in memberships {
+        if membership.groupId == groupId && membership.claimName == claimName
+                && membership.claimValue == claimValue {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Test: Verify display name fallback logic

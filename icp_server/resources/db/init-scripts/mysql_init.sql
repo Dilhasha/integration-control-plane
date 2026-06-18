@@ -195,6 +195,46 @@ CREATE TABLE group_user_mapping (
     INDEX idx_group_id (group_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- SSO group mappings (IdP claim value -> ICP group)
+CREATE TABLE sso_group_mappings (
+    mapping_id VARCHAR(36) PRIMARY KEY,
+    org_uuid INT NOT NULL DEFAULT 1,
+    issuer VARCHAR(255) NOT NULL,
+    claim_name VARCHAR(128) NOT NULL,
+    claim_value VARCHAR(255) NOT NULL,
+    group_id VARCHAR(36) NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_sso_group_mapping_org FOREIGN KEY (org_uuid) REFERENCES organizations(org_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sso_group_mapping_group FOREIGN KEY (group_id) REFERENCES user_groups(group_id) ON DELETE CASCADE,
+    UNIQUE KEY unique_sso_group_mapping (org_uuid, issuer, claim_name, claim_value, group_id),
+    INDEX idx_sso_group_mapping_org (org_uuid),
+    INDEX idx_sso_group_mapping_issuer_claim (issuer, claim_name, claim_value),
+    INDEX idx_sso_group_mapping_group (group_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Federated group-user mappings (SSO-owned memberships)
+CREATE TABLE federated_group_user_mapping (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    org_uuid INT NOT NULL DEFAULT 1,
+    issuer VARCHAR(255) NOT NULL,
+    user_uuid VARCHAR(36) NOT NULL,
+    group_id VARCHAR(36) NOT NULL,
+    claim_name VARCHAR(128) NOT NULL,
+    claim_value VARCHAR(255) NOT NULL,
+    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_fed_group_user_org FOREIGN KEY (org_uuid) REFERENCES organizations(org_id) ON DELETE CASCADE,
+    CONSTRAINT fk_fed_group_user_user FOREIGN KEY (user_uuid) REFERENCES users(user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_fed_group_user_group FOREIGN KEY (group_id) REFERENCES user_groups(group_id) ON DELETE CASCADE,
+    UNIQUE KEY unique_fed_group_user_claim (org_uuid, issuer, user_uuid, group_id, claim_name, claim_value),
+    INDEX idx_fed_group_user_user (user_uuid),
+    INDEX idx_fed_group_user_group (group_id),
+    INDEX idx_fed_group_user_issuer_claim (issuer, claim_name, claim_value)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Group-Role mapping with context (Many-to-Many with hierarchical scoping)
 CREATE TABLE group_role_mapping (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -242,6 +282,14 @@ CREATE TABLE role_permission_mapping (
 -- RBAC V2 VIEWS
 -- ============================================================================
 
+-- View: Effective user group memberships from manual and SSO-owned sources
+CREATE OR REPLACE VIEW v_effective_group_user_mapping AS
+SELECT user_uuid, group_id
+FROM group_user_mapping
+UNION
+SELECT user_uuid, group_id
+FROM federated_group_user_mapping;
+
 -- View: User's accessible projects
 CREATE OR REPLACE VIEW v_user_project_access AS
 -- Direct project-level access
@@ -252,7 +300,7 @@ SELECT DISTINCT
     p.org_id AS org_uuid,
     grm.role_id,
     'project' AS access_level
-FROM group_user_mapping gum
+FROM v_effective_group_user_mapping gum
 INNER JOIN group_role_mapping grm ON gum.group_id = grm.group_id
 INNER JOIN projects p ON grm.project_uuid = p.project_id
 WHERE grm.project_uuid IS NOT NULL AND grm.integration_uuid IS NULL
@@ -267,7 +315,7 @@ SELECT DISTINCT
     p.org_id AS org_uuid,
     grm.role_id,
     'org' AS access_level
-FROM group_user_mapping gum
+FROM v_effective_group_user_mapping gum
 INNER JOIN group_role_mapping grm ON gum.group_id = grm.group_id
 INNER JOIN projects p ON grm.org_uuid = p.org_id
 WHERE grm.org_uuid IS NOT NULL 
@@ -284,7 +332,7 @@ SELECT DISTINCT
     p.org_id AS org_uuid,
     grm.role_id,
     'integration' AS access_level
-FROM group_user_mapping gum
+FROM v_effective_group_user_mapping gum
 INNER JOIN group_role_mapping grm ON gum.group_id = grm.group_id
 INNER JOIN projects p ON grm.project_uuid = p.project_id
 WHERE grm.integration_uuid IS NOT NULL;
@@ -300,7 +348,7 @@ SELECT DISTINCT
     grm.env_uuid,
     grm.role_id,
     'integration' AS access_level
-FROM group_user_mapping gum
+FROM v_effective_group_user_mapping gum
 INNER JOIN group_role_mapping grm ON gum.group_id = grm.group_id
 INNER JOIN components c ON grm.integration_uuid = c.component_id
 WHERE grm.integration_uuid IS NOT NULL
@@ -316,7 +364,7 @@ SELECT DISTINCT
     grm.env_uuid,
     grm.role_id,
     'project' AS access_level
-FROM group_user_mapping gum
+FROM v_effective_group_user_mapping gum
 INNER JOIN group_role_mapping grm ON gum.group_id = grm.group_id
 INNER JOIN components c ON grm.project_uuid = c.project_id
 WHERE grm.project_uuid IS NOT NULL 
@@ -333,7 +381,7 @@ SELECT DISTINCT
     grm.env_uuid,
     grm.role_id,
     'org' AS access_level
-FROM group_user_mapping gum
+FROM v_effective_group_user_mapping gum
 INNER JOIN group_role_mapping grm ON gum.group_id = grm.group_id
 INNER JOIN projects p ON grm.org_uuid = p.org_id
 INNER JOIN components c ON p.project_id = c.project_id
@@ -354,7 +402,7 @@ SELECT DISTINCT
         WHEN grm.project_uuid IS NOT NULL THEN 'project'
         ELSE 'org'
     END AS scope_level
-FROM group_user_mapping gum
+FROM v_effective_group_user_mapping gum
 INNER JOIN group_role_mapping grm ON gum.group_id = grm.group_id
 WHERE grm.env_uuid IS NOT NULL OR grm.org_uuid IS NOT NULL;
 

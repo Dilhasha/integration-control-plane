@@ -21,7 +21,10 @@ This application supports runtime configuration, allowing you to modify backend 
 {
   "VITE_GRAPHQL_URL": "https://localhost:9446/graphql",
   "VITE_AUTH_BASE_URL": "https://localhost:9446/auth",
-  "VITE_OBSERVABILITY_URL": "https://localhost:9446/icp/observability"
+  "VITE_OBSERVABILITY_URL": "https://localhost:9446/icp/observability",
+  "VITE_SSO_ENABLED": false,
+  "VITE_DISABLE_PASSWORD_LOGIN": false,
+  "VITE_ICP_VERSION": "2.0.0-SNAPSHOT"
 }
 ```
 

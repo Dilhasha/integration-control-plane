@@ -260,6 +260,31 @@ public isolated function extractClaimValues(types:OIDCIdTokenClaims claims, stri
     return normalizeClaimValues(currentValue, normalizedPath);
 }
 
+// Resolve enabled mappings for the validated token issuer into desired
+// federated memberships. Mapping persistence and stale-row cleanup remain in
+// the storage layer.
+public isolated function resolveFederatedGroupMemberships(types:OIDCIdTokenClaims claims,
+        types:SSOGroupMapping[] mappings) returns types:FederatedGroupMembershipInput[] {
+    types:FederatedGroupMembershipInput[] memberships = [];
+
+    foreach types:SSOGroupMapping mapping in mappings {
+        if !mapping.enabled || mapping.issuer != claims.iss {
+            continue;
+        }
+
+        string[] claimValues = extractClaimValues(claims, mapping.claimName);
+        if claimValues.indexOf(mapping.claimValue) is int {
+            memberships.push({
+                groupId: mapping.groupId,
+                claimName: mapping.claimName,
+                claimValue: mapping.claimValue
+            });
+        }
+    }
+
+    return memberships;
+}
+
 isolated function normalizeClaimValues(json claimValue, string claimPath) returns string[] {
     string[] values = [];
 

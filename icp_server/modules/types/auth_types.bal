@@ -124,6 +124,92 @@ public type GroupUserMapping record {
     string createdAt?;
 };
 
+// SSO group mapping - links IdP claim values to existing ICP groups.
+public type SSOGroupMapping record {|
+    @sql:Column {name: "mapping_id"}
+    string mappingId;
+
+    @sql:Column {name: "org_uuid"}
+    int orgUuid;
+
+    string issuer;
+
+    @sql:Column {name: "claim_name"}
+    string claimName;
+
+    @sql:Column {name: "claim_value"}
+    string claimValue;
+
+    @sql:Column {name: "group_id"}
+    string groupId;
+
+    boolean enabled;
+
+    @sql:Column {name: "created_at"}
+    string createdAt?;
+
+    @sql:Column {name: "updated_at"}
+    string updatedAt?;
+|};
+
+// Input for creating IdP-to-ICP group mappings.
+public type SSOGroupMappingInput record {|
+    int orgUuid?;
+    string issuer;
+    string claimName;
+    string claimValue;
+    string groupId;
+    boolean enabled?;
+|};
+
+// Federated group-user mapping - group memberships owned by SSO sync.
+public type FederatedGroupUserMapping record {|
+    int id;
+
+    @sql:Column {name: "org_uuid"}
+    int orgUuid;
+
+    string issuer;
+
+    @sql:Column {name: "user_uuid"}
+    string userUuid;
+
+    @sql:Column {name: "group_id"}
+    string groupId;
+
+    @sql:Column {name: "claim_name"}
+    string claimName;
+
+    @sql:Column {name: "claim_value"}
+    string claimValue;
+
+    @sql:Column {name: "last_seen_at"}
+    string lastSeenAt?;
+
+    @sql:Column {name: "created_at"}
+    string createdAt?;
+
+    @sql:Column {name: "updated_at"}
+    string updatedAt?;
+|};
+
+// Input for creating SSO-owned group memberships.
+public type FederatedGroupUserMappingInput record {|
+    int orgUuid?;
+    string issuer;
+    string userUuid;
+    string groupId;
+    string claimName;
+    string claimValue;
+|};
+
+// Desired SSO-owned membership used during issuer-scoped login reconciliation.
+public type FederatedGroupMembershipInput record {|
+    string groupId;
+    string claimName;
+    string claimValue;
+|};
+
 // Group-Role mapping - links groups to roles with hierarchical context (Many-to-Many with scoping)
 // This is the core of the authorization model - defines WHAT roles a group has and WHERE they apply
 public type GroupRoleMapping record {

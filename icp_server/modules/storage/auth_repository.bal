@@ -152,19 +152,19 @@ public isolated function getGroupsWithCountsByOrgId(int orgId) returns types:Gro
     if isOracle() {
         // Oracle cannot GROUP BY a CLOB column — group by its VARCHAR2 projection
         groupsQuery = `SELECT ug.group_id, ug.group_name, ug.org_uuid, TO_CHAR(ug.description) AS description, ug.created_at, ug.updated_at,
-                COUNT(DISTINCT gum.user_uuid) AS user_count,
+                COUNT(DISTINCT egum.user_uuid) AS user_count,
                 COUNT(DISTINCT grm.id) AS role_count
          FROM user_groups ug
-         LEFT JOIN group_user_mapping gum ON ug.group_id = gum.group_id
+         LEFT JOIN v_effective_group_user_mapping egum ON ug.group_id = egum.group_id
          LEFT JOIN group_role_mapping grm ON ug.group_id = grm.group_id
          WHERE ug.org_uuid = ${orgId}
          GROUP BY ug.group_id, ug.group_name, ug.org_uuid, TO_CHAR(ug.description), ug.created_at, ug.updated_at`;
     } else {
         groupsQuery = `SELECT ug.group_id, ug.group_name, ug.org_uuid, ug.description, ug.created_at, ug.updated_at,
-                COUNT(DISTINCT gum.user_uuid) AS user_count,
+                COUNT(DISTINCT egum.user_uuid) AS user_count,
                 COUNT(DISTINCT grm.id) AS role_count
          FROM user_groups ug
-         LEFT JOIN group_user_mapping gum ON ug.group_id = gum.group_id
+         LEFT JOIN v_effective_group_user_mapping egum ON ug.group_id = egum.group_id
          LEFT JOIN group_role_mapping grm ON ug.group_id = grm.group_id
          WHERE ug.org_uuid = ${orgId}
          GROUP BY ug.group_id, ug.group_name, ug.org_uuid, ug.description, ug.created_at, ug.updated_at`;
@@ -349,10 +349,10 @@ public isolated function getRolesWithCountsByOrgId(int orgId) returns types:Role
     } else {
         rolesQuery = `SELECT r.role_id, r.role_name, r.org_id, r.description, r.created_at, r.updated_at,
                 COUNT(DISTINCT grm.group_id) AS group_count,
-                COUNT(DISTINCT gum.user_uuid) AS user_count
+                COUNT(DISTINCT egum.user_uuid) AS user_count
          FROM roles_v2 r
          LEFT JOIN group_role_mapping grm ON r.role_id = grm.role_id
-         LEFT JOIN group_user_mapping gum ON grm.group_id = gum.group_id
+         LEFT JOIN v_effective_group_user_mapping egum ON grm.group_id = egum.group_id
          WHERE r.org_id = ${orgId}
          GROUP BY r.role_id, r.role_name, r.org_id, r.description, r.created_at, r.updated_at
          ORDER BY r.role_name`;
@@ -537,6 +537,230 @@ public isolated function removeUserFromGroup(string userId, string groupId) retu
     }
 
     log:printInfo(string `Successfully removed user ${userId} from group ${groupId}`);
+    return ();
+}
+
+// Create an SSO group mapping from an IdP claim value to an existing ICP group.
+public isolated function createSSOGroupMapping(types:SSOGroupMappingInput input) returns string|error {
+    string mappingId = uuid:createType1AsString();
+    int orgId = input.orgUuid ?: DEFAULT_ORG_ID;
+    boolean enabled = input.enabled ?: true;
+
+    log:printDebug("Creating SSO group mapping", issuer = input.issuer, claimName = input.claimName, groupId = input.groupId);
+
+    sql:ExecutionResult|error result = dbClient->execute(
+        `INSERT INTO sso_group_mappings (mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled)
+         VALUES (${mappingId}, ${orgId}, ${input.issuer}, ${input.claimName}, ${input.claimValue}, ${input.groupId}, ${enabled})`
+    );
+
+    if result is sql:Error {
+        log:printError("Failed to create SSO group mapping", 'error = result);
+        match classifySqlError(result) {
+            DUPLICATE_KEY => { return error("This SSO group mapping already exists", result); }
+            FOREIGN_KEY_VIOLATION => { return error("The specified organization or group does not exist", result); }
+            VALUE_TOO_LONG => { return error("The provided value exceeds the maximum allowed length", result); }
+            _ => { return error("An unexpected error occurred. Please contact your administrator.", result); }
+        }
+    }
+    if result is error {
+        log:printError("Failed to create SSO group mapping", 'error = result);
+        return result;
+    }
+
+    log:printInfo("Successfully created SSO group mapping", mappingId = mappingId);
+    return mappingId;
+}
+
+// Get an SSO group mapping by ID.
+public isolated function getSSOGroupMappingById(string mappingId) returns types:SSOGroupMapping|error {
+    log:printDebug(string `Fetching SSO group mapping ${mappingId}`);
+
+    types:SSOGroupMapping mapping = check dbClient->queryRow(
+        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled, created_at, updated_at
+         FROM sso_group_mappings
+         WHERE mapping_id = ${mappingId}`
+    );
+
+    return mapping;
+}
+
+// List SSO group mappings for an organization.
+public isolated function getSSOGroupMappingsByOrgId(int orgId) returns types:SSOGroupMapping[]|error {
+    log:printDebug(string `Fetching SSO group mappings for orgId: ${orgId}`);
+
+    types:SSOGroupMapping[] mappings = [];
+    stream<types:SSOGroupMapping, sql:Error?> mappingStream = dbClient->query(
+        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled, created_at, updated_at
+         FROM sso_group_mappings
+         WHERE org_uuid = ${orgId}
+         ORDER BY created_at DESC`
+    );
+
+    check from types:SSOGroupMapping mapping in mappingStream
+        do {
+            mappings.push(mapping);
+        };
+
+    return mappings;
+}
+
+// List SSO group mappings for an organization and issuer.
+public isolated function getSSOGroupMappingsByIssuer(int orgId, string issuer) returns types:SSOGroupMapping[]|error {
+    log:printDebug("Fetching SSO group mappings by issuer", orgId = orgId, issuer = issuer);
+
+    types:SSOGroupMapping[] mappings = [];
+    stream<types:SSOGroupMapping, sql:Error?> mappingStream = dbClient->query(
+        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled, created_at, updated_at
+         FROM sso_group_mappings
+         WHERE org_uuid = ${orgId} AND issuer = ${issuer}
+         ORDER BY created_at`
+    );
+
+    check from types:SSOGroupMapping mapping in mappingStream
+        do {
+            mappings.push(mapping);
+        };
+
+    return mappings;
+}
+
+// Add an SSO-owned group membership. Manual memberships remain in group_user_mapping.
+public isolated function addFederatedGroupUserMapping(types:FederatedGroupUserMappingInput input) returns int|error {
+    int orgId = input.orgUuid ?: DEFAULT_ORG_ID;
+
+    log:printDebug("Adding federated group membership", issuer = input.issuer, userId = input.userUuid, groupId = input.groupId);
+
+    sql:ExecutionResult|error result = dbClient->execute(
+        `INSERT INTO federated_group_user_mapping (org_uuid, issuer, user_uuid, group_id, claim_name, claim_value)
+         VALUES (${orgId}, ${input.issuer}, ${input.userUuid}, ${input.groupId}, ${input.claimName}, ${input.claimValue})`
+    );
+
+    if result is sql:Error {
+        log:printError("Failed to add federated group membership", 'error = result);
+        match classifySqlError(result) {
+            DUPLICATE_KEY => { return error("This federated group membership already exists", result); }
+            FOREIGN_KEY_VIOLATION => { return error("The specified organization, user, or group does not exist", result); }
+            VALUE_TOO_LONG => { return error("The provided value exceeds the maximum allowed length", result); }
+            _ => { return error("An unexpected error occurred. Please contact your administrator.", result); }
+        }
+    }
+    if result is error {
+        log:printError("Failed to add federated group membership", 'error = result);
+        return result;
+    }
+
+    int|string? lastInsertId = result.lastInsertId;
+    if lastInsertId is int {
+        log:printInfo("Successfully added federated group membership", mappingId = lastInsertId);
+        return lastInsertId;
+    } else if lastInsertId is string && dbType == MSSQL {
+        int|error parsedId = int:fromString(lastInsertId);
+        if parsedId is int {
+            log:printInfo("Successfully added federated group membership", mappingId = parsedId);
+            return parsedId;
+        }
+    }
+
+    log:printWarn("Database did not return a valid last insert ID for federated group membership", lastInsertId = lastInsertId);
+    return error("Failed to retrieve mapping ID after creating federated group membership");
+}
+
+// Get all SSO-owned group memberships for a user.
+public isolated function getFederatedGroupUserMappings(string userId) returns types:FederatedGroupUserMapping[]|error {
+    log:printDebug(string `Fetching federated group memberships for user: ${userId}`);
+
+    types:FederatedGroupUserMapping[] mappings = [];
+    stream<types:FederatedGroupUserMapping, sql:Error?> mappingStream = dbClient->query(
+        `SELECT id, org_uuid, issuer, user_uuid, group_id, claim_name, claim_value, last_seen_at, created_at, updated_at
+         FROM federated_group_user_mapping
+         WHERE user_uuid = ${userId}
+         ORDER BY created_at DESC`
+    );
+
+    check from types:FederatedGroupUserMapping mapping in mappingStream
+        do {
+            mappings.push(mapping);
+        };
+
+    return mappings;
+}
+
+// Reconcile SSO-owned memberships for exactly one organization, issuer, and
+// user. Manual memberships and rows owned by other issuers are never changed.
+public isolated function reconcileFederatedGroupUserMappings(int orgId, string issuer, string userId,
+        types:FederatedGroupMembershipInput[] desiredMemberships) returns error? {
+    log:printDebug("Reconciling federated group memberships", orgId = orgId, issuer = issuer,
+            userId = userId, desiredCount = desiredMemberships.length());
+
+    transaction {
+        types:FederatedGroupUserMapping[] existingMappings = [];
+        stream<types:FederatedGroupUserMapping, sql:Error?> existingStream = dbClient->query(
+            `SELECT id, org_uuid, issuer, user_uuid, group_id, claim_name, claim_value,
+                    last_seen_at, created_at, updated_at
+             FROM federated_group_user_mapping
+             WHERE org_uuid = ${orgId} AND issuer = ${issuer} AND user_uuid = ${userId}`
+        );
+        check from types:FederatedGroupUserMapping mapping in existingStream
+            do {
+                existingMappings.push(mapping);
+            };
+
+        foreach types:FederatedGroupMembershipInput desired in desiredMemberships {
+            types:FederatedGroupUserMapping? existing = findFederatedMembership(existingMappings, desired);
+            if existing is types:FederatedGroupUserMapping {
+                _ = check dbClient->execute(
+                    `UPDATE federated_group_user_mapping
+                     SET last_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ${existing.id}`
+                );
+            } else {
+                _ = check dbClient->execute(
+                    `INSERT INTO federated_group_user_mapping
+                        (org_uuid, issuer, user_uuid, group_id, claim_name, claim_value)
+                     VALUES (${orgId}, ${issuer}, ${userId}, ${desired.groupId},
+                             ${desired.claimName}, ${desired.claimValue})`
+                );
+            }
+        }
+
+        foreach types:FederatedGroupUserMapping existing in existingMappings {
+            if findDesiredFederatedMembership(desiredMemberships, existing) is () {
+                _ = check dbClient->execute(
+                    `DELETE FROM federated_group_user_mapping WHERE id = ${existing.id}`
+                );
+            }
+        }
+
+        check commit;
+    } on fail error e {
+        log:printError("Failed to reconcile federated group memberships", 'error = e,
+                orgId = orgId, issuer = issuer, userId = userId);
+        return error("Failed to synchronize SSO group memberships", e);
+    }
+
+    log:printInfo("Reconciled federated group memberships", orgId = orgId, issuer = issuer,
+            userId = userId, membershipCount = desiredMemberships.length());
+}
+
+isolated function findFederatedMembership(types:FederatedGroupUserMapping[] existingMappings,
+        types:FederatedGroupMembershipInput desired) returns types:FederatedGroupUserMapping? {
+    foreach types:FederatedGroupUserMapping existing in existingMappings {
+        if existing.groupId == desired.groupId && existing.claimName == desired.claimName
+                && existing.claimValue == desired.claimValue {
+            return existing;
+        }
+    }
+    return ();
+}
+
+isolated function findDesiredFederatedMembership(types:FederatedGroupMembershipInput[] desiredMemberships,
+        types:FederatedGroupUserMapping existing) returns types:FederatedGroupMembershipInput? {
+    foreach types:FederatedGroupMembershipInput desired in desiredMemberships {
+        if desired.groupId == existing.groupId && desired.claimName == existing.claimName
+                && desired.claimValue == existing.claimValue {
+            return desired;
+        }
+    }
     return ();
 }
 
@@ -758,16 +982,36 @@ public isolated function removePermissionsFromRole(string roleId, string[] permi
 // 3.6 User Group & Role Resolution Functions
 // ============================================================================
 
-// Get all groups for a user
+// Get manually assigned groups for a user. SSO-owned federated memberships are not included.
+public isolated function getUserManualGroups(string userId) returns types:Group[]|error {
+    log:printDebug(string `Fetching manually assigned groups for user: ${userId}`);
+
+    types:Group[] groups = [];
+    stream<types:Group, sql:Error?> groupStream = dbClient->query(
+        `SELECT DISTINCT g.group_id, g.group_name, g.org_uuid, g.description, g.created_at, g.updated_at
+         FROM user_groups g
+         INNER JOIN group_user_mapping gum ON g.group_id = gum.group_id
+         WHERE gum.user_uuid = ${userId}`
+    );
+
+    check from types:Group group in groupStream
+        do {
+            groups.push(group);
+        };
+
+    return groups;
+}
+
+// Get all effective groups for a user, including manual and SSO-owned federated memberships.
 public isolated function getUserGroups(string userId) returns types:Group[]|error {
     log:printDebug(string `Fetching groups for user: ${userId}`);
 
     types:Group[] groups = [];
     stream<types:Group, sql:Error?> groupStream = dbClient->query(
-        `SELECT g.group_id, g.group_name, g.org_uuid, g.description, g.created_at, g.updated_at
+        `SELECT DISTINCT g.group_id, g.group_name, g.org_uuid, g.description, g.created_at, g.updated_at
          FROM user_groups g
-         INNER JOIN group_user_mapping gum ON g.group_id = gum.group_id
-         WHERE gum.user_uuid = ${userId}`
+         INNER JOIN v_effective_group_user_mapping egum ON g.group_id = egum.group_id
+         WHERE egum.user_uuid = ${userId}`
     );
 
     check from types:Group group in groupStream
@@ -863,9 +1107,9 @@ public isolated function getUserEffectivePermissions(string userId, types:Access
             SELECT 1
             FROM role_permission_mapping rpm
             INNER JOIN group_role_mapping grm ON grm.role_id = rpm.role_id
-            INNER JOIN group_user_mapping gum ON gum.group_id = grm.group_id
+            INNER JOIN v_effective_group_user_mapping egum ON egum.group_id = grm.group_id
             WHERE rpm.permission_id = p.permission_id
-              AND gum.user_uuid = ${userId}
+              AND egum.user_uuid = ${userId}
               AND grm.org_uuid = ${scope.orgUuid}
     `;
 
@@ -934,9 +1178,9 @@ public isolated function getAllUserPermissions(string userId) returns types:Perm
             SELECT 1
             FROM role_permission_mapping rpm
             INNER JOIN group_role_mapping grm ON grm.role_id = rpm.role_id
-            INNER JOIN group_user_mapping gum ON gum.group_id = grm.group_id
+            INNER JOIN v_effective_group_user_mapping egum ON egum.group_id = grm.group_id
             WHERE rpm.permission_id = p.permission_id
-              AND gum.user_uuid = ${userId}
+              AND egum.user_uuid = ${userId}
         )
         ORDER BY p.permission_domain, p.permission_name
     `;
@@ -1226,7 +1470,7 @@ public isolated function getGroupUsers(string groupId) returns string[]|error {
     string[] userIds = [];
     stream<record {|string user_uuid;|}, sql:Error?> userStream = dbClient->query(
         `SELECT user_uuid
-         FROM group_user_mapping
+         FROM v_effective_group_user_mapping
          WHERE group_id = ${groupId}
          ORDER BY user_uuid`
     );
@@ -1337,7 +1581,7 @@ public isolated function getGroupUserCount(string groupId) returns int|error {
 
     int count = check dbClient->queryRow(
         `SELECT COUNT(*) as count
-         FROM group_user_mapping
+         FROM v_effective_group_user_mapping
          WHERE group_id = ${groupId}`
     );
 

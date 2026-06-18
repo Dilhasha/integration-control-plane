@@ -83,6 +83,9 @@ ssoScopes = ["openid", "email", "profile"]
 | `ssoRedirectUri` | Callback URL (must match provider config) | `https://your-domain.com/sso/callback` |
 | `ssoUsernameClaim` | Claim to use as username: `email` or `preferred_username` | `email` |
 | `ssoScopes` | OIDC scopes to request (minimum: `openid`) | `["openid", "email", "profile"]` |
+| `disablePasswordLogin` | Disable local username/password login and require SSO | `false` |
+| `ssoAdminClaim` | Claim used to identify SSO super admins when password login is disabled | `groups` |
+| `ssoAdminValues` | Claim values that grant super admin access when password login is disabled | `["icp-platform-admins"]` |
 
 ---
 
@@ -302,7 +305,7 @@ A: Users should use one authentication method. If a user logs in via SSO and sep
 A: Users won't be able to login via SSO during the outage. Traditional password authentication (if enabled) will still work.
 
 **Q: How do I disable password login?**  
-A: Stop the default authentication backend service to enforce SSO-only login. Ensure you have admin access via SSO before disabling password authentication.
+A: Set `disablePasswordLogin = true` with `ssoEnabled = true`, `ssoAdminClaim`, and at least one `ssoAdminValues` entry. Ensure the configured SSO admin claim works before disabling password authentication.
 
 **Q: Can I use multiple identity providers?**  
 A: Currently, ICP supports one OIDC provider per deployment.

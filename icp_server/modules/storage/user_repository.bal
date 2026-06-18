@@ -153,10 +153,10 @@ public isolated function getAllUsersV2() returns json[]|error {
 
 isolated function getGroupsForUser(string userId) returns json[]|error {
     stream<record {|string group_id; string group_name; string description?;|}, sql:Error?> groupStream = dbClient->query(
-        `SELECT g.group_id, g.group_name, g.description
+        `SELECT DISTINCT g.group_id, g.group_name, g.description
          FROM user_groups g
-         JOIN group_user_mapping gum ON g.group_id = gum.group_id
-         WHERE gum.user_uuid = ${userId}
+         JOIN v_effective_group_user_mapping egum ON g.group_id = egum.group_id
+         WHERE egum.user_uuid = ${userId}
          ORDER BY g.group_name ASC`
     );
 
