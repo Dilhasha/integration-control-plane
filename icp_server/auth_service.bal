@@ -1207,6 +1207,306 @@ service /auth on httpListener {
     }
 
     // ============================================================================
+    // SSO Group Mapping Endpoints
+    // ============================================================================
+
+    // GET /auth/orgs/{orgHandle}/sso/group-mappings - List SSO group mappings
+    @http:ResourceConfig {
+        auth: [
+            {
+                jwtValidatorConfig: {
+                    issuer: frontendJwtIssuer,
+                    audience: frontendJwtAudience,
+                    signatureConfig: {
+                        secret: resolvedFrontendJwtHMACSecret
+                    }
+                }
+            }
+        ]
+    }
+    isolated resource function get orgs/[string orgHandle]/sso/'group\-mappings(http:Request req)
+            returns http:Ok|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
+        log:printInfo("Fetching SSO group mappings", orgHandle = orgHandle);
+
+        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
+        if userContext is error {
+            return utils:createUnauthorizedError("Invalid or missing authentication token");
+        }
+
+        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
+        if hasPermission is error {
+            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
+            return utils:createInternalServerError("Error checking permissions");
+        }
+        if !hasPermission {
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to list SSO group mappings"
+                }
+            };
+        }
+
+        types:SSOGroupMappingResponse[]|error mappings =
+            storage:getSSOGroupMappingsWithGroupNamesByOrgId(storage:DEFAULT_ORG_ID);
+        if mappings is error {
+            log:printError("Error fetching SSO group mappings", mappings, orgHandle = orgHandle);
+            return utils:createInternalServerError("Failed to fetch SSO group mappings");
+        }
+
+        return <http:Ok>{
+            body: mappings
+        };
+    }
+
+    // POST /auth/orgs/{orgHandle}/sso/group-mappings - Create an SSO group mapping
+    @http:ResourceConfig {
+        auth: [
+            {
+                jwtValidatorConfig: {
+                    issuer: frontendJwtIssuer,
+                    audience: frontendJwtAudience,
+                    signatureConfig: {
+                        secret: resolvedFrontendJwtHMACSecret
+                    }
+                }
+            }
+        ]
+    }
+    isolated resource function post orgs/[string orgHandle]/sso/'group\-mappings(
+            @http:Payload types:SSOGroupMappingInput mappingInput, http:Request req)
+            returns http:Created|http:BadRequest|http:Conflict|http:NotFound|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
+        log:printInfo("Creating SSO group mapping", orgHandle = orgHandle);
+
+        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
+        if userContext is error {
+            return utils:createUnauthorizedError("Invalid or missing authentication token");
+        }
+
+        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
+        if hasPermission is error {
+            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
+            return utils:createInternalServerError("Error checking permissions");
+        }
+        if !hasPermission {
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to create SSO group mappings"
+                }
+            };
+        }
+
+        string? validationError = validateSSOGroupMappingInput(mappingInput);
+        if validationError is string {
+            return utils:createBadRequestError(validationError);
+        }
+
+        types:SSOGroupMappingInput inputWithOrg = {
+            issuer: mappingInput.issuer.trim(),
+            claimName: mappingInput.claimName.trim(),
+            claimValue: mappingInput.claimValue.trim(),
+            groupId: mappingInput.groupId.trim(),
+            enabled: mappingInput.enabled ?: true,
+            orgUuid: storage:DEFAULT_ORG_ID
+        };
+        types:Group|error targetGroup = storage:getGroupById(inputWithOrg.groupId);
+        if targetGroup is error || targetGroup.orgUuid != storage:DEFAULT_ORG_ID {
+            return <http:NotFound>{
+                body: {
+                    message: "Target group not found"
+                }
+            };
+        }
+
+        string|error mappingId = storage:createSSOGroupMapping(inputWithOrg);
+        if mappingId is error {
+            log:printError("Error creating SSO group mapping", mappingId);
+            if mappingId.message().includes("already exists") {
+                return <http:Conflict>{
+                    body: {
+                        message: mappingId.message()
+                    }
+                };
+            }
+            return utils:createInternalServerError("Failed to create SSO group mapping");
+        }
+
+        types:SSOGroupMapping|error createdMapping = storage:getSSOGroupMappingById(mappingId);
+        if createdMapping is error {
+            log:printError("Error fetching created SSO group mapping", createdMapping, mappingId = mappingId);
+            return utils:createInternalServerError("Mapping created but failed to fetch details");
+        }
+
+        types:SSOGroupMappingResponse response = {
+            ...createdMapping,
+            groupName: targetGroup.groupName
+        };
+        return <http:Created>{
+            body: response
+        };
+    }
+
+    // PUT /auth/orgs/{orgHandle}/sso/group-mappings/{mappingId} - Update an SSO group mapping
+    @http:ResourceConfig {
+        auth: [
+            {
+                jwtValidatorConfig: {
+                    issuer: frontendJwtIssuer,
+                    audience: frontendJwtAudience,
+                    signatureConfig: {
+                        secret: resolvedFrontendJwtHMACSecret
+                    }
+                }
+            }
+        ]
+    }
+    isolated resource function put orgs/[string orgHandle]/sso/'group\-mappings/[string mappingId](
+            @http:Payload types:SSOGroupMappingInput mappingInput, http:Request req)
+            returns http:Ok|http:BadRequest|http:Conflict|http:NotFound|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
+        log:printInfo("Updating SSO group mapping", orgHandle = orgHandle, mappingId = mappingId);
+
+        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
+        if userContext is error {
+            return utils:createUnauthorizedError("Invalid or missing authentication token");
+        }
+
+        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
+        if hasPermission is error {
+            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
+            return utils:createInternalServerError("Error checking permissions");
+        }
+        if !hasPermission {
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to update SSO group mappings"
+                }
+            };
+        }
+
+        string? validationError = validateSSOGroupMappingInput(mappingInput);
+        if validationError is string {
+            return utils:createBadRequestError(validationError);
+        }
+
+        types:SSOGroupMappingInput inputWithOrg = {
+            issuer: mappingInput.issuer.trim(),
+            claimName: mappingInput.claimName.trim(),
+            claimValue: mappingInput.claimValue.trim(),
+            groupId: mappingInput.groupId.trim(),
+            enabled: mappingInput.enabled ?: true,
+            orgUuid: storage:DEFAULT_ORG_ID
+        };
+        types:Group|error targetGroup = storage:getGroupById(inputWithOrg.groupId);
+        if targetGroup is error || targetGroup.orgUuid != storage:DEFAULT_ORG_ID {
+            return <http:NotFound>{
+                body: {
+                    message: "Target group not found"
+                }
+            };
+        }
+
+        error? updateResult =
+            storage:updateSSOGroupMapping(mappingId, storage:DEFAULT_ORG_ID, inputWithOrg);
+        if updateResult is error {
+            log:printError("Error updating SSO group mapping", updateResult, mappingId = mappingId);
+            if updateResult.message().includes("not found") {
+                return <http:NotFound>{
+                    body: {
+                        message: "SSO group mapping not found"
+                    }
+                };
+            }
+            if updateResult.message().includes("already exists") {
+                return <http:Conflict>{
+                    body: {
+                        message: updateResult.message()
+                    }
+                };
+            }
+            return utils:createInternalServerError("Failed to update SSO group mapping");
+        }
+
+        types:SSOGroupMapping|error updatedMapping = storage:getSSOGroupMappingById(mappingId);
+        if updatedMapping is error {
+            log:printError("Error fetching updated SSO group mapping", updatedMapping, mappingId = mappingId);
+            return utils:createInternalServerError("Mapping updated but failed to fetch details");
+        }
+
+        types:SSOGroupMappingResponse response = {
+            ...updatedMapping,
+            groupName: targetGroup.groupName
+        };
+        return <http:Ok>{
+            body: response
+        };
+    }
+
+    // DELETE /auth/orgs/{orgHandle}/sso/group-mappings/{mappingId} - Delete an SSO group mapping
+    @http:ResourceConfig {
+        auth: [
+            {
+                jwtValidatorConfig: {
+                    issuer: frontendJwtIssuer,
+                    audience: frontendJwtAudience,
+                    signatureConfig: {
+                        secret: resolvedFrontendJwtHMACSecret
+                    }
+                }
+            }
+        ]
+    }
+    isolated resource function delete orgs/[string orgHandle]/sso/'group\-mappings/[string mappingId](
+            http:Request req)
+            returns http:Ok|http:NotFound|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
+        log:printInfo("Deleting SSO group mapping", orgHandle = orgHandle, mappingId = mappingId);
+
+        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
+        if userContext is error {
+            return utils:createUnauthorizedError("Invalid or missing authentication token");
+        }
+
+        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
+        if hasPermission is error {
+            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
+            return utils:createInternalServerError("Error checking permissions");
+        }
+        if !hasPermission {
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to delete SSO group mappings"
+                }
+            };
+        }
+
+        error? deleteResult = storage:deleteSSOGroupMapping(mappingId, storage:DEFAULT_ORG_ID);
+        if deleteResult is error {
+            log:printError("Error deleting SSO group mapping", deleteResult, mappingId = mappingId);
+            if deleteResult.message().includes("not found") {
+                return <http:NotFound>{
+                    body: {
+                        message: "SSO group mapping not found"
+                    }
+                };
+            }
+            return utils:createInternalServerError("Failed to delete SSO group mapping");
+        }
+
+        return <http:Ok>{
+            body: {
+                message: "SSO group mapping deleted successfully",
+                mappingId: mappingId
+            }
+        };
+    }
+
+    // ============================================================================
     // Group-User Mapping Endpoints (RBAC v2)
     // ============================================================================
 
@@ -3228,6 +3528,40 @@ isolated function extractUserContextFromRequest(http:Request req) returns types:
     }
 
     return userContext;
+}
+
+isolated function validateSSOGroupMappingInput(types:SSOGroupMappingInput input) returns string? {
+    string issuer = input.issuer.trim();
+    string claimName = input.claimName.trim();
+    string claimValue = input.claimValue.trim();
+    string groupId = input.groupId.trim();
+
+    if issuer == "" {
+        return "Issuer must not be empty";
+    }
+    if claimName == "" {
+        return "Claim name must not be empty";
+    }
+    if claimValue == "" {
+        return "Claim value must not be empty";
+    }
+    if groupId == "" {
+        return "Group ID must not be empty";
+    }
+    if issuer.length() > 255 {
+        return "Issuer must not exceed 255 characters";
+    }
+    if claimName.length() > 128 {
+        return "Claim name must not exceed 128 characters";
+    }
+    if claimValue.length() > 255 {
+        return "Claim value must not exceed 255 characters";
+    }
+    if groupId.length() > 36 {
+        return "Group ID must not exceed 36 characters";
+    }
+
+    return ();
 }
 
 isolated function grantSuperAdminFromSSOClaims(string userId, string username, types:OIDCIdTokenClaims claims,

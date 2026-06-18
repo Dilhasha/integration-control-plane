@@ -63,6 +63,7 @@ string superAdminToken = "";
 string testGroupId = "";
 string testRoleId = "";
 int testMappingId = 0;
+string testSSOGroupMappingId = "";
 
 // =============================================================================
 // Test 1: Login as Super Admin and Verify V2 JWT
@@ -246,7 +247,149 @@ function testUpdateGroup() returns error? {
 }
 
 // =============================================================================
-// Test 2.5: Group-User Mapping Endpoints
+// Test 2.5: SSO Group Mapping Endpoints
+// =============================================================================
+
+@test:Config {
+    groups: ["auth-v2", "sso-group-mappings"],
+    dependsOn: [testUpdateGroup, testSuperAdminLoginWithV2JWT]
+}
+function testCreateSSOGroupMapping() returns error? {
+    json mappingRequest = {
+        issuer: "  https://idp.example.com  ",
+        claimName: " groups ",
+        claimValue: " platform-admins ",
+        groupId: testGroupId
+    };
+
+    http:Response response = check authV2Client->post(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings`,
+        mappingRequest,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+
+    test:assertEquals(response.statusCode, 201, "Expected status code 201 for SSO mapping creation");
+    json responseBody = check response.getJsonPayload();
+    testSSOGroupMappingId = check responseBody.mappingId;
+    test:assertEquals(responseBody.issuer, "https://idp.example.com", "Issuer should be normalized");
+    test:assertEquals(responseBody.claimName, "groups", "Claim name should be normalized");
+    test:assertEquals(responseBody.claimValue, "platform-admins", "Claim value should be normalized");
+    test:assertEquals(responseBody.groupId, testGroupId, "Target group should match");
+    test:assertEquals(responseBody.groupName, "Updated Test Group V2", "Target group name should be returned");
+    test:assertEquals(responseBody.enabled, true, "Mappings should be enabled by default");
+
+    http:Response duplicateResponse = check authV2Client->post(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings`,
+        mappingRequest,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+    test:assertEquals(duplicateResponse.statusCode, 409, "Duplicate SSO mappings should be rejected");
+}
+
+@test:Config {
+    groups: ["auth-v2", "sso-group-mappings"],
+    dependsOn: [testCreateSSOGroupMapping]
+}
+function testListSSOGroupMappings() returns error? {
+    http:Response response = check authV2Client->get(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings`,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+
+    test:assertEquals(response.statusCode, 200, "Expected status code 200 for listing SSO mappings");
+    json[] responseBody = check response.getJsonPayload().ensureType();
+    boolean foundMapping = false;
+    foreach json mapping in responseBody {
+        if mapping.mappingId == testSSOGroupMappingId {
+            foundMapping = true;
+            test:assertEquals(mapping.groupName, "Updated Test Group V2",
+                "Mapping list should include the target group name");
+            test:assertEquals(mapping.enabled, true, "Mapping list should include enabled status");
+        }
+    }
+    test:assertTrue(foundMapping, "Created SSO mapping should be listed");
+}
+
+@test:Config {
+    groups: ["auth-v2", "sso-group-mappings"],
+    dependsOn: [testCreateSSOGroupMapping]
+}
+function testValidateSSOGroupMappingInput() returns error? {
+    json invalidRequest = {
+        issuer: " ",
+        claimName: "groups",
+        claimValue: "developers",
+        groupId: testGroupId
+    };
+    http:Response invalidResponse = check authV2Client->post(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings`,
+        invalidRequest,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+    test:assertEquals(invalidResponse.statusCode, 400, "Empty SSO mapping fields should be rejected");
+
+    json missingGroupRequest = {
+        issuer: "https://idp.example.com",
+        claimName: "groups",
+        claimValue: "developers",
+        groupId: "00000000-0000-0000-0000-000000000000"
+    };
+    http:Response missingGroupResponse = check authV2Client->post(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings`,
+        missingGroupRequest,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+    test:assertEquals(missingGroupResponse.statusCode, 404, "Unknown target groups should be rejected");
+}
+
+@test:Config {
+    groups: ["auth-v2", "sso-group-mappings"],
+    dependsOn: [testListSSOGroupMappings, testValidateSSOGroupMappingInput]
+}
+function testUpdateSSOGroupMapping() returns error? {
+    json updateRequest = {
+        issuer: "https://idp.example.com",
+        claimName: "realm_access.roles",
+        claimValue: "platform-operators",
+        groupId: testGroupId,
+        enabled: false
+    };
+
+    http:Response response = check authV2Client->put(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings/${testSSOGroupMappingId}`,
+        updateRequest,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+
+    test:assertEquals(response.statusCode, 200, "Expected status code 200 for SSO mapping update");
+    json responseBody = check response.getJsonPayload();
+    test:assertEquals(responseBody.mappingId, testSSOGroupMappingId, "Mapping ID should remain unchanged");
+    test:assertEquals(responseBody.claimName, "realm_access.roles", "Claim name should be updated");
+    test:assertEquals(responseBody.claimValue, "platform-operators", "Claim value should be updated");
+    test:assertEquals(responseBody.enabled, false, "Mapping should be disabled");
+    test:assertEquals(responseBody.groupName, "Updated Test Group V2", "Target group name should be returned");
+}
+
+@test:Config {
+    groups: ["auth-v2", "sso-group-mappings"],
+    dependsOn: [testUpdateSSOGroupMapping]
+}
+function testDeleteSSOGroupMapping() returns error? {
+    http:Response response = check authV2Client->delete(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings/${testSSOGroupMappingId}`,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+    test:assertEquals(response.statusCode, 200, "Expected status code 200 for SSO mapping deletion");
+
+    http:Response secondDeleteResponse = check authV2Client->delete(
+        string `/auth/orgs/${DEFAULT_ORG_HANDLE}/sso/group-mappings/${testSSOGroupMappingId}`,
+        headers = {"Authorization": string `Bearer ${superAdminToken}`}
+    );
+    test:assertEquals(secondDeleteResponse.statusCode, 404, "Deleted SSO mappings should not be found");
+}
+
+// =============================================================================
+// Test 2.6: Group-User Mapping Endpoints
 // =============================================================================
 
 @test:Config {
@@ -890,7 +1033,7 @@ function testDeleteSelf() returns error? {
 
 @test:Config {
     groups: ["auth-v2", "cleanup"],
-    dependsOn: [testUpdateGroup, testUpdateRole, testRemoveRoleFromGroup]
+    dependsOn: [testUpdateGroup, testUpdateRole, testRemoveRoleFromGroup, testDeleteSSOGroupMapping]
 }
 function testDeleteGroup() returns error? {
     // Send delete group request

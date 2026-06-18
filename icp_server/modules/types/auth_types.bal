@@ -152,6 +152,37 @@ public type SSOGroupMapping record {|
     string updatedAt?;
 |};
 
+// SSO group mapping details returned by management APIs.
+public type SSOGroupMappingResponse record {|
+    @sql:Column {name: "mapping_id"}
+    string mappingId;
+
+    @sql:Column {name: "org_uuid"}
+    int orgUuid;
+
+    string issuer;
+
+    @sql:Column {name: "claim_name"}
+    string claimName;
+
+    @sql:Column {name: "claim_value"}
+    string claimValue;
+
+    @sql:Column {name: "group_id"}
+    string groupId;
+
+    boolean enabled;
+
+    @sql:Column {name: "created_at"}
+    string createdAt?;
+
+    @sql:Column {name: "updated_at"}
+    string updatedAt?;
+
+    @sql:Column {name: "group_name"}
+    string groupName;
+|};
+
 // Input for creating IdP-to-ICP group mappings.
 public type SSOGroupMappingInput record {|
     int orgUuid?;

@@ -604,6 +604,29 @@ public isolated function getSSOGroupMappingsByOrgId(int orgId) returns types:SSO
     return mappings;
 }
 
+// List SSO group mappings with target group details for management APIs.
+public isolated function getSSOGroupMappingsWithGroupNamesByOrgId(int orgId)
+        returns types:SSOGroupMappingResponse[]|error {
+    log:printDebug(string `Fetching enriched SSO group mappings for orgId: ${orgId}`);
+
+    types:SSOGroupMappingResponse[] mappings = [];
+    stream<types:SSOGroupMappingResponse, sql:Error?> mappingStream = dbClient->query(
+        `SELECT sgm.mapping_id, sgm.org_uuid, sgm.issuer, sgm.claim_name, sgm.claim_value,
+                sgm.group_id, sgm.enabled, sgm.created_at, sgm.updated_at, ug.group_name
+         FROM sso_group_mappings sgm
+         INNER JOIN user_groups ug ON ug.group_id = sgm.group_id
+         WHERE sgm.org_uuid = ${orgId}
+         ORDER BY sgm.created_at DESC`
+    );
+
+    check from types:SSOGroupMappingResponse mapping in mappingStream
+        do {
+            mappings.push(mapping);
+        };
+
+    return mappings;
+}
+
 // List SSO group mappings for an organization and issuer.
 public isolated function getSSOGroupMappingsByIssuer(int orgId, string issuer) returns types:SSOGroupMapping[]|error {
     log:printDebug("Fetching SSO group mappings by issuer", orgId = orgId, issuer = issuer);
@@ -622,6 +645,61 @@ public isolated function getSSOGroupMappingsByIssuer(int orgId, string issuer) r
         };
 
     return mappings;
+}
+
+// Update an SSO group mapping within an organization.
+public isolated function updateSSOGroupMapping(string mappingId, int orgId,
+        types:SSOGroupMappingInput input) returns error? {
+    boolean enabled = input.enabled ?: true;
+
+    log:printDebug("Updating SSO group mapping", mappingId = mappingId, orgId = orgId);
+
+    sql:ExecutionResult|error result = dbClient->execute(
+        `UPDATE sso_group_mappings
+         SET issuer = ${input.issuer}, claim_name = ${input.claimName},
+             claim_value = ${input.claimValue}, group_id = ${input.groupId},
+             enabled = ${enabled}, updated_at = CURRENT_TIMESTAMP
+         WHERE mapping_id = ${mappingId} AND org_uuid = ${orgId}`
+    );
+
+    if result is sql:Error {
+        log:printError("Failed to update SSO group mapping", 'error = result, mappingId = mappingId);
+        match classifySqlError(result) {
+            DUPLICATE_KEY => { return error("This SSO group mapping already exists", result); }
+            FOREIGN_KEY_VIOLATION => { return error("The specified organization or group does not exist", result); }
+            VALUE_TOO_LONG => { return error("The provided value exceeds the maximum allowed length", result); }
+            _ => { return error("An unexpected error occurred. Please contact your administrator.", result); }
+        }
+    }
+    if result is error {
+        log:printError("Failed to update SSO group mapping", 'error = result, mappingId = mappingId);
+        return result;
+    }
+    if result.affectedRowCount == 0 {
+        return error("SSO group mapping not found");
+    }
+
+    log:printInfo("Successfully updated SSO group mapping", mappingId = mappingId);
+}
+
+// Delete an SSO group mapping within an organization.
+public isolated function deleteSSOGroupMapping(string mappingId, int orgId) returns error? {
+    log:printDebug("Deleting SSO group mapping", mappingId = mappingId, orgId = orgId);
+
+    sql:ExecutionResult|sql:Error result = dbClient->execute(
+        `DELETE FROM sso_group_mappings
+         WHERE mapping_id = ${mappingId} AND org_uuid = ${orgId}`
+    );
+
+    if result is sql:Error {
+        log:printError("Failed to delete SSO group mapping", 'error = result, mappingId = mappingId);
+        return error("An unexpected error occurred. Please contact your administrator.", result);
+    }
+    if result.affectedRowCount == 0 {
+        return error("SSO group mapping not found");
+    }
+
+    log:printInfo("Successfully deleted SSO group mapping", mappingId = mappingId);
 }
 
 // Add an SSO-owned group membership. Manual memberships remain in group_user_mapping.
