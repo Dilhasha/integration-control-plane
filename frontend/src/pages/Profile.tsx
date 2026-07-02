@@ -75,7 +75,7 @@ export default function Profile(): JSX.Element {
           {user?.groups.length ? (
             <Stack direction="row" flexWrap="wrap" gap={1}>
               {user.groups.map((g) => (
-                <Chip key={g.groupId} label={g.groupName} variant="outlined" />
+                <Chip key={g.groupId} label={g.membershipSource === 'federated' ? `${g.groupName} · SSO` : g.membershipSource === 'manual_and_federated' ? `${g.groupName} · Local + SSO` : g.groupName} variant="outlined" />
               ))}
             </Stack>
           ) : (

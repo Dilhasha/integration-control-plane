@@ -1647,21 +1647,27 @@ service /auth on httpListener {
             };
         }
 
-        // Get user IDs in the group
-        string[]|error userIds = storage:getGroupUsers(groupId);
-        if userIds is error {
-            log:printError("Error fetching group users", userIds, groupId = groupId);
+        // Get effective users and whether each membership is manual or SSO-owned.
+        types:EffectiveGroupUserMembership[]|error memberships =
+            storage:getGroupUsersWithMembershipSource(groupId);
+        if memberships is error {
+            log:printError("Error fetching group users", memberships, groupId = groupId);
             return utils:createInternalServerError("Failed to fetch group users");
         }
 
         // Fetch details for each user
-        types:User[] users = [];
-        foreach string userId in userIds {
-            types:User|error user = storage:getUserDetailsById(userId);
+        json[] users = [];
+        foreach types:EffectiveGroupUserMembership membership in memberships {
+            types:User|error user = storage:getUserDetailsById(membership.userUuid);
             if user is types:User {
-                users.push(user);
+                users.push({
+                    userId: user.userId,
+                    username: user.username,
+                    displayName: user.displayName,
+                    membershipSource: membership.membershipSource
+                });
             } else {
-                log:printWarn(string `Failed to fetch details for user ${userId}`, user);
+                log:printWarn(string `Failed to fetch details for user ${membership.userUuid}`, user);
             }
         }
 

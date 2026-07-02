@@ -283,25 +283,26 @@ export function GroupDetailView({ orgHandler, group, onBack, projectId, componen
                 <ListingTable.Row>
                   <ListingTable.Cell>User</ListingTable.Cell>
                   <ListingTable.Cell>Username</ListingTable.Cell>
+                  <ListingTable.Cell>Source</ListingTable.Cell>
                   {canManageGroups && <ListingTable.Cell align="right">Action</ListingTable.Cell>}
                 </ListingTable.Row>
               </ListingTable.Head>
               <ListingTable.Body>
                 {loadingUsers ? (
                   <ListingTable.Row>
-                    <ListingTable.Cell colSpan={canManageGroups ? 3 : 2} align="center">
+                    <ListingTable.Cell colSpan={canManageGroups ? 4 : 3} align="center">
                       <CircularProgress size={24} />
                     </ListingTable.Cell>
                   </ListingTable.Row>
                 ) : usersError ? (
                   <ListingTable.Row>
-                    <ListingTable.Cell colSpan={canManageGroups ? 3 : 2} align="center">
+                    <ListingTable.Cell colSpan={canManageGroups ? 4 : 3} align="center">
                       Failed to load users
                     </ListingTable.Cell>
                   </ListingTable.Row>
                 ) : filteredUsers.length === 0 ? (
                   <ListingTable.Row>
-                    <ListingTable.Cell colSpan={canManageGroups ? 3 : 2} align="center">
+                    <ListingTable.Cell colSpan={canManageGroups ? 4 : 3} align="center">
                       No records to display
                     </ListingTable.Cell>
                   </ListingTable.Row>
@@ -315,12 +316,17 @@ export function GroupDetailView({ orgHandler, group, onBack, projectId, componen
                         </Stack>
                       </ListingTable.Cell>
                       <ListingTable.Cell>{u.username}</ListingTable.Cell>
+                      <ListingTable.Cell>
+                        <Chip label={u.membershipSource === 'federated' ? 'SSO' : u.membershipSource === 'manual_and_federated' ? 'Local + SSO' : 'Local'} size="small" variant={u.membershipSource?.includes('federated') ? 'outlined' : 'filled'} />
+                      </ListingTable.Cell>
                       {canManageGroups && (
                         <ListingTable.Cell align="right">
-                          <Tooltip title="Remove">
-                            <IconButton size="small" color="error" aria-label={`Remove ${u.displayName} from group`} onClick={() => setRemovingUser(u)}>
-                              <Trash2 size={16} />
-                            </IconButton>
+                          <Tooltip title={u.membershipSource === 'federated' ? 'Managed by SSO' : 'Remove'}>
+                            <span>
+                              <IconButton size="small" color="error" disabled={u.membershipSource === 'federated'} aria-label={`Remove ${u.displayName} from group`} onClick={() => setRemovingUser(u)}>
+                                <Trash2 size={16} />
+                              </IconButton>
+                            </span>
                           </Tooltip>
                         </ListingTable.Cell>
                       )}

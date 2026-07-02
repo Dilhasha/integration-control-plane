@@ -29,6 +29,7 @@ interface RuntimeConfig {
   VITE_WORKFLOW_URL?: string;
   VITE_WS_URL?: string;
   VITE_SSO_ENABLED?: boolean;
+  VITE_SSO_ISSUER?: string;
   VITE_DISABLE_PASSWORD_LOGIN?: boolean;
   VITE_ICP_VERSION?: string;
 }
@@ -40,6 +41,7 @@ export interface ApiConfig {
   workflowUrl: string;
   wsUrl: string;
   ssoEnabled: boolean;
+  ssoIssuer: string;
   disablePasswordLogin: boolean;
   version: string;
 }
@@ -59,6 +61,7 @@ const DEFAULT_CONFIG: ApiConfig = {
   workflowUrl: 'https://localhost:9446/icp/workflow',
   wsUrl: 'wss://localhost:9446/runtime-status',
   ssoEnabled: false,
+  ssoIssuer: '',
   disablePasswordLogin: false,
   version: '',
 };
@@ -83,6 +86,7 @@ export async function loadConfig(): Promise<void> {
       workflowUrl: config.VITE_WORKFLOW_URL || DEFAULT_CONFIG.workflowUrl,
       wsUrl: config.VITE_WS_URL || DEFAULT_CONFIG.wsUrl,
       ssoEnabled: config.VITE_SSO_ENABLED ?? DEFAULT_CONFIG.ssoEnabled,
+      ssoIssuer: config.VITE_SSO_ISSUER || DEFAULT_CONFIG.ssoIssuer,
       disablePasswordLogin: config.VITE_DISABLE_PASSWORD_LOGIN ?? DEFAULT_CONFIG.disablePasswordLogin,
       version: config.VITE_ICP_VERSION || DEFAULT_CONFIG.version,
     };

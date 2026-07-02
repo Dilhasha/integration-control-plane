@@ -127,6 +127,31 @@ function testSSOGroupMappingStorage() returns error? {
     boolean manualMember = check storage:isUserInGroup(userId, groupId);
     test:assertFalse(manualMember, "Federated memberships should not create manual group_user_mapping rows");
 
+    types:EffectiveGroupUserMembership[] effectiveMemberships =
+        check storage:getGroupUsersWithMembershipSource(groupId);
+    test:assertEquals(effectiveMemberships.length(), 1, "Effective membership should be listed once");
+    test:assertEquals(effectiveMemberships[0].userUuid, userId, "Effective membership should identify the user");
+    test:assertEquals(effectiveMemberships[0].membershipSource, "federated",
+        "SSO-owned membership should be marked as federated");
+
+    json userWithGroups = check storage:getUserWithGroupsById(userId);
+    json[] userGroups = check userWithGroups.groups.ensureType();
+    boolean foundFederatedGroup = false;
+    foreach json userGroup in userGroups {
+        if userGroup.groupId == groupId {
+            foundFederatedGroup = true;
+            test:assertEquals(userGroup.membershipSource, "federated",
+                "User group responses should expose the federated source");
+        }
+    }
+    test:assertTrue(foundFederatedGroup, "User details should include the effective SSO-mapped group");
+
+    check storage:addUserToGroup(userId, groupId);
+    effectiveMemberships = check storage:getGroupUsersWithMembershipSource(groupId);
+    test:assertEquals(effectiveMemberships[0].membershipSource, "manual_and_federated",
+        "Memberships owned locally and by SSO should expose both sources");
+    check storage:removeUserFromGroup(userId, groupId);
+
     types:Group[] effectiveGroups = check storage:getUserGroups(userId);
     test:assertTrue(hasGroup(effectiveGroups, groupId), "Federated memberships should be effective user groups");
 

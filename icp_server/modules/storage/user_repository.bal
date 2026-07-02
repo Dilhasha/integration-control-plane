@@ -152,16 +152,35 @@ public isolated function getAllUsersV2() returns json[]|error {
 }
 
 isolated function getGroupsForUser(string userId) returns json[]|error {
-    stream<record {|string group_id; string group_name; string description?;|}, sql:Error?> groupStream = dbClient->query(
-        `SELECT DISTINCT g.group_id, g.group_name, g.description
+    stream<record {|string group_id; string group_name; string description?; string membership_source;|}, sql:Error?> groupStream = dbClient->query(
+        `SELECT g.group_id, g.group_name, g.description,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM group_user_mapping gum
+                        WHERE gum.user_uuid = ${userId} AND gum.group_id = g.group_id
+                    ) AND EXISTS (
+                        SELECT 1 FROM federated_group_user_mapping fgm
+                        WHERE fgm.user_uuid = ${userId} AND fgm.group_id = g.group_id
+                    ) THEN 'manual_and_federated'
+                    WHEN EXISTS (
+                        SELECT 1 FROM federated_group_user_mapping fgm
+                        WHERE fgm.user_uuid = ${userId} AND fgm.group_id = g.group_id
+                    ) THEN 'federated'
+                    ELSE 'manual'
+                END AS membership_source
          FROM user_groups g
-         JOIN v_effective_group_user_mapping egum ON g.group_id = egum.group_id
-         WHERE egum.user_uuid = ${userId}
+         WHERE EXISTS (
+             SELECT 1 FROM group_user_mapping gum
+             WHERE gum.user_uuid = ${userId} AND gum.group_id = g.group_id
+         ) OR EXISTS (
+             SELECT 1 FROM federated_group_user_mapping fgm
+             WHERE fgm.user_uuid = ${userId} AND fgm.group_id = g.group_id
+         )
          ORDER BY g.group_name ASC`
     );
 
     // Collect groups as records
-    record {|string group_id; string group_name; string description?;|}[] groupRecords = check from var g in groupStream
+    record {|string group_id; string group_name; string description?; string membership_source;|}[] groupRecords = check from var g in groupStream
         select g;
 
     // Transform to JSON
@@ -169,7 +188,8 @@ isolated function getGroupsForUser(string userId) returns json[]|error {
         select {
             groupId: g.group_id,
             groupName: g.group_name,
-            groupDescription: g.description
+            groupDescription: g.description,
+            membershipSource: g.membership_source
         };
 }
 

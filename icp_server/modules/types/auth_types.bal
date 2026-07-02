@@ -124,6 +124,14 @@ public type GroupUserMapping record {
     string createdAt?;
 };
 
+public type EffectiveGroupUserMembership record {|
+    @sql:Column {name: "user_uuid"}
+    string userUuid;
+
+    @sql:Column {name: "membership_source"}
+    string membershipSource;
+|};
+
 // SSO group mapping - links IdP claim values to existing ICP groups.
 public type SSOGroupMapping record {|
     @sql:Column {name: "mapping_id"}

@@ -28,8 +28,9 @@ import { Loading } from './access-control/shared';
 import { UsersTab } from './access-control/UsersTab';
 import { RolesTab } from './access-control/RolesTab';
 import { GroupsTab } from './access-control/GroupsTab';
+import { SSOMappingsTab } from './access-control/SSOMappingsTab';
 
-const ORG_TABS = ['users', 'roles', 'groups'] as const;
+const ORG_TABS = ['users', 'roles', 'groups', 'sso-mappings'] as const;
 const PROJECT_TABS = ['roles', 'groups'] as const;
 
 export default function AccessControl(): JSX.Element {
@@ -39,6 +40,7 @@ export default function AccessControl(): JSX.Element {
 
   const accessControlPerms: string[] = [...ALL_USER_MGT_PERMISSIONS];
   const canSeeAccessControl = hasAnyPermission(accessControlPerms);
+  const orgTabs: readonly string[] = window.API_CONFIG.ssoEnabled ? ORG_TABS : ORG_TABS.slice(0, 3);
 
   useEffect(() => {
     if (!isOrgPermissionsLoaded) return;
@@ -47,7 +49,7 @@ export default function AccessControl(): JSX.Element {
     }
   }, [isOrgPermissionsLoaded, canSeeAccessControl, navigate, orgHandler]);
 
-  const tabIndex = ORG_TABS.indexOf(tab as string as (typeof ORG_TABS)[number]);
+  const tabIndex = orgTabs.indexOf(tab);
   const safeIndex = tabIndex < 0 ? 0 : tabIndex;
   return (
     <PageContent>
@@ -55,15 +57,30 @@ export default function AccessControl(): JSX.Element {
         <PageTitle.Header>Access Control</PageTitle.Header>
       </PageTitle>
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={safeIndex} onChange={(_, v) => navigate(`/organizations/${orgHandler}/settings/access-control/${ORG_TABS[v] ?? 'users'}`)}>
+        <Tabs variant="scrollable" scrollButtons="auto" value={safeIndex} onChange={(_, v) => navigate(`/organizations/${orgHandler}/settings/access-control/${orgTabs[v] ?? 'users'}`)}>
           <Tab label="Users" />
           <Tab label="Roles" />
           <Tab label="Groups" />
+          {window.API_CONFIG.ssoEnabled && (
+            <Tab
+              label={
+                <>
+                  <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>
+                    SSO
+                  </Box>
+                  <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                    SSO Mappings
+                  </Box>
+                </>
+              }
+            />
+          )}
         </Tabs>
       </Box>
       {safeIndex === 0 && <UsersTab orgHandler={orgHandler} />}
       {safeIndex === 1 && <RolesTab orgHandler={orgHandler} />}
       {safeIndex === 2 && <GroupsTab orgHandler={orgHandler} />}
+      {safeIndex === 3 && window.API_CONFIG.ssoEnabled && <SSOMappingsTab orgHandler={orgHandler} />}
     </PageContent>
   );
 }
@@ -75,6 +92,7 @@ export function OrgAccessControl({ org }: { org: string }): JSX.Element {
 
   const accessControlPerms: string[] = [...ALL_USER_MGT_PERMISSIONS];
   const canSeeAccessControl = hasAnyPermission(accessControlPerms);
+  const orgTabs: readonly string[] = window.API_CONFIG.ssoEnabled ? ORG_TABS : ORG_TABS.slice(0, 3);
 
   useEffect(() => {
     if (!isOrgPermissionsLoaded) return;
@@ -83,7 +101,7 @@ export function OrgAccessControl({ org }: { org: string }): JSX.Element {
     }
   }, [isOrgPermissionsLoaded, canSeeAccessControl, navigate, org]);
 
-  const tabIndex = ORG_TABS.indexOf(tab as string as (typeof ORG_TABS)[number]);
+  const tabIndex = orgTabs.indexOf(tab);
   const safeIndex = tabIndex < 0 ? 0 : tabIndex;
   return (
     <PageContent>
@@ -91,15 +109,30 @@ export function OrgAccessControl({ org }: { org: string }): JSX.Element {
         <PageTitle.Header>Access Control</PageTitle.Header>
       </PageTitle>
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={safeIndex} onChange={(_, v) => navigate(`/organizations/${org}/settings/access-control/${ORG_TABS[v] ?? 'users'}`)}>
+        <Tabs variant="scrollable" scrollButtons="auto" value={safeIndex} onChange={(_, v) => navigate(`/organizations/${org}/settings/access-control/${orgTabs[v] ?? 'users'}`)}>
           <Tab label="Users" />
           <Tab label="Roles" />
           <Tab label="Groups" />
+          {window.API_CONFIG.ssoEnabled && (
+            <Tab
+              label={
+                <>
+                  <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>
+                    SSO
+                  </Box>
+                  <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                    SSO Mappings
+                  </Box>
+                </>
+              }
+            />
+          )}
         </Tabs>
       </Box>
       {safeIndex === 0 && <UsersTab orgHandler={org} />}
       {safeIndex === 1 && <RolesTab orgHandler={org} />}
       {safeIndex === 2 && <GroupsTab orgHandler={org} />}
+      {safeIndex === 3 && window.API_CONFIG.ssoEnabled && <SSOMappingsTab orgHandler={org} />}
     </PageContent>
   );
 }

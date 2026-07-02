@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { authGet, authPost, authPut, authDelete } from './auth';
-import type { User, Role, RoleDetail, Group, GroupRoleMapping, GroupUser, PermissionsResponse, RoleGroupMapping } from './auth';
+import type { User, Role, RoleDetail, Group, GroupRoleMapping, GroupUser, PermissionsResponse, RoleGroupMapping, SSOGroupMapping, SSOGroupMappingInput } from './auth';
 
 export function useAuthCapabilities() {
   return useQuery({
@@ -203,6 +203,37 @@ export function useDeleteGroup(orgHandler: string) {
   return useMutation({
     mutationFn: (groupId: string) => authDelete(`/orgs/${orgHandler}/groups/${groupId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['groups', orgHandler] }),
+  });
+}
+
+export function useSSOGroupMappings(orgHandler: string) {
+  return useQuery({
+    queryKey: ['ssoGroupMappings', orgHandler],
+    queryFn: () => authGet<SSOGroupMapping[]>(`/orgs/${orgHandler}/sso/group-mappings`),
+  });
+}
+
+export function useCreateSSOGroupMapping(orgHandler: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SSOGroupMappingInput) => authPost<SSOGroupMapping>(`/orgs/${orgHandler}/sso/group-mappings`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ssoGroupMappings', orgHandler] }),
+  });
+}
+
+export function useUpdateSSOGroupMapping(orgHandler: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ mappingId, ...input }: SSOGroupMappingInput & { mappingId: string }) => authPut<SSOGroupMapping>(`/orgs/${orgHandler}/sso/group-mappings/${mappingId}`, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ssoGroupMappings', orgHandler] }),
+  });
+}
+
+export function useDeleteSSOGroupMapping(orgHandler: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (mappingId: string) => authDelete(`/orgs/${orgHandler}/sso/group-mappings/${mappingId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ssoGroupMappings', orgHandler] }),
   });
 }
 

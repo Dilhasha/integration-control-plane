@@ -1562,6 +1562,42 @@ public isolated function getGroupUsers(string groupId) returns string[]|error {
     return userIds;
 }
 
+// Get all effective users in a group together with the ownership of each membership.
+public isolated function getGroupUsersWithMembershipSource(string groupId)
+        returns types:EffectiveGroupUserMembership[]|error {
+    log:printDebug(string `Fetching users and membership sources for group: ${groupId}`);
+
+    stream<types:EffectiveGroupUserMembership, sql:Error?> userStream = dbClient->query(
+        `SELECT u.user_id AS user_uuid,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM group_user_mapping gum
+                        WHERE gum.user_uuid = u.user_id AND gum.group_id = ${groupId}
+                    ) AND EXISTS (
+                        SELECT 1 FROM federated_group_user_mapping fgm
+                        WHERE fgm.user_uuid = u.user_id AND fgm.group_id = ${groupId}
+                    ) THEN 'manual_and_federated'
+                    WHEN EXISTS (
+                        SELECT 1 FROM federated_group_user_mapping fgm
+                        WHERE fgm.user_uuid = u.user_id AND fgm.group_id = ${groupId}
+                    ) THEN 'federated'
+                    ELSE 'manual'
+                END AS membership_source
+         FROM users u
+         WHERE EXISTS (
+             SELECT 1 FROM group_user_mapping gum
+             WHERE gum.user_uuid = u.user_id AND gum.group_id = ${groupId}
+         ) OR EXISTS (
+             SELECT 1 FROM federated_group_user_mapping fgm
+             WHERE fgm.user_uuid = u.user_id AND fgm.group_id = ${groupId}
+         )
+         ORDER BY u.user_id`
+    );
+
+    return check from types:EffectiveGroupUserMembership membership in userStream
+        select membership;
+}
+
 // Get all groups that have a specific role (in any scope)
 public isolated function getRoleGroups(string roleId) returns types:Group[]|error {
     log:printDebug(string `Fetching groups with role: ${roleId}`);
