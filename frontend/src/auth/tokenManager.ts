@@ -6,8 +6,14 @@ const TOKEN_EXPIRES_AT_KEY = 'icp_token_expires_at';
 const REFRESH_TOKEN_EXPIRES_AT_KEY = 'icp_refresh_token_expires_at';
 const REDIRECT_URL_KEY = 'icp_redirect_url';
 const OIDC_STATE_KEY = 'icp_oidc_state';
+const NOT_AUTHORIZED_KEY = 'icp_not_authorized';
 
 const EXPIRY_BUFFER_MS = 30_000;
+
+export interface NotAuthorizedDetails {
+  message: string;
+  username?: string;
+}
 
 interface TokenData {
   token: string;
@@ -18,9 +24,39 @@ interface TokenData {
 
 let refreshPromise: Promise<void> | null = null;
 let onAuthFailure: (() => void) | null = null;
+let onAuthorizationFailure: (() => void) | null = null;
 
 export function setOnAuthFailure(callback: () => void): void {
   onAuthFailure = callback;
+}
+
+/**
+ * Called instead of onAuthFailure when the server says the session is
+ * authenticated but unauthorized. Kept separate because that outcome is
+ * terminal: routing it through the normal failure path would send the user back
+ * to login, where signing in again just repeats the refusal.
+ */
+export function setOnAuthorizationFailure(callback: () => void): void {
+  onAuthorizationFailure = callback;
+}
+
+export function saveNotAuthorized(details: NotAuthorizedDetails): void {
+  sessionStorage.setItem(NOT_AUTHORIZED_KEY, JSON.stringify(details));
+}
+
+export function getNotAuthorized(): NotAuthorizedDetails | null {
+  const stored = sessionStorage.getItem(NOT_AUTHORIZED_KEY);
+  if (!stored) return null;
+  try {
+    return JSON.parse(stored);
+  } catch {
+    sessionStorage.removeItem(NOT_AUTHORIZED_KEY);
+    return null;
+  }
+}
+
+export function clearNotAuthorized(): void {
+  sessionStorage.removeItem(NOT_AUTHORIZED_KEY);
 }
 
 export function saveTokens(data: TokenData): void {
@@ -58,6 +94,16 @@ export function isRefreshTokenExpired(): boolean {
   return Date.now() >= Number(expiresAt) - EXPIRY_BUFFER_MS;
 }
 
+async function readNotAuthorizedBody(res: Response): Promise<NotAuthorizedDetails> {
+  const body = await res.text();
+  try {
+    const parsed = JSON.parse(body);
+    return { message: parsed.message || body, username: parsed.username };
+  } catch {
+    return { message: body || 'Your account is not authorized to access this instance.' };
+  }
+}
+
 export async function refreshAccessToken(): Promise<void> {
   if (refreshPromise) {
     await refreshPromise;
@@ -80,6 +126,14 @@ export async function refreshAccessToken(): Promise<void> {
 
     if (!res.ok) {
       clearTokens();
+      // 403 means the user's ICP authorization was removed. Retrying or bouncing
+      // through the IdP cannot fix it, so this is a terminal state.
+      if (res.status === 403) {
+        const details = await readNotAuthorizedBody(res);
+        saveNotAuthorized(details);
+        (onAuthorizationFailure ?? onAuthFailure)?.();
+        return;
+      }
       onAuthFailure?.();
       return;
     }

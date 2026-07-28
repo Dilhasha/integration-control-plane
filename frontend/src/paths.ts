@@ -11,6 +11,10 @@ export function oidcCallbackUrl(): string {
   return '/sso/callback';
 }
 
+export function notAuthorizedUrl(): string {
+  return '/sso/not-authorized';
+}
+
 export function profileUrl(): string {
   return '/profile';
 }

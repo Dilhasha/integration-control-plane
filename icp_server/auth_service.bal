@@ -284,7 +284,7 @@ service /auth on httpListener {
     }
 
     // OIDC Login endpoint - exchanges authorization code for ICP token
-    isolated resource function post login/oidc(types:OIDCCallbackRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:BadRequest|http:InternalServerError {
+    isolated resource function post login/oidc(types:OIDCCallbackRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:Forbidden|http:BadRequest|http:InternalServerError {
         log:printInfo("OIDC login attempt - exchanging authorization code");
 
         // Get SSO configuration
@@ -372,6 +372,34 @@ service /auth on httpListener {
             return utils:createInternalServerError("Error synchronizing SSO group access");
         }
 
+        // Resolved after the super admin grant and the federated sync so the gate below
+        // sees this login's membership, and so the bootstrapped super admin can never be
+        // locked out by the gate that their own grant satisfies.
+        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
+        if userPermissions is error {
+            log:printError("Error getting user permissions for OIDC user", userPermissions, userId = userDetails.userId);
+            return utils:createInternalServerError("Error getting user permissions");
+        }
+
+        // The user record is kept even when the login is refused: JIT provisioning is
+        // independent of authorization, and an admin needs the user to appear under
+        // Access Control → Users to map their IdP groups.
+        if !isLoginAuthorized(isLoginAuthorizationRequired(), userPermissions) {
+            log:printWarn("OIDC login refused — user has no ICP authorization",
+                    username = userDetails.username,
+                    userId = userDetails.userId);
+            storage:logAuditEvent(storage:AUDIT_OIDC_LOGIN_FAILURE, userId = userDetails.userId,
+                    resourceType = storage:AUDIT_RESOURCE_SESSION,
+                    details = string `OIDC login refused — no ICP authorization mapped for user '${userDetails.username}'`,
+                    clientIp = extractClientIp(req));
+            return <http:Forbidden>{
+                body: {
+                    message: LOGIN_NOT_AUTHORIZED_MESSAGE,
+                    username: userDetails.username
+                }
+            };
+        }
+
         // Generate JWT token using V2 utility function with permissions
         string|error jwtToken = auth:generateJWTTokenV2(
                 userDetails.userId,
@@ -386,13 +414,6 @@ service /auth on httpListener {
         if jwtToken is error {
             log:printError("Error generating JWT token for OIDC user", jwtToken);
             return utils:createInternalServerError("Error generating JWT token");
-        }
-
-        // Get user permissions for response
-        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
-        if userPermissions is error {
-            log:printError("Error getting user permissions for OIDC user", userPermissions, userId = userDetails.userId);
-            return utils:createInternalServerError("Error getting user permissions");
         }
 
         // Generate refresh token
@@ -606,7 +627,7 @@ service /auth on httpListener {
 
     // Token refresh endpoint - uses refresh token to generate new access token
     // This endpoint does NOT require JWT authentication - uses refresh token instead
-    isolated resource function post 'refresh\-token(types:RefreshTokenRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:BadRequest|http:InternalServerError {
+    isolated resource function post 'refresh\-token(types:RefreshTokenRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:Forbidden|http:BadRequest|http:InternalServerError {
         log:printInfo("Token refresh requested using refresh token");
 
         // Validate request
@@ -625,6 +646,39 @@ service /auth on httpListener {
             return utils:createUnauthorizedError("Invalid or expired refresh token");
         }
 
+        // Resolved before the token is minted — without this gate a user authorized
+        // yesterday keeps refreshing indefinitely after their access is revoked.
+        // Note this reads effective permissions, so ICP-side revocation (roles removed
+        // from the group, group deleted) bites immediately, while deleting an SSO group
+        // mapping only takes effect once the user's next login runs the membership sync.
+        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
+        if userPermissions is error {
+            log:printError("Error getting user permissions for refresh token", userPermissions, userId = userDetails.userId);
+            return utils:createInternalServerError("Error getting user permissions");
+        }
+
+        if !isLoginAuthorized(isLoginAuthorizationRequired(), userPermissions) {
+            log:printWarn("Token refresh refused — user has no ICP authorization",
+                    username = userDetails.username,
+                    userId = userDetails.userId);
+            // Revoke the presented token so the client stops retrying with it.
+            error? revokeResult = storage:revokeRefreshToken(tokenHash);
+            if revokeResult is error {
+                log:printError("Error revoking refresh token for unauthorized user", revokeResult,
+                        userId = userDetails.userId);
+            }
+            storage:logAuditEvent(storage:AUDIT_OIDC_LOGIN_FAILURE, userId = userDetails.userId,
+                    resourceType = storage:AUDIT_RESOURCE_SESSION,
+                    details = string `Token refresh refused — no ICP authorization mapped for user '${userDetails.username}'`,
+                    clientIp = extractClientIp(req));
+            return <http:Forbidden>{
+                body: {
+                    message: LOGIN_NOT_AUTHORIZED_MESSAGE,
+                    username: userDetails.username
+                }
+            };
+        }
+
         // Generate new JWT access token using V2 with permissions
         string|error jwtToken = auth:generateJWTTokenV2(
                 userDetails.userId,
@@ -639,13 +693,6 @@ service /auth on httpListener {
         if jwtToken is error {
             log:printError("Error generating JWT token from refresh token", jwtToken);
             return utils:createInternalServerError("Error generating JWT token");
-        }
-
-        // Get user permissions for response
-        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
-        if userPermissions is error {
-            log:printError("Error getting user permissions for refresh token", userPermissions, userId = userDetails.userId);
-            return utils:createInternalServerError("Error getting user permissions");
         }
 
         // If rotation is disabled, return response with same refresh token
@@ -3667,6 +3714,25 @@ isolated function syncFederatedGroupsFromSSOClaims(string userId, string usernam
 
     log:printDebug("Synchronized SSO group memberships", username = username,
             issuer = claims.iss, membershipCount = desiredMemberships.length());
+}
+
+// Shown to an authenticated user who resolved to no ICP authorization. Kept free
+// of configuration detail — it must not reveal which claim or values gate access.
+const string LOGIN_NOT_AUTHORIZED_MESSAGE = "Your account is not authorized to access this instance. " +
+    "Contact your administrator to have your identity provider groups mapped.";
+
+// Only federated access control makes the IdP the sole source of group membership,
+// so it is the only mode where "no mapping" means "no access". SSO-only mode
+// deliberately admits zero-permission users so an admin can assign groups by hand.
+isolated function isLoginAuthorizationRequired() returns boolean {
+    return federatedAccessControlEnabled;
+}
+
+// The gate reads the effective permission set rather than group membership, so a
+// user in a group carrying no group_role_mapping rows is refused just like a user
+// in no group at all — neither can do anything with a token.
+isolated function isLoginAuthorized(boolean authorizationRequired, string[] permissions) returns boolean {
+    return !authorizationRequired || permissions.length() > 0;
 }
 
 isolated function hasMatchingSSOAdminValue(string[] claimValues, string[] configuredAdminValues) returns boolean {

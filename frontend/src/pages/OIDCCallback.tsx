@@ -23,11 +23,18 @@ import { Alert, Box, CircularProgress, Typography } from '@wso2/oxygen-ui';
 import { useAuth } from '../auth/AuthContext';
 import { validateAndClearOIDCState, getAndClearRedirectUrl } from '../auth/tokenManager';
 import { loginUrl, orgUrl } from '../paths';
+import NotAuthorized from './NotAuthorized';
+
+interface NotAuthorizedState {
+  message: string;
+  username?: string;
+}
 
 export default function OIDCCallback(): JSX.Element {
   const [searchParams] = useSearchParams();
   const { handleOIDCCallback } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const [notAuthorized, setNotAuthorized] = useState<NotAuthorizedState | null>(null);
   const handledRef = useRef(false);
 
   useEffect(() => {
@@ -67,12 +74,23 @@ export default function OIDCCallback(): JSX.Element {
         const isLoginPage = redirectUrl && new URL(redirectUrl).pathname === loginUrl();
         window.location.href = redirectUrl && !isLoginPage ? redirectUrl : orgUrl('default');
       } catch (err) {
+        // 403 is authentication succeeding and authorization failing — a distinct
+        // terminal state, not the generic "something went wrong" path.
+        const status = (err as { status?: number })?.status;
+        if (status === 403 && err instanceof Error) {
+          setNotAuthorized({ message: err.message, username: (err as { username?: string }).username });
+          return;
+        }
         setError(err instanceof Error ? err.message : 'Failed to complete authentication');
       }
     };
 
     processCallback();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (notAuthorized) {
+    return <NotAuthorized message={notAuthorized.message} username={notAuthorized.username} />;
+  }
 
   if (error) {
     return (

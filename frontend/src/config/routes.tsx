@@ -1,5 +1,5 @@
 import { type RouteProps, Navigate } from 'react-router';
-import { cookiePolicyUrl, loginUrl, orgRoleDetailUrl, privacyPolicyUrl, projectRoleDetailUrl, componentRoleDetailUrl, projectGroupDetailUrl, componentGroupDetailUrl, loggersSegment } from '../paths';
+import { cookiePolicyUrl, loginUrl, notAuthorizedUrl, orgRoleDetailUrl, privacyPolicyUrl, projectRoleDetailUrl, componentRoleDetailUrl, projectGroupDetailUrl, componentGroupDetailUrl, loggersSegment } from '../paths';
 import CreateUser from '../pages/CreateUser';
 import EditUser from '../pages/EditUser';
 import CreateRole from '../pages/CreateRole';
@@ -13,6 +13,7 @@ import Login from '../pages/Login';
 import CookiePolicy from '../pages/CookiePolicy';
 import PrivacyPolicy from '../pages/PrivacyPolicy';
 import OIDCCallback from '../pages/OIDCCallback';
+import NotAuthorized from '../pages/NotAuthorized';
 import AppLayout from '../layouts/AppLayout';
 import ProtectedRoute from '../auth/ProtectedRoute';
 import Projects from '../pages/Projects';
@@ -72,6 +73,7 @@ const routes: AppRoute[] = [
     ],
   },
   { path: '/sso/callback', element: <OIDCCallback /> },
+  { path: notAuthorizedUrl(), element: <NotAuthorized /> },
   {
     element: <ProtectedRoute />,
     children: [

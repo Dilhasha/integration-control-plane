@@ -91,8 +91,7 @@ export async function loadConfig(): Promise<void> {
       ssoEnabled: config.VITE_SSO_ENABLED ?? DEFAULT_CONFIG.ssoEnabled,
       ssoIssuer: config.VITE_SSO_ISSUER || DEFAULT_CONFIG.ssoIssuer,
       passwordLoginDisabled: config.VITE_PASSWORD_LOGIN_DISABLED ?? DEFAULT_CONFIG.passwordLoginDisabled,
-      federatedAccessControlEnabled:
-        config.VITE_FEDERATED_ACCESS_CONTROL_ENABLED ?? DEFAULT_CONFIG.federatedAccessControlEnabled,
+      federatedAccessControlEnabled: config.VITE_FEDERATED_ACCESS_CONTROL_ENABLED ?? DEFAULT_CONFIG.federatedAccessControlEnabled,
       version: config.VITE_ICP_VERSION || DEFAULT_CONFIG.version,
     };
 

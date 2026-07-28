@@ -16,27 +16,7 @@
  * under the License.
  */
 
-import {
-  Alert,
-  Box,
-  Button,
-  Chip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  FormControl,
-  IconButton,
-  InputLabel,
-  ListingTable,
-  MenuItem,
-  Select,
-  Stack,
-  TextField,
-  Tooltip,
-  Typography,
-} from '@wso2/oxygen-ui';
+import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, FormControl, IconButton, InputLabel, ListingTable, MenuItem, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { Plus, Trash2 } from '@wso2/oxygen-ui-icons-react';
 import { useEffect, useState, type JSX } from 'react';
 import { useLocation, useNavigate } from 'react-router';
@@ -101,9 +81,7 @@ function MappingDialog({ orgHandler, scope, onClose, onSaved }: { orgHandler: st
   return (
     <FormDialog open onClose={onClose} title="Create SSO Group Mapping" maxWidth="sm" primaryLabel="Create" primaryDisabled={!valid || pending} onPrimary={save}>
       {error && <Alert severity="error">{error}</Alert>}
-      {!isOrgLevel && (
-        <Alert severity="info">This mapping will be created at the current {scope.integrationId ? 'integration' : 'project'} scope.</Alert>
-      )}
+      {!isOrgLevel && <Alert severity="info">This mapping will be created at the current {scope.integrationId ? 'integration' : 'project'} scope.</Alert>}
       <TextField label="Issuer" value={form.issuer} onChange={(e) => setForm((current) => ({ ...current, issuer: e.target.value }))} required fullWidth />
       <TextField label="Claim name" value={form.claimName} onChange={(e) => setForm((current) => ({ ...current, claimName: e.target.value }))} required fullWidth />
       <TextField label="IdP group or role value" value={form.claimValue} onChange={(e) => setForm((current) => ({ ...current, claimValue: e.target.value }))} required fullWidth />
