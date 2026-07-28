@@ -339,10 +339,10 @@ public isolated function getRolesWithCountsByOrgId(int orgId) returns types:Role
         // Oracle cannot GROUP BY a CLOB column — group by its VARCHAR2 projection
         rolesQuery = `SELECT r.role_id, r.role_name, r.org_id, TO_CHAR(r.description) AS description, r.created_at, r.updated_at,
                 COUNT(DISTINCT grm.group_id) AS group_count,
-                COUNT(DISTINCT gum.user_uuid) AS user_count
+                COUNT(DISTINCT egum.user_uuid) AS user_count
          FROM roles_v2 r
          LEFT JOIN group_role_mapping grm ON r.role_id = grm.role_id
-         LEFT JOIN group_user_mapping gum ON grm.group_id = gum.group_id
+         LEFT JOIN v_effective_group_user_mapping egum ON grm.group_id = egum.group_id
          WHERE r.org_id = ${orgId}
          GROUP BY r.role_id, r.role_name, r.org_id, TO_CHAR(r.description), r.created_at, r.updated_at
          ORDER BY r.role_name`;
@@ -1257,8 +1257,8 @@ public isolated function getAllUserRoleNames(string userId) returns string[]|err
         SELECT DISTINCT r.role_name
         FROM roles_v2 r
         INNER JOIN group_role_mapping grm ON grm.role_id = r.role_id
-        INNER JOIN group_user_mapping gum ON gum.group_id = grm.group_id
-        WHERE gum.user_uuid = ${userId}
+        INNER JOIN v_effective_group_user_mapping egum ON egum.group_id = grm.group_id
+        WHERE egum.user_uuid = ${userId}
     `);
     return from record {|string role_name;|} row in roleStream
         select row.role_name;
@@ -1500,13 +1500,13 @@ public isolated function buildEffectivePermissionsWithScope(string userId, types
     return contextualPermissions;
 }
 
-// Check if user is a member of a specific group
+// Check if user is a member of a specific group, manually or via an SSO-owned membership
 public isolated function isUserInGroup(string userId, string groupId) returns boolean|error {
     log:printDebug(string `Checking if user ${userId} is in group ${groupId}`);
 
     int count = check dbClient->queryRow(
         `SELECT COUNT(*) as count
-         FROM group_user_mapping
+         FROM v_effective_group_user_mapping
          WHERE user_uuid = ${userId} AND group_id = ${groupId}`
     );
 

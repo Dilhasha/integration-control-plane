@@ -79,11 +79,6 @@ function init() returns error? {
         check validateSSOConfig(ssoConfig);
     }
 
-    types:SSOConfig ssoConfig = getSSOConfig();
-    if ssoConfig.disablePasswordLogin {
-        check validateSSOConfig(ssoConfig);
-    }
-
     // Initialize audit logging
     storage:initAuditLogging(enableAuditLogging, auditLogFilePath);
 
