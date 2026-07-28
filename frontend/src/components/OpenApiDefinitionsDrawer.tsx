@@ -16,7 +16,7 @@
  */
 
 import { useMemo, useState, type JSX } from 'react';
-import { Alert, Box, CircularProgress, Drawer, IconButton, Stack, Tab, Tabs, Typography } from '@wso2/oxygen-ui';
+import { Alert, Box, CircularProgress, Dialog, IconButton, Stack, Tab, Tabs, Typography } from '@wso2/oxygen-ui';
 import { X } from '@wso2/oxygen-ui-icons-react';
 import SwaggerUI from 'swagger-ui-react';
 import 'swagger-ui-react/swagger-ui.css';
@@ -59,16 +59,14 @@ function matchesServiceBasePath(fileName: string, basePath: string): boolean {
   return withoutSuffix === normalized || withoutSuffix.endsWith(`_${normalized}`);
 }
 
-const drawerSx = {
-  '& .MuiDrawer-paper': {
-    width: '85%',
+const dialogSx = {
+  '& .MuiDialog-paper': {
+    width: '90vw',
     maxWidth: 1100,
     minWidth: 600,
-    position: 'fixed',
-    top: 64,
-    height: 'calc(100% - 64px)',
-    borderLeft: '1px solid',
-    borderColor: 'divider',
+    height: '85vh',
+    maxHeight: 900,
+    m: 2,
   },
 };
 
@@ -100,7 +98,7 @@ const swaggerMethodColorSx = Object.fromEntries(
 );
 
 // Scope the (otherwise globally-styled) Swagger UI CSS to this container and keep it from
-// fighting the surrounding oxygen-ui chrome (drawer background, font, max-width centering).
+// fighting the surrounding oxygen-ui chrome (dialog background, font, max-width centering).
 const swaggerContainerSx = {
   flex: 1,
   overflow: 'auto',
@@ -124,7 +122,7 @@ export function OpenApiDefinitionsDrawer({ runtimeId, onClose, serviceBasePath }
   const selected = definitions[Math.min(selectedIndex, definitions.length - 1)];
 
   return (
-    <Drawer anchor="right" open onClose={onClose} variant="persistent" sx={drawerSx}>
+    <Dialog open onClose={onClose} maxWidth={false} sx={dialogSx}>
       <Stack sx={{ height: '100%' }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={headerSx}>
           <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
@@ -160,6 +158,6 @@ export function OpenApiDefinitionsDrawer({ runtimeId, onClose, serviceBasePath }
           </>
         )}
       </Stack>
-    </Drawer>
+    </Dialog>
   );
 }

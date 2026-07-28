@@ -57,6 +57,7 @@ import { formatDistanceToNow } from '../utils/time';
 import { workflowManagementToml } from '../utils/runtimeToml';
 import Authorized from '../components/Authorized';
 import { Permissions } from '../constants/permissions';
+import { technologyLabel } from '../constants/technologies';
 import { useAccessControl } from '../contexts/AccessControlContext';
 
 const drawerSx = {
@@ -515,7 +516,7 @@ function EnvironmentRuntimeCard({
                     <ListingTable.Row key={r.runtimeId}>
                       <ListingTable.Cell>{r.runtimeName || r.runtimeId}</ListingTable.Cell>
                       <ListingTable.Cell>{r.runtimeId}</ListingTable.Cell>
-                      <ListingTable.Cell>{r.runtimeType === 'BI' ? 'Default' : r.runtimeType}</ListingTable.Cell>
+                      <ListingTable.Cell>{technologyLabel(r.runtimeType)}</ListingTable.Cell>
                       <ListingTable.Cell>
                         <Chip label={r.status} size="small" color={r.status === 'RUNNING' ? 'success' : 'default'} />
                       </ListingTable.Cell>

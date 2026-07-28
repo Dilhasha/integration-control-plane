@@ -1339,6 +1339,11 @@ input ComponentInput {
   # Component Classification (optional - can have defaults)
   componentType: RuntimeType
   technology: String
+  # Integration type: displayType carries the type on its own (e.g.
+  # "ballerinaService", "scheduledTask"); componentSubType discriminates the
+  # types that share a generic service displayType. Defaults to "service".
+  displayType: String
+  componentSubType: String
 
   # Repository Integration (optional - for future use)
   repository: String

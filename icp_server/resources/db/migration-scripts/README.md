@@ -162,6 +162,61 @@ sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_service_l
 
 ---
 
+## Upgrading an existing ICP v2 deployment: integration types
+
+Deployments whose database was initialised **before integrations carried a type** must run the
+integration types upgrade script once against the **main ICP DB** — **before** deploying this
+server version. Fresh installs do not need it — the `*_init.sql` scripts already contain
+everything.
+
+Without it, every component read fails: the component queries now select `c.display_type` and
+`c.component_sub_type`, so a missing column errors out the statement — breaking the project and
+integration listings, not just the create form.
+
+Pick the script matching your database engine:
+
+| Engine | Script |
+|---|---|
+| H2 | `add_integration_types_h2.sql` |
+| MySQL / MariaDB | `add_integration_types_mysql.sql` |
+| PostgreSQL | `add_integration_types_postgresql.sql` |
+| Microsoft SQL Server | `add_integration_types_mssql.sql` |
+| Oracle (19c+) | `add_integration_types_oracle.sql` |
+
+Each script adds two columns to `components`:
+
+1. `display_type` — the integration type itself (`ballerinaService`, `miApiService`,
+   `scheduledTask`, `miCronjob`), defaulting to `service`
+2. `component_sub_type` — discriminates types that share a generic service `display_type`
+   (AI Agent, MCP Server, File Integration); `NULL` for the rest
+
+Existing rows backfill to `service`, which is exactly what the server previously reported for
+every component, so nothing changes for them.
+
+The scripts are **idempotent** — safe to re-run.
+
+```bash
+# H2 (server may stay running thanks to AUTO_SERVER)
+java -cp <path-to-h2.jar> org.h2.tools.RunScript \
+  -url "jdbc:h2:file:./database/icp_db;MODE=MySQL;AUTO_SERVER=TRUE" \
+  -user <db_user> -password <db_password> \
+  -script add_integration_types_h2.sql
+
+# MySQL
+mysql -u <admin_user> -p <icp_db_name> < add_integration_types_mysql.sql
+
+# PostgreSQL
+psql -U <admin_user> -d <icp_db_name> -f add_integration_types_postgresql.sql
+
+# Microsoft SQL Server
+sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_integration_types_mssql.sql
+
+# Oracle (run as the ICP schema owner)
+sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_integration_types_oracle.sql
+```
+
+---
+
 ## Upgrading an existing ICP v2 deployment: SSO group mapping
 
 Deployments whose database was initialised **before SSO-driven group membership** must run the

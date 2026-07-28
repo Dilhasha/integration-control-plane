@@ -22,6 +22,8 @@ import { useState, useEffect, type JSX } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useUpdateComponent, type UpdateComponentInput } from '../api/mutations';
 import { useComponentByHandler, useProjectByHandler } from '../api/queries';
+import { integrationTypeLabel } from '../constants/integrationTypes';
+import { technologyLabel } from '../constants/technologies';
 import { resourceUrl, narrow, type ProjectScope, type ComponentScope } from '../nav';
 import NotFound from '../components/NotFound';
 
@@ -96,7 +98,7 @@ export default function EditComponent(scope: ProjectScope | ComponentScope): JSX
       )}
 
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid size={{ xs: 12, md: 4 }}>
+        <Grid size={{ xs: 12, md: 3 }}>
           <TextField
             label="Display Name"
             required
@@ -110,11 +112,14 @@ export default function EditComponent(scope: ProjectScope | ComponentScope): JSX
             slotProps={{ htmlInput: { 'aria-label': 'Display Name' } }}
           />
         </Grid>
-        <Grid size={{ xs: 12, md: 4 }}>
+        <Grid size={{ xs: 12, md: 3 }}>
           <TextField label="Name" value={component.handler} fullWidth disabled slotProps={{ htmlInput: { 'aria-label': 'Name' } }} helperText="Name cannot be changed" />
         </Grid>
-        <Grid size={{ xs: 12, md: 4 }}>
-          <TextField label="Integration Type" value={component.componentType === 'BI' ? 'Default' : component.componentType} fullWidth disabled slotProps={{ htmlInput: { 'aria-label': 'Integration Type' } }} helperText="Type cannot be changed" />
+        <Grid size={{ xs: 12, md: 3 }}>
+          <TextField label="Technology" value={technologyLabel(component.componentType)} fullWidth disabled slotProps={{ htmlInput: { 'aria-label': 'Technology' } }} helperText="Technology cannot be changed" />
+        </Grid>
+        <Grid size={{ xs: 12, md: 3 }}>
+          <TextField label="Integration Type" value={integrationTypeLabel(component.displayType, component.componentSubType)} fullWidth disabled slotProps={{ htmlInput: { 'aria-label': 'Integration Type' } }} helperText="Integration Type cannot be changed" />
         </Grid>
       </Grid>
 

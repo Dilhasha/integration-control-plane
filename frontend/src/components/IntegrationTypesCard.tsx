@@ -20,10 +20,12 @@ import { Card, CardContent, Divider, Stack, Typography } from '@wso2/oxygen-ui';
 import { PlugZap } from '@wso2/oxygen-ui-icons-react';
 import type { GqlComponent } from '../api/queries';
 import type { JSX } from 'react';
+import { integrationTypeLabel } from '../constants/integrationTypes';
 
 export default function IntegrationTypesCard({ components }: { components: GqlComponent[] }): JSX.Element {
   const counts = components.reduce<Record<string, number>>((acc, c) => {
-    acc[c.componentType] = (acc[c.componentType] || 0) + 1;
+    const label = integrationTypeLabel(c.displayType, c.componentSubType);
+    acc[label] = (acc[label] || 0) + 1;
     return acc;
   }, {});
 
@@ -35,9 +37,9 @@ export default function IntegrationTypesCard({ components }: { components: GqlCo
           Integration Types
         </Typography>
         <Stack>
-          {Object.entries(counts).map(([type, count]) => (
-            <Stack key={type} direction="row" justifyContent="space-between" sx={{ py: 0.5 }}>
-              <Typography variant="body2">{type === 'BI' ? 'Default' : type}</Typography>
+          {Object.entries(counts).map(([label, count]) => (
+            <Stack key={label} direction="row" justifyContent="space-between" sx={{ py: 0.5 }}>
+              <Typography variant="body2">{label}</Typography>
               <Typography variant="body2">{count}</Typography>
             </Stack>
           ))}

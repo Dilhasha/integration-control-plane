@@ -202,6 +202,10 @@ export interface CreateComponentInput {
   orgHandler: string;
   projectId: string;
   componentType: 'MI' | 'BI';
+  /** Integration type encoded as devant does — see `resolveDisplayType`. */
+  displayType: string;
+  /** Set only for types sharing a generic service displayType — see `resolveComponentSubType`. */
+  componentSubType?: string;
 }
 
 const CREATE_COMPONENT = `
@@ -224,6 +228,8 @@ export function useCreateComponent() {
           orgHandler: input.orgHandler,
           projectId: input.projectId,
           componentType: input.componentType,
+          displayType: input.displayType,
+          ...(input.componentSubType && { componentSubType: input.componentSubType }),
           technology: 'WSO2MI',
           isPublicRepo: false,
         },

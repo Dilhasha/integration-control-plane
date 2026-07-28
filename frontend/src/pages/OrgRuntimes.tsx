@@ -56,6 +56,7 @@ import { LogFilesDrawer } from '../components/LogFilesDrawer';
 import EmptyListing from '../components/EmptyListing';
 import Authorized from '../components/Authorized';
 import { Permissions } from '../constants/permissions';
+import { technologyLabel } from '../constants/technologies';
 import { useAccessControl } from '../contexts/AccessControlContext';
 import type { OrgScope } from '../nav';
 import { workflowManagementToml } from '../utils/runtimeToml';
@@ -473,7 +474,7 @@ function EnvironmentRuntimeCard({
                     <ListingTable.Row key={r.runtimeId}>
                       <ListingTable.Cell>{r.runtimeName || r.runtimeId}</ListingTable.Cell>
                       <ListingTable.Cell>{r.runtimeId}</ListingTable.Cell>
-                      <ListingTable.Cell>{r.runtimeType === 'BI' ? 'Default' : r.runtimeType}</ListingTable.Cell>
+                      <ListingTable.Cell>{technologyLabel(r.runtimeType)}</ListingTable.Cell>
                       <ListingTable.Cell>{r.component?.displayName ?? '—'}</ListingTable.Cell>
                       <ListingTable.Cell>
                         <Chip label={r.status} size="small" color={r.status === 'RUNNING' ? 'success' : 'default'} />

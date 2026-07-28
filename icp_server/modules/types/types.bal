@@ -1580,6 +1580,12 @@ public type ComponentInput record {
     // Component Classification (optional - can have defaults)
     RuntimeType? componentType?; // Runtime type: "BI" or "MI"
     string technology?; // Technology: "WSO2MI", "Ballerina", etc.
+    // Integration type, encoded the same way as devant: `displayType` carries the
+    // type on its own (e.g. "ballerinaService", "scheduledTask"), and
+    // `componentSubType` discriminates the types that share a generic service
+    // displayType (e.g. AI Agent, MCP Server). Defaults to "service" when absent.
+    string displayType?;
+    string componentSubType?;
 
     // Repository Integration (optional - for future use)
     string repository?; // Git repository URL
@@ -1980,6 +1986,8 @@ public type ComponentInDB record {
     string component_display_name?;
     string component_description?;
     string component_type; // NOT NULL in DB, should always have a value
+    string component_display_type?; // NOT NULL in DB with DEFAULT 'service'
+    string component_sub_type?;
     string component_created_by?;
     string component_created_at?;
     string component_updated_at?;

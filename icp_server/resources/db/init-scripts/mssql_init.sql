@@ -157,6 +157,8 @@ CREATE TABLE components (
     component_type NVARCHAR (10) NOT NULL DEFAULT 'BI' CHECK (
         component_type IN ('MI', 'BI')
     ),
+    display_type NVARCHAR (50) NOT NULL DEFAULT 'service',
+    component_sub_type NVARCHAR (50) NULL,
     created_by CHAR(36) NULL,
     created_at DATETIME2 NOT NULL DEFAULT GETDATE (),
     updated_by CHAR(36) NULL,

@@ -126,8 +126,7 @@ class RuntimeLogsScenariosTest extends BaseObservabilityE2ETest {
         assertThat(page.getByRole(AriaRole.HEADING, new Page.GetByRoleOptions().setName("Create New Integration"))).isVisible();
         page.getByLabel("Display Name").fill(handler);
         if (mi) {
-            page.getByLabel("Integration Type").click();
-            page.getByRole(AriaRole.OPTION, new Page.GetByRoleOptions().setName("MI").setExact(true)).click();
+            page.getByRole(AriaRole.RADIO, new Page.GetByRoleOptions().setName("WSO2 Integrator: MI").setExact(true)).click();
         }
         page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Create")).click();
         assertThat(page).hasURL(Pattern.compile(".*/organizations/default/projects/" + project + "/components/" + handler + "/?$"));

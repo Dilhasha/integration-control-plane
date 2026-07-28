@@ -94,6 +94,8 @@ CREATE TABLE components (
     display_name VARCHAR(200) NOT NULL,
     description TEXT NULL,
     component_type ENUM('MI', 'BI') NOT NULL DEFAULT 'BI',
+    display_type VARCHAR(50) NOT NULL DEFAULT 'service',
+    component_sub_type VARCHAR(50) NULL,
     created_by CHAR(36) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by CHAR(36) NULL,

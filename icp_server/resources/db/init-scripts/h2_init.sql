@@ -107,6 +107,8 @@ CREATE TABLE components (
     component_type VARCHAR(10) NOT NULL DEFAULT 'BI' CHECK (
         component_type IN ('MI', 'BI')
     ),
+    display_type VARCHAR(50) NOT NULL DEFAULT 'service',
+    component_sub_type VARCHAR(50),
     created_by CHAR(36),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by CHAR(36),

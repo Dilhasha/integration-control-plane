@@ -16,10 +16,12 @@
  * under the License.
  */
 
-import { Avatar, Button, CircularProgress, Grid, IconButton, ListingTable, PageContent, Stack, TablePagination, Tooltip, Typography } from '@wso2/oxygen-ui';
+import { Avatar, Button, Chip, CircularProgress, Grid, IconButton, ListingTable, PageContent, Stack, TablePagination, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { Plus, PlugZap, RefreshCw, Trash2, Pencil } from '@wso2/oxygen-ui-icons-react';
 import EmptyListing from '../components/EmptyListing';
 import IntegrationTypesCard from '../components/IntegrationTypesCard';
+import { integrationTypeLabel } from '../constants/integrationTypes';
+import { technologyLabel } from '../constants/technologies';
 import SearchField from '../components/SearchField';
 import DeleteIntegrationDialog from '../components/DeleteIntegrationDialog';
 import { useNavigate } from 'react-router';
@@ -43,7 +45,17 @@ function IntegrationsTable({ orgHandler, scope, projectId, onSelect }: { orgHand
   const components = data?.items ?? [];
   const serverTotal = data?.pageInfo?.total ?? 0;
   const q = query.trim().toLowerCase();
-  const filtered = components.filter((c) => !q || c.displayName.toLowerCase().includes(q) || c.description?.toLowerCase().includes(q) || c.componentType?.toLowerCase().includes(q));
+  // Matches both columns: the integration type label, and technology by its raw code
+  // (BI/MI) as well as its label.
+  const filtered = components.filter(
+    (c) =>
+      !q ||
+      c.displayName.toLowerCase().includes(q) ||
+      c.description?.toLowerCase().includes(q) ||
+      integrationTypeLabel(c.displayType, c.componentSubType).toLowerCase().includes(q) ||
+      c.componentType?.toLowerCase().includes(q) ||
+      technologyLabel(c.componentType).toLowerCase().includes(q),
+  );
   const displayItems = query ? filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage) : filtered;
   const total = query ? filtered.length : serverTotal;
 
@@ -89,6 +101,7 @@ function IntegrationsTable({ orgHandler, scope, projectId, onSelect }: { orgHand
                 <ListingTable.Cell>Name</ListingTable.Cell>
                 <ListingTable.Cell>Description</ListingTable.Cell>
                 <ListingTable.Cell>Type</ListingTable.Cell>
+                <ListingTable.Cell>Technology</ListingTable.Cell>
                 <ListingTable.Cell>Last Updated</ListingTable.Cell>
                 <Authorized permissions={Permissions.INTEGRATION_MANAGE}>
                   <ListingTable.Cell width={100}>Actions</ListingTable.Cell>
@@ -122,7 +135,10 @@ function IntegrationsTable({ orgHandler, scope, projectId, onSelect }: { orgHand
                       {c.description || ''}
                     </Typography>
                   </ListingTable.Cell>
-                  <ListingTable.Cell>{c.componentType === 'BI' ? 'Default' : c.componentType}</ListingTable.Cell>
+                  <ListingTable.Cell>{integrationTypeLabel(c.displayType, c.componentSubType)}</ListingTable.Cell>
+                  <ListingTable.Cell>
+                    <Chip label={technologyLabel(c.componentType)} size="small" variant="outlined" />
+                  </ListingTable.Cell>
                   <ListingTable.Cell>
                     <Typography variant="body2" color="text.secondary">
                       {formatDistanceToNow(c.lastBuildDate)}

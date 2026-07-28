@@ -16,12 +16,16 @@
  * under the License.
  */
 
-import { Alert, Button, Grid, IconButton, MenuItem, PageContent, Stack, TextField, Typography } from '@wso2/oxygen-ui';
+import { Alert, Box, Button, Grid, IconButton, PageContent, Stack, TextField, Typography } from '@wso2/oxygen-ui';
 import { ArrowLeft, Edit } from '@wso2/oxygen-ui-icons-react';
 import { useState, type JSX } from 'react';
 import { useNavigate } from 'react-router';
 import { useCreateComponent, type CreateComponentInput } from '../api/mutations';
 import { useProjectByHandler } from '../api/queries';
+import IntegrationTypeSelector from '../components/IntegrationTypeSelector';
+import TechnologySelector from '../components/TechnologySelector';
+import { resolveComponentSubType, resolveDisplayType, type IntegrationType } from '../constants/integrationTypes';
+import type { Technology } from '../constants/technologies';
 import { resourceUrl, narrow, type ProjectScope } from '../nav';
 
 function toHandler(name: string) {
@@ -40,7 +44,8 @@ export default function CreateComponent(scope: ProjectScope): JSX.Element {
   const [handler, setHandler] = useState('');
   const [handlerEdited, setHandlerEdited] = useState(false);
   const [description, setDescription] = useState('');
-  const [componentType, setComponentType] = useState<'MI' | 'BI'>('BI');
+  const [componentType, setComponentType] = useState<Technology>('BI');
+  const [integrationType, setIntegrationType] = useState<IntegrationType>('service');
   const mutation = useCreateComponent();
 
   const effectiveHandler = handlerEdited ? handler : toHandler(displayName);
@@ -68,6 +73,8 @@ export default function CreateComponent(scope: ProjectScope): JSX.Element {
       orgHandler: scope.org,
       projectId,
       componentType,
+      displayType: resolveDisplayType(componentType, integrationType),
+      componentSubType: resolveComponentSubType(componentType, integrationType),
     };
     mutation.mutate(input, {
       onSuccess: (component) => navigate(resourceUrl(narrow(scope, component.handler), 'overview')),
@@ -138,12 +145,6 @@ export default function CreateComponent(scope: ProjectScope): JSX.Element {
             }}
           />
         </Grid>
-        <Grid size={{ xs: 12, md: 4 }}>
-          <TextField label="Integration Type" select value={componentType} onChange={(e) => setComponentType(e.target.value as 'BI' | 'MI')} fullWidth slotProps={{ htmlInput: { 'aria-label': 'Integration Type' } }}>
-            <MenuItem value="BI">Default</MenuItem>
-            <MenuItem value="MI">MI</MenuItem>
-          </TextField>
-        </Grid>
       </Grid>
 
       <TextField
@@ -157,6 +158,20 @@ export default function CreateComponent(scope: ProjectScope): JSX.Element {
         sx={{ mb: 4, maxWidth: 720 }}
         slotProps={{ htmlInput: { 'aria-label': 'Description' } }}
       />
+
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h5" sx={{ mb: 2 }}>
+          Technology
+        </Typography>
+        <TechnologySelector selected={componentType} onSelect={setComponentType} />
+      </Box>
+
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h5" sx={{ mb: 2 }}>
+          Integration Type
+        </Typography>
+        <IntegrationTypeSelector selected={integrationType} onSelect={setIntegrationType} />
+      </Box>
 
       <Stack direction="row" gap={2}>
         <Button variant="outlined" onClick={() => navigate(resourceUrl(scope, 'overview'))}>
