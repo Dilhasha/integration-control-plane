@@ -221,14 +221,6 @@ export function useCreateSSOGroupMapping(orgHandler: string) {
   });
 }
 
-export function useUpdateSSOGroupMapping(orgHandler: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ mappingId, ...input }: SSOGroupMappingInput & { mappingId: string }) => authPut<SSOGroupMapping>(`/orgs/${orgHandler}/sso/group-mappings/${mappingId}`, input),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['ssoGroupMappings', orgHandler] }),
-  });
-}
-
 export function useDeleteSSOGroupMapping(orgHandler: string) {
   const qc = useQueryClient();
   return useMutation({

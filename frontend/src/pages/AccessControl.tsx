@@ -31,7 +31,18 @@ import { GroupsTab } from './access-control/GroupsTab';
 import { SSOMappingsTab } from './access-control/SSOMappingsTab';
 
 const ORG_TABS = ['users', 'roles', 'groups', 'sso-mappings'] as const;
-const PROJECT_TABS = ['roles', 'groups'] as const;
+const PROJECT_TABS = ['roles', 'groups', 'sso-mappings'] as const;
+
+const SSO_TAB_LABEL = (
+  <>
+    <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>
+      SSO
+    </Box>
+    <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+      SSO Mappings
+    </Box>
+  </>
+);
 
 export default function AccessControl(): JSX.Element {
   const { orgHandler = 'default', tab = 'users' } = useParams();
@@ -153,7 +164,8 @@ export function ProjectAccessControl({ org, project }: { org: string; project: s
     }
   }, [canSeeAccessControl, isLoading, projectId, navigate, org, project]);
 
-  const tabIndex = PROJECT_TABS.indexOf(tab as string as (typeof PROJECT_TABS)[number]);
+  const projectTabs: readonly string[] = window.API_CONFIG.ssoEnabled ? PROJECT_TABS : PROJECT_TABS.slice(0, 2);
+  const tabIndex = projectTabs.indexOf(tab);
   const safeIndex = tabIndex < 0 ? 0 : tabIndex;
 
   if (isLoading)
@@ -169,13 +181,15 @@ export function ProjectAccessControl({ org, project }: { org: string; project: s
         <PageTitle.Header>Access Control</PageTitle.Header>
       </PageTitle>
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={safeIndex} onChange={(_, v) => navigate(`/organizations/${org}/projects/${project}/settings/access-control/${PROJECT_TABS[v] ?? 'roles'}`)}>
+        <Tabs value={safeIndex} onChange={(_, v) => navigate(`/organizations/${org}/projects/${project}/settings/access-control/${projectTabs[v] ?? 'roles'}`)}>
           <Tab label="Roles" />
           <Tab label="Groups" />
+          {window.API_CONFIG.ssoEnabled && <Tab label={SSO_TAB_LABEL} />}
         </Tabs>
       </Box>
       {safeIndex === 0 && <RolesTab orgHandler={org} projectId={projectId} projectHandler={project} readOnly />}
       {safeIndex === 1 && <GroupsTab orgHandler={org} projectId={projectId} projectHandler={project} readOnly />}
+      {safeIndex === 2 && window.API_CONFIG.ssoEnabled && <SSOMappingsTab orgHandler={org} projectId={projectId} />}
     </PageContent>
   );
 }
@@ -198,7 +212,8 @@ export function ComponentAccessControl({ org, project, component }: ComponentSco
     }
   }, [canSeeAccessControl, loadingProject, loadingComponent, componentId, navigate, org, project, component]);
 
-  const tabIndex = PROJECT_TABS.indexOf(tab as string as (typeof PROJECT_TABS)[number]);
+  const projectTabs: readonly string[] = window.API_CONFIG.ssoEnabled ? PROJECT_TABS : PROJECT_TABS.slice(0, 2);
+  const tabIndex = projectTabs.indexOf(tab);
   const safeIndex = tabIndex < 0 ? 0 : tabIndex;
 
   if (loadingProject || loadingComponent)
@@ -226,13 +241,15 @@ export function ComponentAccessControl({ org, project, component }: ComponentSco
         <PageTitle.Header>Access Control</PageTitle.Header>
       </PageTitle>
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-        <Tabs value={safeIndex} onChange={(_, v) => navigate(componentAccessControlUrl(org, project, component, PROJECT_TABS[v] ?? 'roles'))}>
+        <Tabs value={safeIndex} onChange={(_, v) => navigate(componentAccessControlUrl(org, project, component, projectTabs[v] ?? 'roles'))}>
           <Tab label="Roles" />
           <Tab label="Groups" />
+          {window.API_CONFIG.ssoEnabled && <Tab label={SSO_TAB_LABEL} />}
         </Tabs>
       </Box>
       {safeIndex === 0 && <RolesTab orgHandler={org} projectId={projectId} projectHandler={project} componentHandler={component} readOnly />}
       {safeIndex === 1 && <GroupsTab orgHandler={org} projectId={projectId} projectHandler={project} componentHandler={component} readOnly />}
+      {safeIndex === 2 && window.API_CONFIG.ssoEnabled && <SSOMappingsTab orgHandler={org} projectId={projectId} integrationId={componentId} />}
     </PageContent>
   );
 }

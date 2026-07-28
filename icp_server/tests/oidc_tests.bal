@@ -402,8 +402,7 @@ function testResolveFederatedGroupMemberships() {
             issuer: MOCK_ISSUER,
             claimName: "groups",
             claimValue: "developers",
-            groupId: "group-developers",
-            enabled: true
+            groupId: "group-developers"
         },
         {
             mappingId: "mapping-2",
@@ -411,8 +410,7 @@ function testResolveFederatedGroupMemberships() {
             issuer: MOCK_ISSUER,
             claimName: "realm_access.roles",
             claimValue: "realm-admin",
-            groupId: "group-realm-admins",
-            enabled: true
+            groupId: "group-realm-admins"
         },
         {
             mappingId: "mapping-3",
@@ -420,8 +418,9 @@ function testResolveFederatedGroupMemberships() {
             issuer: MOCK_ISSUER,
             claimName: "groups",
             claimValue: "auditors",
-            groupId: "group-disabled",
-            enabled: false
+            groupId: "group-auditors",
+            projectUuid: "project-1",
+            integrationUuid: "integration-1"
         },
         {
             mappingId: "mapping-4",
@@ -429,21 +428,22 @@ function testResolveFederatedGroupMemberships() {
             issuer: "https://other-idp.example.com",
             claimName: "groups",
             claimValue: "developers",
-            groupId: "group-other-issuer",
-            enabled: true
+            groupId: "group-other-issuer"
         }
     ];
 
     types:FederatedGroupMembershipInput[] memberships =
         auth:resolveFederatedGroupMemberships(claims, mappings);
 
-    test:assertEquals(memberships.length(), 2,
-        "Only enabled mappings for the validated issuer should resolve");
+    test:assertEquals(memberships.length(), 3,
+        "Only mappings for the validated issuer should resolve, regardless of scope");
     test:assertTrue(hasDesiredFederatedMembership(memberships, "group-developers", "groups", "developers"),
         "Flat group claims should resolve");
     test:assertTrue(hasDesiredFederatedMembership(
         memberships, "group-realm-admins", "realm_access.roles", "realm-admin"),
         "Nested role claims should resolve");
+    test:assertTrue(hasDesiredFederatedMembership(memberships, "group-auditors", "groups", "auditors"),
+        "Scoped mappings should resolve the same as org-level mappings");
 }
 
 function hasDesiredFederatedMembership(types:FederatedGroupMembershipInput[] memberships,

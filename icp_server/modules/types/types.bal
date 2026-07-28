@@ -2175,9 +2175,10 @@ public type SSOConfig record {|
     string usernameClaim; // "email" or "preferred_username"
     string[] scopes;
     boolean allowInsecureTLS;
-    boolean disablePasswordLogin;
+    boolean passwordLoginDisabled;
     string adminClaim;
     string[] adminValues;
+    boolean federatedAccessControlEnabled;
 |};
 
 // OIDC Authorization URL response

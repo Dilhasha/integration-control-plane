@@ -126,9 +126,10 @@ configurable string ssoUsernameClaim = "email"; // Claim to use for username: "e
 configurable string[] ssoScopes = ["openid", "email", "profile"];
 configurable string ssoJwksUrl = ""; // OIDC provider's JWKS endpoint (e.g. https://provider/.well-known/jwks.json)
 configurable boolean ssoAllowInsecureTLS = false; // Set true for local/self-signed OIDC provider certs
-configurable boolean disablePasswordLogin = false; // Set true to allow only SSO login
+configurable boolean passwordLoginDisabled = false; // Set true to allow only SSO login
 configurable string ssoAdminClaim = ""; // Claim used to identify SSO super admins when password login is disabled
 configurable string[] ssoAdminValues = []; // Claim values that grant super admin access in SSO-only mode
+configurable boolean federatedAccessControlEnabled = false; // Manage group membership from IdP claims via SSO mappings; requires passwordLoginDisabled
 
 // Logging configuration
 configurable string logLevel = "INFO"; // DEBUG, INFO, WARN, ERROR
@@ -185,15 +186,23 @@ public isolated function getSSOConfig() returns types:SSOConfig => {
     usernameClaim: ssoUsernameClaim,
     scopes: ssoScopes,
     allowInsecureTLS: ssoAllowInsecureTLS,
-    disablePasswordLogin,
+    passwordLoginDisabled,
     adminClaim: ssoAdminClaim,
-    adminValues: ssoAdminValues
+    adminValues: ssoAdminValues,
+    federatedAccessControlEnabled
 };
 
 // Validate SSO configuration
 public isolated function validateSSOConfig(types:SSOConfig config) returns error? {
-    if config.disablePasswordLogin && !config.enabled {
-        return error("'disablePasswordLogin' requires 'ssoEnabled' to be true");
+    if config.passwordLoginDisabled && !config.enabled {
+        return error("'passwordLoginDisabled' requires 'ssoEnabled' to be true");
+    }
+    if config.federatedAccessControlEnabled && !config.enabled {
+        return error("'federatedAccessControlEnabled' requires 'ssoEnabled' to be true");
+    }
+    if config.federatedAccessControlEnabled && !config.passwordLoginDisabled {
+        return error("'federatedAccessControlEnabled' requires 'passwordLoginDisabled' to be true. " +
+            "Combining federated access control with password login is not supported");
     }
 
     if !config.enabled {
@@ -250,16 +259,16 @@ public isolated function validateSSOConfig(types:SSOConfig config) returns error
         return error("'ssoScopes' must include 'openid' scope");
     }
 
-    if config.disablePasswordLogin {
+    if config.passwordLoginDisabled {
         if config.adminClaim.trim() == "" {
-            return error("'ssoAdminClaim' must be configured when 'disablePasswordLogin' is true");
+            return error("'ssoAdminClaim' must be configured when 'passwordLoginDisabled' is true");
         }
         if config.adminValues.length() == 0 {
-            return error("'ssoAdminValues' must contain at least one value when 'disablePasswordLogin' is true");
+            return error("'ssoAdminValues' must contain at least one value when 'passwordLoginDisabled' is true");
         }
         foreach string adminValue in config.adminValues {
             if adminValue.trim() == "" {
-                return error("'ssoAdminValues' cannot contain empty values when 'disablePasswordLogin' is true");
+                return error("'ssoAdminValues' cannot contain empty values when 'passwordLoginDisabled' is true");
             }
         }
     }

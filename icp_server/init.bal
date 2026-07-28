@@ -75,7 +75,7 @@ function init() returns error? {
     }
 
     types:SSOConfig ssoConfig = getSSOConfig();
-    if ssoConfig.disablePasswordLogin {
+    if ssoConfig.passwordLoginDisabled || ssoConfig.federatedAccessControlEnabled {
         check validateSSOConfig(ssoConfig);
     }
 

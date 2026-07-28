@@ -253,17 +253,24 @@ CREATE TABLE sso_group_mappings (
     claim_name VARCHAR(128) NOT NULL,
     claim_value VARCHAR(255) NOT NULL,
     group_id VARCHAR(36) NOT NULL,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    project_uuid CHAR(36) NULL,
+    integration_uuid CHAR(36) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_sso_group_mapping_org FOREIGN KEY (org_uuid) REFERENCES organizations(org_id) ON DELETE CASCADE,
     CONSTRAINT fk_sso_group_mapping_group FOREIGN KEY (group_id) REFERENCES user_groups(group_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sso_group_mapping_project FOREIGN KEY (project_uuid) REFERENCES projects(project_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sso_group_mapping_integration FOREIGN KEY (integration_uuid) REFERENCES components(component_id) ON DELETE CASCADE,
+    CONSTRAINT chk_sso_mapping_integration_requires_project
+        CHECK (integration_uuid IS NULL OR project_uuid IS NOT NULL),
     CONSTRAINT unique_sso_group_mapping UNIQUE (org_uuid, issuer, claim_name, claim_value, group_id)
 );
 
 CREATE INDEX idx_sgm_org_uuid ON sso_group_mappings(org_uuid);
 CREATE INDEX idx_sgm_issuer_claim ON sso_group_mappings(issuer, claim_name, claim_value);
 CREATE INDEX idx_sgm_group_id ON sso_group_mappings(group_id);
+CREATE INDEX idx_sgm_project_uuid ON sso_group_mappings(project_uuid);
+CREATE INDEX idx_sgm_integration_uuid ON sso_group_mappings(integration_uuid);
 
 CREATE TRIGGER update_sso_group_mappings_updated_at BEFORE UPDATE ON sso_group_mappings
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

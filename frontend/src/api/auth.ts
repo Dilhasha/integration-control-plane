@@ -140,7 +140,11 @@ export interface SSOGroupMapping {
   claimValue: string;
   groupId: string;
   groupName: string;
-  enabled: boolean;
+  // Administrative scope the mapping was created at (null = org level).
+  projectUuid?: string | null;
+  integrationUuid?: string | null;
+  projectName?: string | null;
+  integrationName?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -150,7 +154,8 @@ export interface SSOGroupMappingInput {
   claimName: string;
   claimValue: string;
   groupId: string;
-  enabled: boolean;
+  projectUuid?: string;
+  integrationUuid?: string;
 }
 
 export interface RoleGroupMapping {

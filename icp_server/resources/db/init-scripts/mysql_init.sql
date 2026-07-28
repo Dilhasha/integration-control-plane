@@ -203,15 +203,22 @@ CREATE TABLE sso_group_mappings (
     claim_name VARCHAR(128) NOT NULL,
     claim_value VARCHAR(255) NOT NULL,
     group_id VARCHAR(36) NOT NULL,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    project_uuid CHAR(36) NULL,
+    integration_uuid CHAR(36) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_sso_group_mapping_org FOREIGN KEY (org_uuid) REFERENCES organizations(org_id) ON DELETE CASCADE,
     CONSTRAINT fk_sso_group_mapping_group FOREIGN KEY (group_id) REFERENCES user_groups(group_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sso_group_mapping_project FOREIGN KEY (project_uuid) REFERENCES projects(project_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sso_group_mapping_integration FOREIGN KEY (integration_uuid) REFERENCES components(component_id) ON DELETE CASCADE,
+    CONSTRAINT chk_sso_mapping_integration_requires_project
+        CHECK (integration_uuid IS NULL OR project_uuid IS NOT NULL),
     UNIQUE KEY unique_sso_group_mapping (org_uuid, issuer, claim_name, claim_value, group_id),
     INDEX idx_sso_group_mapping_org (org_uuid),
     INDEX idx_sso_group_mapping_issuer_claim (issuer, claim_name, claim_value),
-    INDEX idx_sso_group_mapping_group (group_id)
+    INDEX idx_sso_group_mapping_group (group_id),
+    INDEX idx_sso_group_mapping_project (project_uuid),
+    INDEX idx_sso_group_mapping_integration (integration_uuid)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Federated group-user mappings (SSO-owned memberships)

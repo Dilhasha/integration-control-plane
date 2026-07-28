@@ -27,81 +27,83 @@ import {
   DialogContentText,
   DialogTitle,
   FormControl,
-  FormControlLabel,
   IconButton,
   InputLabel,
   ListingTable,
   MenuItem,
   Select,
   Stack,
-  Switch,
   TextField,
   Tooltip,
   Typography,
 } from '@wso2/oxygen-ui';
-import { Pencil, Plus, Trash2 } from '@wso2/oxygen-ui-icons-react';
+import { Plus, Trash2 } from '@wso2/oxygen-ui-icons-react';
 import { useEffect, useState, type JSX } from 'react';
 import { useLocation, useNavigate } from 'react-router';
-import { useCreateSSOGroupMapping, useDeleteSSOGroupMapping, useGroups, useSSOGroupMappings, useUpdateSSOGroupMapping } from '../../api/authQueries';
+import { useCreateSSOGroupMapping, useDeleteSSOGroupMapping, useGroups, useSSOGroupMappings } from '../../api/authQueries';
 import type { SSOGroupMapping, SSOGroupMappingInput } from '../../api/auth';
 import { Permissions } from '../../constants/permissions';
 import { useAccessControl } from '../../contexts/AccessControlContext';
 import { newOrgGroupUrl } from '../../paths';
 import { FormDialog, Loading } from './shared';
 
-const EMPTY_MAPPING: SSOGroupMappingInput = {
-  issuer: '',
-  claimName: 'groups',
-  claimValue: '',
-  groupId: '',
-  enabled: true,
-};
+// Administrative scope the tab is rendered at. Mappings from every scope are
+// listed everywhere; create/delete only applies to mappings matching this scope.
+export interface SSOMappingScope {
+  projectId?: string;
+  integrationId?: string;
+}
 
-function MappingDialog({ orgHandler, mapping, onClose, onSaved }: { orgHandler: string; mapping: SSOGroupMapping | null; onClose: () => void; onSaved: (message: string) => void }): JSX.Element {
+function scopeMatches(mapping: SSOGroupMapping, scope: SSOMappingScope): boolean {
+  return (mapping.projectUuid ?? null) === (scope.projectId ?? null) && (mapping.integrationUuid ?? null) === (scope.integrationId ?? null);
+}
+
+function scopeLabel(mapping: SSOGroupMapping): string {
+  if (mapping.integrationUuid) return `Integration · ${mapping.integrationName ?? mapping.integrationUuid}`;
+  if (mapping.projectUuid) return `Project · ${mapping.projectName ?? mapping.projectUuid}`;
+  return 'Organization';
+}
+
+function MappingDialog({ orgHandler, scope, onClose, onSaved }: { orgHandler: string; scope: SSOMappingScope; onClose: () => void; onSaved: (message: string) => void }): JSX.Element {
   const navigate = useNavigate();
   const { data: groups = [] } = useGroups(orgHandler);
   const createMutation = useCreateSSOGroupMapping(orgHandler);
-  const updateMutation = useUpdateSSOGroupMapping(orgHandler);
-  const [form, setForm] = useState<SSOGroupMappingInput>(() =>
-    mapping
-      ? {
-          issuer: mapping.issuer,
-          claimName: mapping.claimName,
-          claimValue: mapping.claimValue,
-          groupId: mapping.groupId,
-          enabled: mapping.enabled,
-        }
-      : { ...EMPTY_MAPPING, issuer: window.API_CONFIG.ssoIssuer },
-  );
+  const [form, setForm] = useState<SSOGroupMappingInput>(() => ({
+    issuer: window.API_CONFIG.ssoIssuer,
+    claimName: 'groups',
+    claimValue: '',
+    groupId: '',
+  }));
   const [error, setError] = useState<string | null>(null);
-  const pending = createMutation.isPending || updateMutation.isPending;
+  const pending = createMutation.isPending;
   const valid = form.issuer.trim() && form.claimName.trim() && form.claimValue.trim() && form.groupId;
+  const isOrgLevel = !scope.projectId;
 
   const save = () => {
     setError(null);
-    const input = {
-      ...form,
+    const input: SSOGroupMappingInput = {
       issuer: form.issuer.trim(),
       claimName: form.claimName.trim(),
       claimValue: form.claimValue.trim(),
+      groupId: form.groupId,
+      ...(scope.projectId ? { projectUuid: scope.projectId } : {}),
+      ...(scope.integrationId ? { integrationUuid: scope.integrationId } : {}),
     };
-    const options = {
+    createMutation.mutate(input, {
       onSuccess: () => {
         onClose();
-        onSaved(mapping ? 'SSO group mapping updated successfully.' : 'SSO group mapping created successfully.');
+        onSaved('SSO group mapping created successfully.');
       },
-      onError: (err: Error) => setError(err.message ?? 'Failed to save SSO group mapping.'),
-    };
-    if (mapping) {
-      updateMutation.mutate({ mappingId: mapping.mappingId, ...input }, options);
-    } else {
-      createMutation.mutate(input, options);
-    }
+      onError: (err: Error) => setError(err.message ?? 'Failed to create SSO group mapping.'),
+    });
   };
 
   return (
-    <FormDialog open onClose={onClose} title={mapping ? 'Edit SSO Group Mapping' : 'Create SSO Group Mapping'} maxWidth="sm" primaryLabel={mapping ? 'Save' : 'Create'} primaryDisabled={!valid || pending} onPrimary={save}>
+    <FormDialog open onClose={onClose} title="Create SSO Group Mapping" maxWidth="sm" primaryLabel="Create" primaryDisabled={!valid || pending} onPrimary={save}>
       {error && <Alert severity="error">{error}</Alert>}
+      {!isOrgLevel && (
+        <Alert severity="info">This mapping will be created at the current {scope.integrationId ? 'integration' : 'project'} scope.</Alert>
+      )}
       <TextField label="Issuer" value={form.issuer} onChange={(e) => setForm((current) => ({ ...current, issuer: e.target.value }))} required fullWidth />
       <TextField label="Claim name" value={form.claimName} onChange={(e) => setForm((current) => ({ ...current, claimName: e.target.value }))} required fullWidth />
       <TextField label="IdP group or role value" value={form.claimValue} onChange={(e) => setForm((current) => ({ ...current, claimValue: e.target.value }))} required fullWidth />
@@ -119,24 +121,25 @@ function MappingDialog({ orgHandler, mapping, onClose, onSaved }: { orgHandler: 
             </Select>
           </FormControl>
         </Box>
-        <Button variant="outlined" size="small" startIcon={<Plus size={16} />} sx={{ flexShrink: 0, whiteSpace: 'nowrap', width: { xs: '100%', sm: 'auto' } }} onClick={() => navigate(`${newOrgGroupUrl(orgHandler)}?returnTo=sso-mappings`)}>
-          Create Group
-        </Button>
+        {isOrgLevel && (
+          <Button variant="outlined" size="small" startIcon={<Plus size={16} />} sx={{ flexShrink: 0, whiteSpace: 'nowrap', width: { xs: '100%', sm: 'auto' } }} onClick={() => navigate(`${newOrgGroupUrl(orgHandler)}?returnTo=sso-mappings`)}>
+            Create Group
+          </Button>
+        )}
       </Stack>
-      <FormControlLabel control={<Switch checked={form.enabled} onChange={(e) => setForm((current) => ({ ...current, enabled: e.target.checked }))} />} label="Enabled" />
     </FormDialog>
   );
 }
 
-export function SSOMappingsTab({ orgHandler }: { orgHandler: string }): JSX.Element {
+export function SSOMappingsTab({ orgHandler, projectId, integrationId }: { orgHandler: string; projectId?: string; integrationId?: string }): JSX.Element {
   const location = useLocation();
   const navigate = useNavigate();
   const { hasAnyPermission } = useAccessControl();
-  const canManage = hasAnyPermission([Permissions.USER_MANAGE_GROUPS, Permissions.USER_UPDATE_GROUP_ROLES]);
+  const scope: SSOMappingScope = { projectId, integrationId };
+  const canManage = hasAnyPermission([Permissions.USER_MANAGE_GROUPS, Permissions.USER_UPDATE_GROUP_ROLES], projectId, integrationId);
   const { data: mappings = [], isLoading, isError } = useSSOGroupMappings(orgHandler);
-  const updateMutation = useUpdateSSOGroupMapping(orgHandler);
   const deleteMutation = useDeleteSSOGroupMapping(orgHandler);
-  const [editing, setEditing] = useState<SSOGroupMapping | null | undefined>(undefined);
+  const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<SSOGroupMapping | null>(null);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -167,7 +170,7 @@ export function SSOMappingsTab({ orgHandler }: { orgHandler: string }): JSX.Elem
       </Typography>
       {canManage && (
         <Stack direction="row" justifyContent={{ xs: 'flex-start', sm: 'flex-end' }} sx={{ mb: 2 }}>
-          <Button variant="contained" startIcon={<Plus size={18} />} onClick={() => setEditing(null)}>
+          <Button variant="contained" startIcon={<Plus size={18} />} onClick={() => setCreating(true)}>
             Create Mapping
           </Button>
         </Stack>
@@ -192,41 +195,13 @@ export function SSOMappingsTab({ orgHandler }: { orgHandler: string }): JSX.Elem
                   <Typography variant="body2">{mapping.groupName}</Typography>
                 </Stack>
                 <Stack direction="row" alignItems="center" justifyContent="space-between">
-                  <Chip label={mapping.enabled ? 'Enabled' : 'Disabled'} size="small" color={mapping.enabled ? 'success' : 'default'} />
-                  {canManage && (
-                    <Stack direction="row" alignItems="center">
-                      <Tooltip title={mapping.enabled ? 'Disable' : 'Enable'}>
-                        <Switch
-                          size="small"
-                          checked={mapping.enabled}
-                          disabled={updateMutation.isPending}
-                          inputProps={{ 'aria-label': `${mapping.enabled ? 'Disable' : 'Enable'} mapping for ${mapping.claimValue}` }}
-                          onChange={(e) =>
-                            updateMutation.mutate(
-                              {
-                                mappingId: mapping.mappingId,
-                                issuer: mapping.issuer,
-                                claimName: mapping.claimName,
-                                claimValue: mapping.claimValue,
-                                groupId: mapping.groupId,
-                                enabled: e.target.checked,
-                              },
-                              { onError: (err) => setAlert({ type: 'error', message: err.message ?? 'Failed to update mapping.' }) },
-                            )
-                          }
-                        />
-                      </Tooltip>
-                      <Tooltip title="Edit">
-                        <IconButton size="small" aria-label={`Edit mapping for ${mapping.claimValue}`} onClick={() => setEditing(mapping)}>
-                          <Pencil size={16} />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Delete">
-                        <IconButton size="small" color="error" aria-label={`Delete mapping for ${mapping.claimValue}`} onClick={() => setDeleting(mapping)}>
-                          <Trash2 size={16} />
-                        </IconButton>
-                      </Tooltip>
-                    </Stack>
+                  <Chip label={scopeLabel(mapping)} size="small" variant="outlined" />
+                  {canManage && scopeMatches(mapping, scope) && (
+                    <Tooltip title="Delete">
+                      <IconButton size="small" color="error" aria-label={`Delete mapping for ${mapping.claimValue}`} onClick={() => setDeleting(mapping)}>
+                        <Trash2 size={16} />
+                      </IconButton>
+                    </Tooltip>
                   )}
                 </Stack>
               </Stack>
@@ -242,7 +217,7 @@ export function SSOMappingsTab({ orgHandler }: { orgHandler: string }): JSX.Elem
                 <ListingTable.Cell>IdP Claim</ListingTable.Cell>
                 <ListingTable.Cell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Claim Value</ListingTable.Cell>
                 <ListingTable.Cell>ICP Group</ListingTable.Cell>
-                <ListingTable.Cell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Status</ListingTable.Cell>
+                <ListingTable.Cell sx={{ display: { xs: 'none', md: 'table-cell' } }}>Scope</ListingTable.Cell>
                 {canManage && <ListingTable.Cell align="right">Action</ListingTable.Cell>}
               </ListingTable.Row>
             </ListingTable.Head>
@@ -270,44 +245,23 @@ export function SSOMappingsTab({ orgHandler }: { orgHandler: string }): JSX.Elem
                     <ListingTable.Cell sx={{ display: { xs: 'none', md: 'table-cell' } }}>{mapping.claimValue}</ListingTable.Cell>
                     <ListingTable.Cell>{mapping.groupName}</ListingTable.Cell>
                     <ListingTable.Cell sx={{ display: { xs: 'none', md: 'table-cell' } }}>
-                      <Chip label={mapping.enabled ? 'Enabled' : 'Disabled'} size="small" color={mapping.enabled ? 'success' : 'default'} />
+                      <Chip label={scopeLabel(mapping)} size="small" variant="outlined" />
                     </ListingTable.Cell>
                     {canManage && (
                       <ListingTable.Cell align="right">
-                        <Chip label={mapping.enabled ? 'On' : 'Off'} size="small" color={mapping.enabled ? 'success' : 'default'} sx={{ display: { xs: 'inline-flex', md: 'none' }, mr: 0.5 }} />
-                        <Tooltip title={mapping.enabled ? 'Disable' : 'Enable'}>
-                          <Switch
-                            size="small"
-                            checked={mapping.enabled}
-                            disabled={updateMutation.isPending}
-                            inputProps={{ 'aria-label': `${mapping.enabled ? 'Disable' : 'Enable'} mapping for ${mapping.claimValue}` }}
-                            onChange={(e) =>
-                              updateMutation.mutate(
-                                {
-                                  mappingId: mapping.mappingId,
-                                  issuer: mapping.issuer,
-                                  claimName: mapping.claimName,
-                                  claimValue: mapping.claimValue,
-                                  groupId: mapping.groupId,
-                                  enabled: e.target.checked,
-                                },
-                                {
-                                  onError: (err) => setAlert({ type: 'error', message: err.message ?? 'Failed to update mapping.' }),
-                                },
-                              )
-                            }
-                          />
-                        </Tooltip>
-                        <Tooltip title="Edit">
-                          <IconButton size="small" aria-label={`Edit mapping for ${mapping.claimValue}`} onClick={() => setEditing(mapping)}>
-                            <Pencil size={16} />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Delete">
-                          <IconButton size="small" color="error" aria-label={`Delete mapping for ${mapping.claimValue}`} onClick={() => setDeleting(mapping)}>
-                            <Trash2 size={16} />
-                          </IconButton>
-                        </Tooltip>
+                        {scopeMatches(mapping, scope) ? (
+                          <Tooltip title="Delete">
+                            <IconButton size="small" color="error" aria-label={`Delete mapping for ${mapping.claimValue}`} onClick={() => setDeleting(mapping)}>
+                              <Trash2 size={16} />
+                            </IconButton>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip title="Managed at its own scope">
+                            <Typography component="span" variant="caption" color="text.secondary">
+                              —
+                            </Typography>
+                          </Tooltip>
+                        )}
                       </ListingTable.Cell>
                     )}
                   </ListingTable.Row>
@@ -317,7 +271,7 @@ export function SSOMappingsTab({ orgHandler }: { orgHandler: string }): JSX.Elem
           </ListingTable>
         </ListingTable.Container>
       </Box>
-      {editing !== undefined && <MappingDialog orgHandler={orgHandler} mapping={editing} onClose={() => setEditing(undefined)} onSaved={(message) => setAlert({ type: 'success', message })} />}
+      {creating && <MappingDialog orgHandler={orgHandler} scope={scope} onClose={() => setCreating(false)} onSaved={(message) => setAlert({ type: 'success', message })} />}
       {deleting && (
         <Dialog open onClose={() => setDeleting(null)} maxWidth="sm" fullWidth>
           <DialogTitle>Delete SSO Group Mapping</DialogTitle>

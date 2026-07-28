@@ -541,23 +541,25 @@ public isolated function removeUserFromGroup(string userId, string groupId) retu
 }
 
 // Create an SSO group mapping from an IdP claim value to an existing ICP group.
+// The optional project/integration scope records where the mapping is administered;
+// it does not change login-time sync behavior.
 public isolated function createSSOGroupMapping(types:SSOGroupMappingInput input) returns string|error {
     string mappingId = uuid:createType1AsString();
     int orgId = input.orgUuid ?: DEFAULT_ORG_ID;
-    boolean enabled = input.enabled ?: true;
 
     log:printDebug("Creating SSO group mapping", issuer = input.issuer, claimName = input.claimName, groupId = input.groupId);
 
     sql:ExecutionResult|error result = dbClient->execute(
-        `INSERT INTO sso_group_mappings (mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled)
-         VALUES (${mappingId}, ${orgId}, ${input.issuer}, ${input.claimName}, ${input.claimValue}, ${input.groupId}, ${enabled})`
+        `INSERT INTO sso_group_mappings (mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, project_uuid, integration_uuid)
+         VALUES (${mappingId}, ${orgId}, ${input.issuer}, ${input.claimName}, ${input.claimValue}, ${input.groupId},
+                 ${input?.projectUuid}, ${input?.integrationUuid})`
     );
 
     if result is sql:Error {
         log:printError("Failed to create SSO group mapping", 'error = result);
         match classifySqlError(result) {
             DUPLICATE_KEY => { return error("This SSO group mapping already exists", result); }
-            FOREIGN_KEY_VIOLATION => { return error("The specified organization or group does not exist", result); }
+            FOREIGN_KEY_VIOLATION => { return error("The specified organization, group, project, or integration does not exist", result); }
             VALUE_TOO_LONG => { return error("The provided value exceeds the maximum allowed length", result); }
             _ => { return error("An unexpected error occurred. Please contact your administrator.", result); }
         }
@@ -576,7 +578,7 @@ public isolated function getSSOGroupMappingById(string mappingId) returns types:
     log:printDebug(string `Fetching SSO group mapping ${mappingId}`);
 
     types:SSOGroupMapping mapping = check dbClient->queryRow(
-        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled, created_at, updated_at
+        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, project_uuid, integration_uuid, created_at, updated_at
          FROM sso_group_mappings
          WHERE mapping_id = ${mappingId}`
     );
@@ -590,7 +592,7 @@ public isolated function getSSOGroupMappingsByOrgId(int orgId) returns types:SSO
 
     types:SSOGroupMapping[] mappings = [];
     stream<types:SSOGroupMapping, sql:Error?> mappingStream = dbClient->query(
-        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled, created_at, updated_at
+        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, project_uuid, integration_uuid, created_at, updated_at
          FROM sso_group_mappings
          WHERE org_uuid = ${orgId}
          ORDER BY created_at DESC`
@@ -612,9 +614,12 @@ public isolated function getSSOGroupMappingsWithGroupNamesByOrgId(int orgId)
     types:SSOGroupMappingResponse[] mappings = [];
     stream<types:SSOGroupMappingResponse, sql:Error?> mappingStream = dbClient->query(
         `SELECT sgm.mapping_id, sgm.org_uuid, sgm.issuer, sgm.claim_name, sgm.claim_value,
-                sgm.group_id, sgm.enabled, sgm.created_at, sgm.updated_at, ug.group_name
+                sgm.group_id, sgm.project_uuid, sgm.integration_uuid, sgm.created_at, sgm.updated_at,
+                ug.group_name, p.name AS project_name, c.display_name AS integration_name
          FROM sso_group_mappings sgm
          INNER JOIN user_groups ug ON ug.group_id = sgm.group_id
+         LEFT JOIN projects p ON p.project_id = sgm.project_uuid
+         LEFT JOIN components c ON c.component_id = sgm.integration_uuid
          WHERE sgm.org_uuid = ${orgId}
          ORDER BY sgm.created_at DESC`
     );
@@ -633,7 +638,7 @@ public isolated function getSSOGroupMappingsByIssuer(int orgId, string issuer) r
 
     types:SSOGroupMapping[] mappings = [];
     stream<types:SSOGroupMapping, sql:Error?> mappingStream = dbClient->query(
-        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, enabled, created_at, updated_at
+        `SELECT mapping_id, org_uuid, issuer, claim_name, claim_value, group_id, project_uuid, integration_uuid, created_at, updated_at
          FROM sso_group_mappings
          WHERE org_uuid = ${orgId} AND issuer = ${issuer}
          ORDER BY created_at`
@@ -647,40 +652,7 @@ public isolated function getSSOGroupMappingsByIssuer(int orgId, string issuer) r
     return mappings;
 }
 
-// Update an SSO group mapping within an organization.
-public isolated function updateSSOGroupMapping(string mappingId, int orgId,
-        types:SSOGroupMappingInput input) returns error? {
-    boolean enabled = input.enabled ?: true;
-
-    log:printDebug("Updating SSO group mapping", mappingId = mappingId, orgId = orgId);
-
-    sql:ExecutionResult|error result = dbClient->execute(
-        `UPDATE sso_group_mappings
-         SET issuer = ${input.issuer}, claim_name = ${input.claimName},
-             claim_value = ${input.claimValue}, group_id = ${input.groupId},
-             enabled = ${enabled}, updated_at = CURRENT_TIMESTAMP
-         WHERE mapping_id = ${mappingId} AND org_uuid = ${orgId}`
-    );
-
-    if result is sql:Error {
-        log:printError("Failed to update SSO group mapping", 'error = result, mappingId = mappingId);
-        match classifySqlError(result) {
-            DUPLICATE_KEY => { return error("This SSO group mapping already exists", result); }
-            FOREIGN_KEY_VIOLATION => { return error("The specified organization or group does not exist", result); }
-            VALUE_TOO_LONG => { return error("The provided value exceeds the maximum allowed length", result); }
-            _ => { return error("An unexpected error occurred. Please contact your administrator.", result); }
-        }
-    }
-    if result is error {
-        log:printError("Failed to update SSO group mapping", 'error = result, mappingId = mappingId);
-        return result;
-    }
-    if result.affectedRowCount == 0 {
-        return error("SSO group mapping not found");
-    }
-
-    log:printInfo("Successfully updated SSO group mapping", mappingId = mappingId);
-}
+// SSO group mappings are immutable (like group-role mappings): change means delete + create.
 
 // Delete an SSO group mapping within an organization.
 public isolated function deleteSSOGroupMapping(string mappingId, int orgId) returns error? {

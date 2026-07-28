@@ -260,15 +260,15 @@ public isolated function extractClaimValues(types:OIDCIdTokenClaims claims, stri
     return normalizeClaimValues(currentValue, normalizedPath);
 }
 
-// Resolve enabled mappings for the validated token issuer into desired
-// federated memberships. Mapping persistence and stale-row cleanup remain in
-// the storage layer.
+// Resolve mappings for the validated token issuer into desired federated
+// memberships. Mapping persistence and stale-row cleanup remain in the
+// storage layer.
 public isolated function resolveFederatedGroupMemberships(types:OIDCIdTokenClaims claims,
         types:SSOGroupMapping[] mappings) returns types:FederatedGroupMembershipInput[] {
     types:FederatedGroupMembershipInput[] memberships = [];
 
     foreach types:SSOGroupMapping mapping in mappings {
-        if !mapping.enabled || mapping.issuer != claims.iss {
+        if mapping.issuer != claims.iss {
             continue;
         }
 

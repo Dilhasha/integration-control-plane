@@ -93,13 +93,51 @@ function testSSOGroupMappingStorage() returns error? {
     test:assertEquals(mapping.claimName, "groups", "Claim name should be persisted");
     test:assertEquals(mapping.claimValue, mappingInput.claimValue, "Claim value should be persisted");
     test:assertEquals(mapping.groupId, groupId, "Mapped group should be persisted");
-    test:assertTrue(mapping.enabled, "Mapping should be enabled by default");
+    test:assertEquals(mapping.projectUuid, (), "Mappings default to org-level scope");
+    test:assertEquals(mapping.integrationUuid, (), "Mappings default to org-level scope");
 
     types:SSOGroupMapping[] mappings = check storage:getSSOGroupMappingsByOrgId(storage:DEFAULT_ORG_ID);
     test:assertTrue(hasSSOGroupMapping(mappings, mappingId), "Created mapping should be listed");
 
     string|error duplicateMapping = storage:createSSOGroupMapping(mappingInput);
     test:assertTrue(duplicateMapping is error, "Duplicate SSO group mappings should be rejected");
+
+    // Project-scoped mapping: scope columns persist and duplicates are rejected
+    // across scopes because the unique constraint ignores scope.
+    types:SSOGroupMappingInput scopedMappingInput = {
+        issuer: SSO_MAPPING_TEST_ISSUER,
+        claimName: "groups",
+        claimValue: "icp-project-devs-" + uniqueValue,
+        groupId: groupId,
+        projectUuid: projectId
+    };
+    string scopedMappingId = check storage:createSSOGroupMapping(scopedMappingInput);
+    types:SSOGroupMapping scopedMapping = check storage:getSSOGroupMappingById(scopedMappingId);
+    test:assertEquals(scopedMapping.projectUuid, projectId, "Project scope should be persisted");
+    test:assertEquals(scopedMapping.integrationUuid, (), "Integration scope should stay empty");
+
+    types:SSOGroupMappingResponse[] enrichedMappings =
+        check storage:getSSOGroupMappingsWithGroupNamesByOrgId(storage:DEFAULT_ORG_ID);
+    boolean foundScopedMapping = false;
+    foreach types:SSOGroupMappingResponse enriched in enrichedMappings {
+        if enriched.mappingId == scopedMappingId {
+            foundScopedMapping = true;
+            test:assertEquals(enriched.projectName, "SSO Test Project " + uniqueValue,
+                "Enriched listing should include the scope project name");
+        }
+    }
+    test:assertTrue(foundScopedMapping, "Scoped mapping should appear in the enriched listing");
+
+    types:SSOGroupMappingInput crossScopeDuplicate = {
+        issuer: SSO_MAPPING_TEST_ISSUER,
+        claimName: "groups",
+        claimValue: mappingInput.claimValue,
+        groupId: groupId,
+        projectUuid: projectId
+    };
+    string|error crossScopeResult = storage:createSSOGroupMapping(crossScopeDuplicate);
+    test:assertTrue(crossScopeResult is error,
+        "The same claim-to-group mapping must be rejected regardless of scope");
 
     int federatedMappingId = check storage:addFederatedGroupUserMapping({
         issuer: SSO_MAPPING_TEST_ISSUER,
@@ -255,6 +293,70 @@ function testFederatedMembershipReconciliation() returns error? {
         "Reconciliation should not modify memberships owned by another issuer");
     test:assertTrue(check storage:isUserInGroup(userId, groupId),
         "Reconciliation should preserve manual memberships");
+
+    check storage:deleteUserV2(userId, "test-cleanup-user");
+    check storage:deleteGroup(groupId);
+}
+
+// Deleting a mapping is the replacement for the removed enable/disable flow:
+// the membership it granted disappears on the user's next login even though
+// the IdP still sends the same claim.
+@test:Config {
+    groups: ["sso-rbac", "storage"]
+}
+function testDeletedMappingRemovesMembershipOnNextLogin() returns error? {
+    string uniqueValue = uuid:createType1AsString();
+    string userId = uuid:createType1AsString();
+    string groupId = check storage:createGroup({
+        groupName: "SSO Delete Test Group " + uniqueValue,
+        description: "Temporary group for mapping deletion tests"
+    });
+    _ = check storage:createUserV2(
+        userId,
+        "sso-delete-user-" + uniqueValue,
+        "SSO Delete User",
+        [],
+        true
+    );
+
+    string claimValue = "delete-test-" + uniqueValue;
+    string mappingId = check storage:createSSOGroupMapping({
+        issuer: SSO_MAPPING_TEST_ISSUER,
+        claimName: "groups",
+        claimValue: claimValue,
+        groupId: groupId
+    });
+
+    types:OIDCIdTokenClaims claims = {
+        sub: userId,
+        iss: SSO_MAPPING_TEST_ISSUER,
+        aud: "icp",
+        exp: 2000000000,
+        iat: 1999999000,
+        rawClaims: {"groups": [claimValue]}
+    };
+
+    // First login: the mapping grants a federated membership.
+    types:SSOGroupMapping[] issuerMappings =
+        check storage:getSSOGroupMappingsByIssuer(storage:DEFAULT_ORG_ID, SSO_MAPPING_TEST_ISSUER);
+    types:FederatedGroupMembershipInput[] desiredMemberships =
+        auth:resolveFederatedGroupMemberships(claims, issuerMappings);
+    check storage:reconcileFederatedGroupUserMappings(
+        storage:DEFAULT_ORG_ID, SSO_MAPPING_TEST_ISSUER, userId, desiredMemberships);
+    types:FederatedGroupUserMapping[] afterLogin = check storage:getFederatedGroupUserMappings(userId);
+    test:assertEquals(countFederatedMappingsForIssuer(afterLogin, SSO_MAPPING_TEST_ISSUER), 1,
+        "Login sync should create the federated membership");
+
+    // Delete the mapping and simulate the next login with unchanged claims.
+    check storage:deleteSSOGroupMapping(mappingId, storage:DEFAULT_ORG_ID);
+    issuerMappings =
+        check storage:getSSOGroupMappingsByIssuer(storage:DEFAULT_ORG_ID, SSO_MAPPING_TEST_ISSUER);
+    desiredMemberships = auth:resolveFederatedGroupMemberships(claims, issuerMappings);
+    check storage:reconcileFederatedGroupUserMappings(
+        storage:DEFAULT_ORG_ID, SSO_MAPPING_TEST_ISSUER, userId, desiredMemberships);
+    types:FederatedGroupUserMapping[] afterDelete = check storage:getFederatedGroupUserMappings(userId);
+    test:assertEquals(countFederatedMappingsForIssuer(afterDelete, SSO_MAPPING_TEST_ISSUER), 0,
+        "Deleting a mapping must remove its federated membership on the next login");
 
     check storage:deleteUserV2(userId, "test-cleanup-user");
     check storage:deleteGroup(groupId);

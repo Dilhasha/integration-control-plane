@@ -23,6 +23,7 @@ import { useNavigate, useParams } from 'react-router';
 import SearchField from '../components/SearchField';
 import { useAuth } from '../auth/AuthContext';
 import { useAccessControl } from '../contexts/AccessControlContext';
+import { isFederatedAccessControlEnabled } from '../config/api';
 import { Permissions } from '../constants/permissions';
 import { useUsers, useGroups, useUpdateUserGroups, useRemoveUserFromGroup } from '../api/authQueries';
 import type { User, Group } from '../api/auth';
@@ -118,8 +119,10 @@ function UserDetailView({ orgHandler, user, onBack }: { orgHandler: string; user
         <ListingTable.Toolbar
           searchSlot={<SearchField value={search} onChange={setSearch} />}
           actions={
+            // In federated mode memberships are added through SSO group mappings.
             !isSelf &&
-            canManageUsers && (
+            canManageUsers &&
+            !isFederatedAccessControlEnabled() && (
               <Button variant="contained" startIcon={<Plus size={18} />} onClick={() => setAssigning(true)}>
                 Assign Groups
               </Button>

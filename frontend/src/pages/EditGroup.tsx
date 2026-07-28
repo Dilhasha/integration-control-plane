@@ -51,6 +51,7 @@ import { Permissions, ALL_ROLE_MODIFY_PERMISSIONS } from '../constants/permissio
 import SearchField from '../components/SearchField';
 import { useAccessControl } from '../contexts/AccessControlContext';
 import { useGroups, useGroupRoles, useGroupUsers, useAddRolesToGroup, useRemoveRoleFromGroup, useAddUsersToGroup, useRemoveUserFromGroup, useUsers, useRoles } from '../api/authQueries';
+import { isFederatedAccessControlEnabled } from '../config/api';
 import { useAllEnvironments } from '../api/queries';
 import type { Group, Role } from '../api/auth';
 import { orgAccessControlUrl } from '../paths';
@@ -271,7 +272,9 @@ export function GroupDetailView({ orgHandler, group, onBack, projectId, componen
             <ListingTable.Toolbar
               searchSlot={<SearchField value={search} onChange={setSearch} />}
               actions={
-                canManageGroups && (
+                // In federated mode memberships are added through SSO group mappings.
+                canManageGroups &&
+                !isFederatedAccessControlEnabled() && (
                   <Button variant="contained" startIcon={<Plus size={16} />} onClick={() => setAddingUsers(true)}>
                     Add Users
                   </Button>

@@ -65,7 +65,7 @@ service /auth on httpListener {
     }
     resource function get capabilities() returns http:Ok {
         string[] caps;
-        if disablePasswordLogin {
+        if passwordLoginDisabled {
             caps = [];
         } else if ldapUserStoreEnabled {
             caps = ["authenticate"];
@@ -84,7 +84,7 @@ service /auth on httpListener {
     isolated resource function post login(types:Credentials credentials, http:Request req) returns http:Ok|http:Unauthorized|http:Forbidden|http:TooManyRequests|http:InternalServerError|error {
         log:printInfo("Login attempt for user", username = credentials.username);
 
-        if disablePasswordLogin {
+        if passwordLoginDisabled {
             log:printWarn("Password login rejected because it is disabled", username = credentials.username);
             storage:logAuditEvent(storage:AUDIT_LOGIN_FAILURE, resourceType = storage:AUDIT_RESOURCE_SESSION,
                     details = string `Password login rejected because password login is disabled for user '${credentials.username}'`,
@@ -1284,9 +1284,25 @@ service /auth on httpListener {
             return utils:createUnauthorizedError("Invalid or missing authentication token");
         }
 
-        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        string? validationError = validateSSOGroupMappingInput(mappingInput);
+        if validationError is string {
+            return utils:createBadRequestError(validationError);
+        }
+
+        string? projectUuid = normalizeOptionalId(mappingInput?.projectUuid);
+        string? integrationUuid = normalizeOptionalId(mappingInput?.integrationUuid);
+
+        // Authorize at the mapping's administrative scope so project/integration
+        // scoped admins can manage mappings at their level but not broader ones.
+        types:AccessScope mappingScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        if projectUuid is string {
+            mappingScope.projectUuid = projectUuid;
+        }
+        if integrationUuid is string {
+            mappingScope.integrationUuid = integrationUuid;
+        }
         boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
-            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], mappingScope);
         if hasPermission is error {
             log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
             return utils:createInternalServerError("Error checking permissions");
@@ -1294,14 +1310,34 @@ service /auth on httpListener {
         if !hasPermission {
             return <http:Forbidden>{
                 body: {
-                    message: "Insufficient permissions to create SSO group mappings"
+                    message: "Insufficient permissions to create SSO group mappings at the requested scope"
                 }
             };
         }
 
-        string? validationError = validateSSOGroupMappingInput(mappingInput);
-        if validationError is string {
-            return utils:createBadRequestError(validationError);
+        string? projectName = ();
+        string? integrationName = ();
+        if projectUuid is string {
+            types:Project|error project = storage:getProjectById(projectUuid);
+            if project is error || project.orgId != storage:DEFAULT_ORG_ID {
+                return <http:NotFound>{
+                    body: {
+                        message: "Target project not found"
+                    }
+                };
+            }
+            projectName = project.name;
+        }
+        if integrationUuid is string {
+            types:Component|error component = storage:getComponentById(integrationUuid);
+            if component is error || component.projectId != projectUuid {
+                return <http:NotFound>{
+                    body: {
+                        message: "Target integration not found in the specified project"
+                    }
+                };
+            }
+            integrationName = component.displayName;
         }
 
         types:SSOGroupMappingInput inputWithOrg = {
@@ -1309,9 +1345,14 @@ service /auth on httpListener {
             claimName: mappingInput.claimName.trim(),
             claimValue: mappingInput.claimValue.trim(),
             groupId: mappingInput.groupId.trim(),
-            enabled: mappingInput.enabled ?: true,
             orgUuid: storage:DEFAULT_ORG_ID
         };
+        if projectUuid is string {
+            inputWithOrg.projectUuid = projectUuid;
+        }
+        if integrationUuid is string {
+            inputWithOrg.integrationUuid = integrationUuid;
+        }
         types:Group|error targetGroup = storage:getGroupById(inputWithOrg.groupId);
         if targetGroup is error || targetGroup.orgUuid != storage:DEFAULT_ORG_ID {
             return <http:NotFound>{
@@ -1325,9 +1366,11 @@ service /auth on httpListener {
         if mappingId is error {
             log:printError("Error creating SSO group mapping", mappingId);
             if mappingId.message().includes("already exists") {
+                // The unique constraint ignores scope, so the conflicting mapping
+                // may live at a different level than the caller can see.
                 return <http:Conflict>{
                     body: {
-                        message: mappingId.message()
+                        message: describeSSOMappingConflict(inputWithOrg)
                     }
                 };
             }
@@ -1342,109 +1385,17 @@ service /auth on httpListener {
 
         types:SSOGroupMappingResponse response = {
             ...createdMapping,
-            groupName: targetGroup.groupName
+            groupName: targetGroup.groupName,
+            projectName: projectName,
+            integrationName: integrationName
         };
         return <http:Created>{
             body: response
         };
     }
 
-    // PUT /auth/orgs/{orgHandle}/sso/group-mappings/{mappingId} - Update an SSO group mapping
-    @http:ResourceConfig {
-        auth: [
-            {
-                jwtValidatorConfig: {
-                    issuer: frontendJwtIssuer,
-                    audience: frontendJwtAudience,
-                    signatureConfig: {
-                        secret: resolvedFrontendJwtHMACSecret
-                    }
-                }
-            }
-        ]
-    }
-    isolated resource function put orgs/[string orgHandle]/sso/'group\-mappings/[string mappingId](
-            @http:Payload types:SSOGroupMappingInput mappingInput, http:Request req)
-            returns http:Ok|http:BadRequest|http:Conflict|http:NotFound|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
-        log:printInfo("Updating SSO group mapping", orgHandle = orgHandle, mappingId = mappingId);
-
-        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
-        if userContext is error {
-            return utils:createUnauthorizedError("Invalid or missing authentication token");
-        }
-
-        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
-        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
-            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
-        if hasPermission is error {
-            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
-            return utils:createInternalServerError("Error checking permissions");
-        }
-        if !hasPermission {
-            return <http:Forbidden>{
-                body: {
-                    message: "Insufficient permissions to update SSO group mappings"
-                }
-            };
-        }
-
-        string? validationError = validateSSOGroupMappingInput(mappingInput);
-        if validationError is string {
-            return utils:createBadRequestError(validationError);
-        }
-
-        types:SSOGroupMappingInput inputWithOrg = {
-            issuer: mappingInput.issuer.trim(),
-            claimName: mappingInput.claimName.trim(),
-            claimValue: mappingInput.claimValue.trim(),
-            groupId: mappingInput.groupId.trim(),
-            enabled: mappingInput.enabled ?: true,
-            orgUuid: storage:DEFAULT_ORG_ID
-        };
-        types:Group|error targetGroup = storage:getGroupById(inputWithOrg.groupId);
-        if targetGroup is error || targetGroup.orgUuid != storage:DEFAULT_ORG_ID {
-            return <http:NotFound>{
-                body: {
-                    message: "Target group not found"
-                }
-            };
-        }
-
-        error? updateResult =
-            storage:updateSSOGroupMapping(mappingId, storage:DEFAULT_ORG_ID, inputWithOrg);
-        if updateResult is error {
-            log:printError("Error updating SSO group mapping", updateResult, mappingId = mappingId);
-            if updateResult.message().includes("not found") {
-                return <http:NotFound>{
-                    body: {
-                        message: "SSO group mapping not found"
-                    }
-                };
-            }
-            if updateResult.message().includes("already exists") {
-                return <http:Conflict>{
-                    body: {
-                        message: updateResult.message()
-                    }
-                };
-            }
-            return utils:createInternalServerError("Failed to update SSO group mapping");
-        }
-
-        types:SSOGroupMapping|error updatedMapping = storage:getSSOGroupMappingById(mappingId);
-        if updatedMapping is error {
-            log:printError("Error fetching updated SSO group mapping", updatedMapping, mappingId = mappingId);
-            return utils:createInternalServerError("Mapping updated but failed to fetch details");
-        }
-
-        types:SSOGroupMappingResponse response = {
-            ...updatedMapping,
-            groupName: targetGroup.groupName
-        };
-        return <http:Ok>{
-            body: response
-        };
-    }
+    // SSO group mappings are immutable: there is no update endpoint. Changing a
+    // mapping's issuer, claim, group, or scope means delete + create.
 
     // DELETE /auth/orgs/{orgHandle}/sso/group-mappings/{mappingId} - Delete an SSO group mapping
     @http:ResourceConfig {
@@ -1470,9 +1421,27 @@ service /auth on httpListener {
             return utils:createUnauthorizedError("Invalid or missing authentication token");
         }
 
-        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        types:SSOGroupMapping|error mapping = storage:getSSOGroupMappingById(mappingId);
+        if mapping is error || mapping.orgUuid != storage:DEFAULT_ORG_ID {
+            return <http:NotFound>{
+                body: {
+                    message: "SSO group mapping not found"
+                }
+            };
+        }
+
+        // Authorize at the mapping's administrative scope, mirroring create.
+        types:AccessScope mappingScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        string? mappingProjectUuid = mapping.projectUuid;
+        if mappingProjectUuid is string {
+            mappingScope.projectUuid = mappingProjectUuid;
+        }
+        string? mappingIntegrationUuid = mapping.integrationUuid;
+        if mappingIntegrationUuid is string {
+            mappingScope.integrationUuid = mappingIntegrationUuid;
+        }
         boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
-            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], mappingScope);
         if hasPermission is error {
             log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
             return utils:createInternalServerError("Error checking permissions");
@@ -1480,7 +1449,7 @@ service /auth on httpListener {
         if !hasPermission {
             return <http:Forbidden>{
                 body: {
-                    message: "Insufficient permissions to delete SSO group mappings"
+                    message: "Insufficient permissions to delete SSO group mappings at this scope"
                 }
             };
         }
@@ -1542,6 +1511,14 @@ service /auth on httpListener {
             return <http:Forbidden>{
                 body: {
                     message: "Insufficient permissions to add users to group"
+                }
+            };
+        }
+
+        if federatedAccessControlEnabled {
+            return <http:Forbidden>{
+                body: {
+                    message: "Manual group membership additions are disabled because federated access control is enabled. Manage memberships through SSO group mappings."
                 }
             };
         }
@@ -1817,6 +1794,17 @@ service /auth on httpListener {
             if !keep {
                 toRemove.push(cid);
             }
+        }
+
+        // In federated mode manual memberships come from SSO group mappings;
+        // admins may still remove manual rows (e.g. a stale super admin grant)
+        // but must not add new ones.
+        if federatedAccessControlEnabled && toAdd.length() > 0 {
+            return <http:Forbidden>{
+                body: {
+                    message: "Manual group membership additions are disabled because federated access control is enabled. Only removals are allowed."
+                }
+            };
         }
 
         int added = 0;
@@ -2420,6 +2408,15 @@ service /auth on httpListener {
             return <http:Forbidden>{
                 body: {
                     message: "Insufficient permissions to create users"
+                }
+            };
+        }
+
+        // SSO-only deployments (modes 2 and 3) provision users through SSO login.
+        if passwordLoginDisabled {
+            return <http:Forbidden>{
+                body: {
+                    message: "User creation is disabled because password login is disabled. Users are provisioned through SSO login."
                 }
             };
         }
@@ -3567,7 +3564,55 @@ isolated function validateSSOGroupMappingInput(types:SSOGroupMappingInput input)
         return "Group ID must not exceed 36 characters";
     }
 
+    string? projectUuid = normalizeOptionalId(input?.projectUuid);
+    string? integrationUuid = normalizeOptionalId(input?.integrationUuid);
+    if projectUuid is string && projectUuid.length() > 36 {
+        return "Project ID must not exceed 36 characters";
+    }
+    if integrationUuid is string && integrationUuid.length() > 36 {
+        return "Integration ID must not exceed 36 characters";
+    }
+    if integrationUuid is string && projectUuid is () {
+        return "Integration-scoped mappings require a project ID";
+    }
+
     return ();
+}
+
+// Trim an optional ID; blank values are treated as absent (org-level scope).
+isolated function normalizeOptionalId(string? value) returns string? {
+    if value is () {
+        return ();
+    }
+    string trimmed = value.trim();
+    return trimmed == "" ? () : trimmed;
+}
+
+// The sso_group_mappings unique constraint ignores scope, so a duplicate may
+// have been created at a level the caller's tab does not manage. Name the
+// existing mapping's scope in the conflict message to avoid confusion.
+isolated function describeSSOMappingConflict(types:SSOGroupMappingInput input) returns string {
+    string baseMessage = "This SSO group mapping already exists";
+    types:SSOGroupMappingResponse[]|error mappings =
+        storage:getSSOGroupMappingsWithGroupNamesByOrgId(input.orgUuid ?: storage:DEFAULT_ORG_ID);
+    if mappings is error {
+        return baseMessage;
+    }
+    foreach types:SSOGroupMappingResponse mapping in mappings {
+        if mapping.issuer == input.issuer && mapping.claimName == input.claimName
+                && mapping.claimValue == input.claimValue && mapping.groupId == input.groupId {
+            string? integrationName = mapping.integrationName;
+            string? projectName = mapping.projectName;
+            if integrationName is string {
+                return string `${baseMessage} for integration '${integrationName}'`;
+            }
+            if projectName is string {
+                return string `${baseMessage} in project '${projectName}'`;
+            }
+            return string `${baseMessage} at the organization level`;
+        }
+    }
+    return baseMessage;
 }
 
 isolated function grantSuperAdminFromSSOClaims(string userId, string username, types:OIDCIdTokenClaims claims,

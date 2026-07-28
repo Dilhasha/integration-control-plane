@@ -219,6 +219,8 @@ CREATE INDEX idx_group_user_user_uuid ON group_user_mapping (user_uuid);
 CREATE INDEX idx_group_user_group_id ON group_user_mapping (group_id);
 
 -- SSO group mappings (IdP claim value -> ICP group)
+-- project_uuid/integration_uuid record the administrative scope a mapping was
+-- created at (NULL = org level); they do not affect login-time sync.
 CREATE TABLE sso_group_mappings (
     mapping_id VARCHAR(36) PRIMARY KEY,
     org_uuid INT NOT NULL DEFAULT 1,
@@ -226,11 +228,18 @@ CREATE TABLE sso_group_mappings (
     claim_name VARCHAR(128) NOT NULL,
     claim_value VARCHAR(255) NOT NULL,
     group_id VARCHAR(36) NOT NULL,
-    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    project_uuid CHAR(36),
+    integration_uuid CHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_sso_group_mapping_org FOREIGN KEY (org_uuid) REFERENCES organizations (org_id) ON DELETE CASCADE,
     CONSTRAINT fk_sso_group_mapping_group FOREIGN KEY (group_id) REFERENCES user_groups (group_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sso_group_mapping_project FOREIGN KEY (project_uuid) REFERENCES projects (project_id) ON DELETE CASCADE,
+    CONSTRAINT fk_sso_group_mapping_integration FOREIGN KEY (integration_uuid) REFERENCES components (component_id) ON DELETE CASCADE,
+    CONSTRAINT chk_sso_mapping_integration_requires_project CHECK (
+        integration_uuid IS NULL
+        OR project_uuid IS NOT NULL
+    ),
     CONSTRAINT unique_sso_group_mapping UNIQUE (org_uuid, issuer, claim_name, claim_value, group_id)
 );
 
@@ -239,6 +248,10 @@ CREATE INDEX idx_sso_group_mapping_org ON sso_group_mappings (org_uuid);
 CREATE INDEX idx_sso_group_mapping_issuer_claim ON sso_group_mappings (issuer, claim_name, claim_value);
 
 CREATE INDEX idx_sso_group_mapping_group ON sso_group_mappings (group_id);
+
+CREATE INDEX idx_sso_group_mapping_project ON sso_group_mappings (project_uuid);
+
+CREATE INDEX idx_sso_group_mapping_integration ON sso_group_mappings (integration_uuid);
 
 -- Federated group-user mappings (SSO-owned memberships)
 CREATE TABLE federated_group_user_mapping (

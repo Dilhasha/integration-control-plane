@@ -133,6 +133,8 @@ public type EffectiveGroupUserMembership record {|
 |};
 
 // SSO group mapping - links IdP claim values to existing ICP groups.
+// projectUuid/integrationUuid record the administrative scope the mapping was
+// created at (absent = org level); they do not affect login-time sync.
 public type SSOGroupMapping record {|
     @sql:Column {name: "mapping_id"}
     string mappingId;
@@ -151,7 +153,11 @@ public type SSOGroupMapping record {|
     @sql:Column {name: "group_id"}
     string groupId;
 
-    boolean enabled;
+    @sql:Column {name: "project_uuid"}
+    string? projectUuid = ();
+
+    @sql:Column {name: "integration_uuid"}
+    string? integrationUuid = ();
 
     @sql:Column {name: "created_at"}
     string createdAt?;
@@ -179,7 +185,11 @@ public type SSOGroupMappingResponse record {|
     @sql:Column {name: "group_id"}
     string groupId;
 
-    boolean enabled;
+    @sql:Column {name: "project_uuid"}
+    string? projectUuid = ();
+
+    @sql:Column {name: "integration_uuid"}
+    string? integrationUuid = ();
 
     @sql:Column {name: "created_at"}
     string createdAt?;
@@ -189,6 +199,12 @@ public type SSOGroupMappingResponse record {|
 
     @sql:Column {name: "group_name"}
     string groupName;
+
+    @sql:Column {name: "project_name"}
+    string? projectName = ();
+
+    @sql:Column {name: "integration_name"}
+    string? integrationName = ();
 |};
 
 // Input for creating IdP-to-ICP group mappings.
@@ -198,7 +214,8 @@ public type SSOGroupMappingInput record {|
     string claimName;
     string claimValue;
     string groupId;
-    boolean enabled?;
+    string projectUuid?;
+    string integrationUuid?;
 |};
 
 // Federated group-user mapping - group memberships owned by SSO sync.
