@@ -1500,13 +1500,22 @@ public isolated function buildEffectivePermissionsWithScope(string userId, types
     return contextualPermissions;
 }
 
-// Check if user is a member of a specific group, manually or via an SSO-owned membership
+// Check if user has a MANUAL membership in a specific group.
+//
+// This deliberately queries `group_user_mapping` rather than
+// `v_effective_group_user_mapping`: the SSO super-admin bootstrap uses it to
+// decide whether to write a manual `Super Admins` row, and that row must be
+// sticky (surviving claim/mapping removal). Widening this to effective
+// membership would let a federated Super Admins membership suppress the manual
+// grant, so deleting the mapping would silently revoke super admin.
+// Use `getGroupUsersWithMembershipSource()` or the effective view when you need
+// federated memberships included.
 public isolated function isUserInGroup(string userId, string groupId) returns boolean|error {
-    log:printDebug(string `Checking if user ${userId} is in group ${groupId}`);
+    log:printDebug(string `Checking if user ${userId} has a manual membership in group ${groupId}`);
 
     int count = check dbClient->queryRow(
         `SELECT COUNT(*) as count
-         FROM v_effective_group_user_mapping
+         FROM group_user_mapping
          WHERE user_uuid = ${userId} AND group_id = ${groupId}`
     );
 
