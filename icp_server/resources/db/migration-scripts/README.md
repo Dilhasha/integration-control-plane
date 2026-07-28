@@ -106,3 +106,119 @@ sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_openapi_defin
 # Oracle (run as the ICP schema owner)
 sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_openapi_definitions_oracle.sql
 ```
+
+---
+
+## Upgrading an existing ICP v2 deployment: service-to-listener bindings
+
+Deployments whose database was initialised **before runtimes reported which listeners each
+service is attached to** must run the service-listener-bindings upgrade script once against the
+**main ICP DB** — **before** deploying this server version. Fresh installs do not need it — the
+`*_init.sql` scripts already contain everything.
+
+Without it, every full heartbeat fails: `insertRuntimeArtifacts` unconditionally issues
+`DELETE FROM bi_service_listener_bindings` for the reporting runtime before inserting its
+services, so a missing table errors out that statement and aborts the whole heartbeat
+transaction.
+
+Pick the script matching your database engine:
+
+| Engine | Script |
+|---|---|
+| H2 | `add_service_listener_bindings_h2.sql` |
+| MySQL / MariaDB | `add_service_listener_bindings_mysql.sql` |
+| PostgreSQL | `add_service_listener_bindings_postgresql.sql` |
+| Microsoft SQL Server | `add_service_listener_bindings_mssql.sql` |
+| Oracle (19c+) | `add_service_listener_bindings_oracle.sql` |
+
+Each script adds the `bi_service_listener_bindings` table — many-to-many, keyed by
+`(runtime_id, service_name, service_package, listener_name)` and cascade-deleted with the
+runtime — plus indexes for lookups by service and by listener. The binding arrives in the
+heartbeat as `heartbeat.artifacts.services[].listeners` and is keyed to
+`bi_runtime_listener_artifacts` by `(runtime_id, listener_name)`.
+
+The scripts are **idempotent** — safe to re-run. No server restart is required; the next
+heartbeat starts populating the table.
+
+```bash
+# H2 (server may stay running thanks to AUTO_SERVER)
+java -cp <path-to-h2.jar> org.h2.tools.RunScript \
+  -url "jdbc:h2:file:./database/icp_db;MODE=MySQL;AUTO_SERVER=TRUE" \
+  -user <db_user> -password <db_password> \
+  -script add_service_listener_bindings_h2.sql
+
+# MySQL
+mysql -u <admin_user> -p <icp_db_name> < add_service_listener_bindings_mysql.sql
+
+# PostgreSQL
+psql -U <admin_user> -d <icp_db_name> -f add_service_listener_bindings_postgresql.sql
+
+# Microsoft SQL Server
+sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_service_listener_bindings_mssql.sql
+
+# Oracle (run as the ICP schema owner)
+sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_service_listener_bindings_oracle.sql
+```
+
+---
+
+## Upgrading an existing ICP v2 deployment: SSO group mapping
+
+Deployments whose database was initialised **before SSO-driven group membership** must run the
+SSO group mapping upgrade script once against the **main ICP DB** — **before** deploying this
+server version. Fresh installs do not need it — the `*_init.sql` scripts already contain
+everything.
+
+**This applies to every deployment, not just those using SSO.** The script rebinds the core
+RBAC access views onto a new membership view, and `buildUserAuthzContext` — the authorization
+context built for authenticated requests — resolves a user's groups through it regardless of
+whether SSO is configured. Without the script, those queries reference objects that do not
+exist and authorization fails, so it is not optional for password-only deployments.
+
+Pick the script matching your database engine:
+
+| Engine | Script |
+|---|---|
+| H2 | `add_sso_group_mapping_tables_h2.sql` |
+| MySQL / MariaDB | `add_sso_group_mapping_tables_mysql.sql` |
+| PostgreSQL | `add_sso_group_mapping_tables_postgresql.sql` |
+| Microsoft SQL Server | `add_sso_group_mapping_tables_mssql.sql` |
+| Oracle (19c+) | `add_sso_group_mapping_tables_oracle.sql` |
+
+Each script applies, in order:
+
+1. `sso_group_mappings` — maps an IdP claim value to an ICP group, with optional project or
+   integration scope
+2. `federated_group_user_mapping` — SSO-owned group memberships, kept separate from the manual
+   ones in `group_user_mapping` so the two can be told apart and managed independently
+3. `v_effective_group_user_mapping` — a `UNION` of manual and SSO-owned memberships
+4. Rebinds `v_user_project_access`, `v_user_integration_access` and `v_user_environment_access`
+   onto that view, so permission resolution honours federated memberships
+
+Step 4 is the reason this is more than a table addition: the three access views already exist in
+a pre-SSO database, reading `group_user_mapping` directly. Their column lists do not change —
+only the membership source — and the definitions match the `*_init.sql` ones, so a migrated
+schema ends up identical to a fresh install.
+
+The scripts are **idempotent** — safe to re-run, including after a partial failure. No data
+backfill is involved: federated memberships are recorded as users log in through the IdP.
+
+```bash
+# H2 (server may stay running thanks to AUTO_SERVER)
+java -cp <path-to-h2.jar> org.h2.tools.RunScript \
+  -url "jdbc:h2:file:./database/icp_db;MODE=MySQL;AUTO_SERVER=TRUE" \
+  -user <db_user> -password <db_password> \
+  -script add_sso_group_mapping_tables_h2.sql
+
+# MySQL
+mysql -u <admin_user> -p <icp_db_name> < add_sso_group_mapping_tables_mysql.sql
+
+# PostgreSQL
+psql -U <admin_user> -d <icp_db_name> -f add_sso_group_mapping_tables_postgresql.sql
+
+# Microsoft SQL Server
+sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_sso_group_mapping_tables_mssql.sql
+
+# Oracle (run as the ICP schema owner)
+sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_sso_group_mapping_tables_oracle.sql
+```
