@@ -324,7 +324,7 @@ public type Node record {
 // on the baseline heartbeat shape. Update this list whenever an optional field is added to
 // Heartbeat below.
 final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS =
-        ["workflowCallbackUrl", "tryItHost", "openApiDefinitions", "workflowMetadata"];
+        ["tryItHost", "openApiDefinitions", "workflowMetadata"];
 
 // Heartbeat that includes all runtime information for registration/updates.
 // Open record so parsing tolerates fields from a newer agent that this server
@@ -333,7 +333,6 @@ final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS =
 public type Heartbeat record {
     string heartbeatVersion = "v1.0"; // Version of the heartbeat format
     string runtimeId; // Unique identifier for the runtime
-    string workflowCallbackUrl?; // Base URL of the runtime's workflow management service (when it hosts workflows)
     string? runtime = (); // Alias for runtimeId (for backward compatibility)
     string runtimeType; // "wso2-mi" from payloads
     string status; // "RUNNING", "STOPPED", etc.
@@ -976,14 +975,6 @@ public type Workflow record {
     ArtifactState state = "enabled"; // derived from isActive for the UI status chip
     ArtifactRuntimeInfo[]? runtimes?;
 };
-
-// Reachable workflow management endpoint of a runtime (callbackUrl from the heartbeat)
-// plus the org-secret key id the runtime authenticated with — used by the workflow proxy
-// to reconstruct the runtime's management API key (`<keyId>.<keyMaterial>`).
-public type WorkflowTarget record {|
-    string callbackUrl;
-    string? keyId;
-|};
 
 // Resolved target for a Try-It proxy request: the runtime's self-reported reachable host
 // (try_it_host from the heartbeat) plus the requested listener's protocol, used together to

@@ -54,7 +54,6 @@ class Job {
         }
         // Runtimes that just went offline were deleted (K8S) or marked OFFLINE (VM);
         // drop the workflow proxy's cached clients for their callback URLs.
-        pruneWorkflowClientCache();
         // Same idea for the Try-It proxy's cached clients.
         pruneTryitClientCache();
     }

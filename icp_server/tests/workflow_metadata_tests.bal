@@ -48,7 +48,7 @@ final map<json> & readonly WF_META_DOCUMENT = {
 function buildWorkflowMetadataHeartbeat(string runtimeId, string runtimeName,
         boolean withMetadata) returns types:Heartbeat {
     types:Heartbeat heartbeat = buildWorkflowHeartbeat(runtimeId, runtimeName,
-            WF_COMPONENT_2_ID, WF_PROD_ENV_ID, ());
+            WF_COMPONENT_2_ID, WF_PROD_ENV_ID);
     if withMetadata {
         heartbeat.workflowMetadata = WF_META_DOCUMENT.clone();
         heartbeat.capabilities = ["workflowCommands"];

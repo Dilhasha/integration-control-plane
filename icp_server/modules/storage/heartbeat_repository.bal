@@ -535,7 +535,9 @@ isolated function upsertRuntime(types:Heartbeat heartbeat) returns string?|error
     string runtimeHostname = heartbeat.runtimeHostname ?: "";
     string runtimePort = heartbeat.runtimePort ?: "";
     // Workflow management service base URL reported by the runtime bridge (optional; NULL when absent)
-    string? callbackUrl = heartbeat?.workflowCallbackUrl;
+    // Workflow management is tunneled over the heartbeat channel; the legacy
+    // callback_url column is no longer fed (kept for schema compatibility).
+    string? callbackUrl = ();
     // Bare, reachable host/IP for this runtime process (optional; NULL when absent) - used by the Try-It proxy
     string? tryItHost = heartbeat?.tryItHost;
 

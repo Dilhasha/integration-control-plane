@@ -189,7 +189,7 @@ function testWorkflowTunnelEndToEnd() returns error? {
     // A RUNNING runtime on Component 1 / Prod that published metadata and the
     // workflowCommands capability (making it the tunnel target for that scope).
     types:Heartbeat heartbeat = buildWorkflowHeartbeat(WF_TUNNEL_RUNTIME_ID, "wf-tunnel-test-runtime",
-            COMPONENT_1_ID, WF_PROD_ENV_ID, ());
+            COMPONENT_1_ID, WF_PROD_ENV_ID);
     heartbeat.workflowMetadata = WF_META_DOCUMENT.clone();
     heartbeat.capabilities = ["workflowCommands"];
     types:HeartbeatResponse registered = check storage:processHeartbeat(heartbeat, preResolved = true);

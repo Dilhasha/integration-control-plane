@@ -993,9 +993,8 @@ service /graphql on graphqlListener {
         return {items: result.slice(sliceFrom, sliceTo), pageInfo};
     }
 
-    // Get workflow definitions for a specific environment and component.
-    // Definitions are fetched live from the runtime's /workflow/definitions API
-    // (via its workflowCallbackUrl) rather than from the heartbeat/DB.
+    // Get workflow definitions for a specific environment and component,
+    // from the workflow metadata stored off heartbeats (bi_workflow_metadata).
     isolated resource function get workflowsByEnvironmentAndComponent(graphql:Context context, string environmentId, string componentId, types:PaginationInput? pagination = ()) returns types:WorkflowsPage|error {
         types:UserContextV2 userContext = check extractUserContext(context);
 
