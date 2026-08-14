@@ -399,8 +399,25 @@ public enum ControlCommandStatus {
 public enum ControlAction {
     START,
     STOP,
-    SET_LOGGER_LEVEL
+    SET_LOGGER_LEVEL,
+    // A tunneled workflow management operation, executed in-process by the runtime's ICP
+    // bridge (no inbound network access to the integration or its Temporal server). Only
+    // ever sent to runtimes that advertised the "workflowCommands" capability — older
+    // bridges fail record binding on unknown actions. The command's payload carries
+    // {commandId, operation, params, identity, deadline}; the runtime posts the outcome
+    // to POST /icp/commandResult.
+    WORKFLOW_MGMT
 }
+
+// The outcome of a tunneled workflow command, posted by the runtime's bridge to
+// POST /icp/commandResult. Open record so newer bridges can add fields.
+public type WorkflowCommandResult record {
+    string runtimeId;
+    string commandId;
+    string status; // COMPLETED (operation executed) | FAILED (could not execute)
+    int httpStatus; // the status code the runtime's management REST API would have returned
+    json body; // byte-identical to the management REST API's response body
+};
 
 # Represents a control command issued to a runtime
 #
@@ -427,6 +444,10 @@ public type HeartbeatResponse record {
     ControlCommand[] commands?;
     string[] errors?;
     string[] & readonly supportedHeartbeatFields = SUPPORTED_HEARTBEAT_FIELDS;
+    // Boost hint: ask the bridge to send its next heartbeat this many seconds from now
+    // (typically 1) instead of waiting for its regular interval — set while a user is
+    // actively working with workflow views so tunneled commands round-trip quickly.
+    int nextHeartbeatInSeconds?;
 };
 
 public enum MIControlAction {

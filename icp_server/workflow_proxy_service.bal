@@ -300,35 +300,65 @@ function proxyWorkflowRequest(string componentId, string environmentId, string[]
         return workflowErrorResponse(403, "Access denied");
     }
 
-    // 3. Resolve the runtime workflow service base URL.
+    // 3. Resolve the caller's role names once — both execution paths forward them (the
+    //    tunnel in the command identity, the proxy in the x-user-roles header), each
+    //    escaped (see escapeRoleName), with the synthetic admin role for super admins.
+    string[]|error roleNames = storage:getAllUserRoleNames(userContext.userId);
+    if roleNames is error {
+        return workflowErrorResponse(500, "Failed to resolve user roles: " + roleNames.message());
+    }
+    string[] escapedRoles = roleNames.map(escapeRoleName);
+    boolean|error superAdmin = auth:isSuperAdmin(userContext.userId);
+    if superAdmin is boolean && superAdmin {
+        escapedRoles.push("admin");
+    }
+
+    // 4. Prefer the command tunnel: a RUNNING runtime that advertised the
+    //    workflowCommands capability executes the operation in-process — no network
+    //    path into the integration. Paths outside the tunnel vocabulary (e.g. the
+    //    deprecated /retry-tasks aliases) and runtimes on older bridges fall through
+    //    to the legacy callback-URL proxy below.
+    string?|error tunnelTarget = selectWorkflowCommandTarget(componentId, environmentId);
+    if tunnelTarget is error {
+        return workflowErrorResponse(500, "Failed to resolve workflow runtime: " + tunnelTarget.message());
+    }
+    if tunnelTarget is string {
+        map<json> body = {};
+        if method == http:POST {
+            json|error rawBody = req.getJsonPayload();
+            if rawBody is map<json> {
+                body = rawBody;
+            }
+        }
+        [string, map<json>]? operation = mapWorkflowRequestToOperation(
+                method, wfPath, workflowQueryParams(req.getQueryParams()), body);
+        if operation is [string, map<json>] {
+            return executeTunneledWorkflowCommand(tunnelTarget, operation[0], operation[1],
+                    userContext.userId, escapedRoles);
+        }
+        log:printDebug("Workflow request outside the tunnel vocabulary; using the legacy proxy",
+                path = string:'join("/", ...wfPath));
+    }
+
+    // 5. Legacy path: resolve the runtime workflow service base URL and forward.
     types:WorkflowTarget?|error target = storage:getRuntimeWorkflowTarget(componentId, environmentId);
     if target is error {
         return workflowErrorResponse(500, "Failed to resolve workflow runtime: " + target.message());
     }
     if target is () {
-        return workflowErrorResponse(503, "No running workflow runtime with a callback URL for this environment");
+        return workflowErrorResponse(503, "No running workflow runtime can serve this environment's workflow requests");
     }
 
-    // 4. Build the target path (preserve the original query string verbatim).
+    // 6. Build the target path (preserve the original query string verbatim).
     string subPath = string:'join("/", ...wfPath);
     string rawPath = req.rawPath;
     int? qIdx = rawPath.indexOf("?");
     string query = qIdx is int ? rawPath.substring(qIdx) : "";
     string targetPath = "/workflow/" + subPath + query;
 
-    // 5. Inject identity headers. Forward the caller's ICP role names (each escaped, see
-    //    escapeRoleName) so the workflow service can match/authorize human tasks by role.
-    //    Drop ICP's bearer token and
-    //    authenticate to the runtime's management API with its API key instead.
-    string[]|error roleNames = storage:getAllUserRoleNames(userContext.userId);
-    if roleNames is error {
-        return workflowErrorResponse(500, "Failed to resolve user roles: " + roleNames.message());
-    }
-    string roles = string:'join(",", ...roleNames.map(escapeRoleName));
-    boolean|error superAdmin = auth:isSuperAdmin(userContext.userId);
-    if superAdmin is boolean && superAdmin {
-        roles = roles.length() > 0 ? roles + ",admin" : "admin";
-    }
+    // 7. Inject identity headers; drop ICP's bearer token and authenticate to the
+    //    runtime's management API with its API key instead.
+    string roles = string:'join(",", ...escapedRoles);
     req.setHeader("x-user-id", userContext.userId);
     req.setHeader("x-user-roles", roles);
     req.removeHeader("Authorization");
@@ -337,7 +367,7 @@ function proxyWorkflowRequest(string componentId, string environmentId, string[]
         req.setHeader("X-API-Key", apiKey);
     }
 
-    // 6. Forward (method + body preserved) and relay the upstream response.
+    // 8. Forward (method + body preserved) and relay the upstream response.
     http:Client|error wfClient = getWorkflowClient(target.callbackUrl);
     if wfClient is error {
         return workflowErrorResponse(502, "Failed to connect to workflow runtime: " + wfClient.message());
