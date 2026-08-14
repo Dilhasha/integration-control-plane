@@ -812,6 +812,25 @@ BEGIN
 END;
 /
 
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime)
+CREATE TABLE bi_workflow_metadata (
+  runtime_id   CHAR(36) NOT NULL,
+  metadata     CLOB NOT NULL,
+  capabilities VARCHAR2(512 CHAR),
+  created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  PRIMARY KEY (runtime_id),
+  CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
+);
+
+CREATE OR REPLACE TRIGGER trg_bi_workflow_metadata_updated
+BEFORE UPDATE ON bi_workflow_metadata
+FOR EACH ROW
+BEGIN
+    :NEW.updated_at := CURRENT_TIMESTAMP;
+END;
+/
+
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_service_listener_bindings (
   runtime_id       CHAR(36) NOT NULL,

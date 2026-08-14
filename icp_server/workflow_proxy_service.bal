@@ -114,11 +114,19 @@ isolated function resolveWorkflowApiKey(string? keyId) returns string? {
     return orgSecret.keyId + "." + orgSecret.keyMaterial;
 }
 
-// Fetches workflow definitions live from the runtime's GET /workflow/definitions API for the
-// given component+environment and maps them to the Workflow artifact shape used by the frontend.
-// Returns [] when no running runtime advertises a workflow callback URL. Used by the GraphQL
-// `workflowsByEnvironmentAndComponent` resolver (definitions are no longer carried in heartbeats).
+// Resolves workflow definitions for the given component+environment and maps them to the
+// Workflow artifact shape used by the frontend. Preferred source is the workflow metadata
+// stored from heartbeats (bi_workflow_metadata) — no call into the integration, and it works
+// as long as any runtime of the component reported metadata. Runtimes with an older bridge
+// that publishes no metadata fall back to the legacy live fetch from the runtime's
+// GET /workflow/definitions API via its workflowCallbackUrl. Returns [] when neither source
+// has anything. Used by the GraphQL `workflowsByEnvironmentAndComponent` resolver.
 isolated function fetchWorkflowDefinitions(string componentId, string environmentId) returns types:Workflow[]|error {
+    types:Workflow[]? stored = check workflowDefinitionsFromStoredMetadata(componentId, environmentId);
+    if stored is types:Workflow[] {
+        return stored;
+    }
+
     types:WorkflowTarget?|error target = storage:getRuntimeWorkflowTarget(componentId, environmentId);
     if target is error {
         return target;
@@ -159,6 +167,69 @@ isolated function fetchWorkflowDefinitions(string componentId, string environmen
             workerCount: d.workerCount ?: 0,
             inputSchema: d?.inputSchema,
             state: active ? types:ENABLED : types:DISABLED,
+            runtimes: runtimeInfos
+        });
+    }
+    return result;
+}
+
+// Builds the Workflow artifact list from the workflow metadata stored off heartbeats, or ()
+// when no RUNNING runtime of the component+environment has published metadata (the caller
+// then falls back to the legacy live fetch). Definitions are deduped across runtimes by
+// workflow type; a definition's worker count is the number of RUNNING runtimes whose
+// metadata declares it.
+isolated function workflowDefinitionsFromStoredMetadata(string componentId, string environmentId)
+        returns types:Workflow[]?|error {
+    types:WorkflowMetadataRecord[] metadataRecords =
+        check storage:getWorkflowMetadataForComponentEnv(componentId, environmentId);
+    if metadataRecords.length() == 0 {
+        return ();
+    }
+
+    // workflowType → [inputSchema, workerCount]
+    map<[string?, int]> definitionsByType = {};
+    foreach types:WorkflowMetadataRecord metadataRecord in metadataRecords {
+        json|error document = metadataRecord.metadata.fromJsonString();
+        if document is error {
+            log:printWarn(string `Ignoring unparseable workflow metadata of runtime ${metadataRecord.runtimeId}`,
+                    'error = document);
+            continue;
+        }
+        json|error definitionsJson = document.definitions;
+        if definitionsJson !is json[] {
+            continue;
+        }
+        foreach json definitionJson in definitionsJson {
+            types:WorkflowDefinition|error def = definitionJson.cloneWithType();
+            if def is error {
+                continue;
+            }
+            [string?, int]? existing = definitionsByType[def.workflowType];
+            if existing is [string?, int] {
+                definitionsByType[def.workflowType] = [existing[0], existing[1] + 1];
+            } else {
+                definitionsByType[def.workflowType] = [def?.inputSchema, 1];
+            }
+        }
+    }
+    if definitionsByType.length() == 0 {
+        return ();
+    }
+
+    // Definitions are shared across the component+environment's runtimes; attach them for the UI.
+    types:Runtime[] runtimes = check storage:getRuntimes((), (), environmentId, (), componentId);
+    types:ArtifactRuntimeInfo[] runtimeInfos = from var r in runtimes
+        select {runtimeId: r.runtimeId, runtimeName: r?.runtimeName, status: r.status};
+
+    types:Workflow[] result = [];
+    foreach [string, [string?, int]] [workflowType, [inputSchema, workerCount]] in definitionsByType.entries() {
+        // A stored definition comes from a RUNNING runtime's registry, so it is active.
+        result.push({
+            name: workflowType,
+            isActive: true,
+            workerCount: workerCount,
+            inputSchema: inputSchema,
+            state: types:ENABLED,
             runtimes: runtimeInfos
         });
     }

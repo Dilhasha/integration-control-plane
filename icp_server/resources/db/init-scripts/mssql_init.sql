@@ -1134,6 +1134,18 @@ CREATE TABLE bi_service_openapi_definitions (
 );
 GO
 
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime)
+CREATE TABLE bi_workflow_metadata (
+    runtime_id CHAR(36) NOT NULL,
+    metadata NVARCHAR (MAX) NOT NULL,
+    capabilities NVARCHAR (512),
+    created_at DATETIME2 NOT NULL DEFAULT GETDATE (),
+    updated_at DATETIME2 NOT NULL DEFAULT GETDATE (),
+    PRIMARY KEY (runtime_id),
+    CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
+);
+GO
+
 CREATE TRIGGER trg_bi_service_openapi_definitions_updated_at
 ON bi_service_openapi_definitions
 AFTER UPDATE

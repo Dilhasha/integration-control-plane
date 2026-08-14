@@ -1105,6 +1105,46 @@ public isolated function getOpenApiDefinitionsForRuntime(string runtimeId) retur
     return definitionList;
 }
 
+// Get the stored workflow metadata document for a specific runtime, or () when the
+// runtime never published one.
+public isolated function getWorkflowMetadataForRuntime(string runtimeId)
+        returns types:WorkflowMetadataRecord?|error {
+    types:WorkflowMetadataRecord|error metadataRecord = dbClient->queryRow(`
+        SELECT runtime_id, metadata, capabilities
+        FROM bi_workflow_metadata
+        WHERE runtime_id = ${runtimeId}
+    `);
+    if metadataRecord is sql:NoRowsError {
+        return ();
+    }
+    return metadataRecord;
+}
+
+// Get the stored workflow metadata documents of every RUNNING runtime of a
+// component+environment, freshest heartbeat first. Feeds the workflow definitions
+// resolver (documents are deduped across runtimes there) and, for the command tunnel,
+// leader selection: a runtime whose `capabilities` include workflowCommands can
+// execute tunneled workflow management commands.
+public isolated function getWorkflowMetadataForComponentEnv(string componentId, string environmentId)
+        returns types:WorkflowMetadataRecord[]|error {
+    types:WorkflowMetadataRecord[] metadataList = [];
+    stream<types:WorkflowMetadataRecord, sql:Error?> metadataStream = dbClient->query(`
+        SELECT m.runtime_id, m.metadata, m.capabilities
+        FROM bi_workflow_metadata m
+        INNER JOIN runtimes r ON m.runtime_id = r.runtime_id
+        WHERE r.component_id = ${componentId} AND r.environment_id = ${environmentId}
+            AND r.status = 'RUNNING'
+        ORDER BY r.last_heartbeat DESC
+    `);
+
+    check from types:WorkflowMetadataRecord metadataRecord in metadataStream
+        do {
+            metadataList.push(metadataRecord);
+        };
+
+    return metadataList;
+}
+
 public isolated function getLogLevelsForRuntime(string runtimeId) returns types:RuntimeLogLevelRecord[]|error {
     types:RuntimeLogLevelRecord[] logLevelList = [];
     stream<types:RuntimeLogLevelRecord, sql:Error?> logLevelStream = dbClient->query(`

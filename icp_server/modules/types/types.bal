@@ -323,7 +323,8 @@ public type Node record {
 // older bridges/servers that predate this negotiation simply never see the field and stay
 // on the baseline heartbeat shape. Update this list whenever an optional field is added to
 // Heartbeat below.
-final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS = ["workflowCallbackUrl", "tryItHost", "openApiDefinitions"];
+final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS =
+        ["workflowCallbackUrl", "tryItHost", "openApiDefinitions", "workflowMetadata"];
 
 // Heartbeat that includes all runtime information for registration/updates.
 // Open record so parsing tolerates fields from a newer agent that this server
@@ -349,6 +350,24 @@ public type Heartbeat record {
     time:Utc timestamp;
     map<log:Level> logLevels?; // BI log levels from heartbeat payload
     map<json> openApiDefinitions?; // OpenAPI (Swagger) definitions packed into the runtime's JAR, keyed by file name
+    // The workflow metadata document published by the ICP runtime bridge when the
+    // integration uses ballerina/workflow: definitions, human tasks, activities, and
+    // durable agents, with their JSON schemas. Startup-constant per runtime process;
+    // sent on full heartbeats once this server advertises "workflowMetadata".
+    map<json> workflowMetadata?;
+    // Capabilities the runtime advertises — e.g. "workflowCommands" when it accepts
+    // tunneled workflow management commands. A capability-gated command must never be
+    // sent to a runtime that did not advertise it (older bridges fail record binding
+    // on unknown control actions).
+    string[] capabilities?;
+};
+
+// One runtime's stored workflow metadata row (bi_workflow_metadata).
+public type WorkflowMetadataRecord record {
+    @sql:Column {name: "runtime_id"}
+    string runtimeId;
+    string metadata; // the workflow metadata document as a JSON string
+    string? capabilities; // comma-joined capability names, or () when none were advertised
 };
 
 // Shape of a single entry in the runtime's GET /workflow/definitions response.

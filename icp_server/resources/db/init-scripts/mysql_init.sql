@@ -645,6 +645,17 @@ CREATE TABLE bi_service_openapi_definitions (
   INDEX idx_runtime_id (runtime_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime)
+CREATE TABLE bi_workflow_metadata (
+  runtime_id   CHAR(36) NOT NULL,
+  metadata     JSON NOT NULL,
+  capabilities VARCHAR(512),
+  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (runtime_id),
+  CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes(runtime_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_runtime_listener_artifacts (
     runtime_id CHAR(36) NOT NULL,

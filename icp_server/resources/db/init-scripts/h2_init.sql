@@ -823,6 +823,19 @@ CREATE TABLE bi_service_openapi_definitions (
 
 CREATE INDEX idx_bi_service_openapi_definitions_runtime_id ON bi_service_openapi_definitions (runtime_id);
 
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime):
+-- workflow definitions, human tasks, activities, and durable agents with their JSON
+-- schemas, plus the capabilities the runtime advertised (e.g. workflowCommands).
+CREATE TABLE bi_workflow_metadata (
+    runtime_id CHAR(36) NOT NULL,
+    metadata CLOB NOT NULL,
+    capabilities VARCHAR(512),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (runtime_id),
+    CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
+);
+
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_runtime_listener_artifacts (
     runtime_id CHAR(36) NOT NULL,

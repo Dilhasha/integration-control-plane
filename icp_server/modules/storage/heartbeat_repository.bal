@@ -836,6 +836,43 @@ isolated function insertRuntimeArtifacts(string runtimeId, types:Heartbeat heart
     check insertAdditionalMIArtifacts(runtimeId, heartbeat);
     check insertRuntimeLogLevels(runtimeId, heartbeat);
     check upsertOpenApiDefinitions(runtimeId, heartbeat);
+    check upsertWorkflowMetadata(runtimeId, heartbeat);
+}
+
+// Delete this runtime's stored workflow metadata and insert the document from this
+// heartbeat, if any. Runtimes without workflows (or whose bridge predates metadata
+// publishing) simply end up with no row. The advertised capabilities travel with the
+// document because the two arrive together on full heartbeats and are consumed
+// together (leader selection needs both "has workflows" and "accepts commands").
+isolated function upsertWorkflowMetadata(string runtimeId, types:Heartbeat heartbeat) returns error? {
+    _ = check dbClient->execute(`DELETE FROM bi_workflow_metadata WHERE runtime_id = ${runtimeId}`);
+
+    map<json>? workflowMetadata = heartbeat?.workflowMetadata;
+    if workflowMetadata is () || workflowMetadata.length() == 0 {
+        return;
+    }
+    string metadataJson = workflowMetadata.toJsonString();
+    string[]? capabilities = heartbeat?.capabilities;
+    string? capabilitiesValue = capabilities is string[] && capabilities.length() > 0
+        ? string:'join(",", ...capabilities) : ();
+
+    if dbType == POSTGRESQL {
+        _ = check dbClient->execute(`
+            INSERT INTO bi_workflow_metadata (
+                runtime_id, metadata, capabilities
+            ) VALUES (
+                ${runtimeId}, ${metadataJson}::jsonb, ${capabilitiesValue}
+            )
+        `);
+    } else {
+        _ = check dbClient->execute(`
+            INSERT INTO bi_workflow_metadata (
+                runtime_id, metadata, capabilities
+            ) VALUES (
+                ${runtimeId}, ${metadataJson}, ${capabilitiesValue}
+            )
+        `);
+    }
 }
 
 // Delete existing packed OpenAPI (Swagger) definitions for this runtime and insert the ones
@@ -902,6 +939,7 @@ isolated function deleteExistingArtifacts(string runtimeId) returns error? {
     _ = check dbClient->execute(`DELETE FROM bi_automation_execution_history WHERE runtime_id = ${runtimeId}`);
     _ = check dbClient->execute(`DELETE FROM bi_runtime_log_levels WHERE runtime_id = ${runtimeId}`);
     _ = check dbClient->execute(`DELETE FROM bi_service_openapi_definitions WHERE runtime_id = ${runtimeId}`);
+    _ = check dbClient->execute(`DELETE FROM bi_workflow_metadata WHERE runtime_id = ${runtimeId}`);
     check deleteMIArtifacts(runtimeId);
 }
 

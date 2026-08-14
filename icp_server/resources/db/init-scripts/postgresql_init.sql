@@ -702,6 +702,20 @@ CREATE INDEX idx_openapi_def_runtime_id ON bi_service_openapi_definitions(runtim
 CREATE TRIGGER update_bi_service_openapi_definitions_updated_at BEFORE UPDATE ON bi_service_openapi_definitions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime)
+CREATE TABLE bi_workflow_metadata (
+    runtime_id CHAR(36) NOT NULL,
+    metadata JSONB NOT NULL,
+    capabilities VARCHAR(512),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (runtime_id),
+    CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes(runtime_id) ON DELETE CASCADE
+);
+
+CREATE TRIGGER update_bi_workflow_metadata_updated_at BEFORE UPDATE ON bi_workflow_metadata
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_service_listener_bindings (
     runtime_id CHAR(36) NOT NULL,
