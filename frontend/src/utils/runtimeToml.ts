@@ -35,35 +35,29 @@ function tomlString(value: string): string {
 }
 
 /**
- * The `main.bal` imports a BI runtime needs. The ICP bridge is always required; workflow management
- * additionally needs its own module imported, because the `[ballerina.workflow.management]`
- * configuration only takes effect when the module is part of the build. Ordered the way `bal format`
- * sorts imports (by org, then module). Shared by the Add Runtime dialogs.
+ * The `main.bal` imports a BI runtime needs. The ICP bridge import is all of it: when the
+ * integration uses ballerina/workflow, the bridge's compiler plugin generates the wiring that
+ * publishes workflow metadata and executes ICP-tunneled management commands — no
+ * workflow.management import, management REST API, or API key is involved anymore.
+ * Shared by the Add Runtime dialogs.
  */
-export function runtimeImports(workflowMgt: boolean): string {
-  const bridge = 'import wso2/icp.runtime.bridge as _;';
-  return workflowMgt ? `import ballerina/workflow.management as _;\n\n${bridge}` : bridge;
+export function runtimeImports(): string {
+  return 'import wso2/icp.runtime.bridge as _;';
 }
 
 /**
- * TOML a workflow-enabled BI runtime carries: the workflow engine block,
- * then the management API block keyed by the org secret. `integration` becomes the workflow task
- * queue and should be whatever the `integration` key of the bridge config above holds, so the two
- * always agree — the real handle on the component runtime page, the same fill-in placeholder on the
- * org page, which is org-scoped and has no integration to resolve. The namespace is not written
- * here; the runtime derives it from the bridge configuration.
+ * TOML a workflow-enabled BI runtime carries: the workflow engine block. `integration` becomes
+ * the workflow task queue and should be whatever the `integration` key of the bridge config
+ * above holds, so the two always agree — the real handle on the component runtime page, the same
+ * fill-in placeholder on the org page, which is org-scoped and has no integration to resolve.
+ * The namespace is not written here; the runtime derives it from the bridge configuration.
+ * Workflow management itself needs no block of its own: `enableWorkflowManagement = true` in the
+ * bridge config lets the ICP tunnel management operations to the runtime over the heartbeat
+ * channel — the runtime exposes no management port and needs no API key.
  * Shared by the Add Runtime dialogs (org runtimes and component runtime pages).
  */
-export function workflowManagementToml(integration: string, secret: string): string {
+export function workflowManagementToml(integration: string): string {
   return `[ballerina.workflow]
 # mode = "LOCAL"
-taskQueue = "${tomlString(integration)}"
-
-[ballerina.workflow.management]
-enableManagementApi = true
-enableApiKey = true
-apiKeyValue = "${tomlString(secret)}"
-apiKeyHeader = "X-API-Key"
-enableBasicAuth = false
-# port = 8234`;
+taskQueue = "${tomlString(integration)}"`;
 }

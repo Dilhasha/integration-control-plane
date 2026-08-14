@@ -86,9 +86,11 @@ secret = "${secret}"
 }
 
 function biToml(envName: string, secret: string, projectHandle: string, integrationHandle: string, workflowMgt: boolean): string {
-  // The bridge's workflow keys and the [ballerina.workflow] blocks appended below are written as a
+  // The bridge's workflow key and the [ballerina.workflow] block appended below are written as a
   // set: either the runtime carries workflow management or its snippet mentions workflows nowhere.
-  const workflowKeys = workflowMgt ? '\nenableWorkflowManagement = true\n# workflowManagementApiPort = 8234' : '';
+  // enableWorkflowManagement lets the ICP tunnel management operations to the runtime over the
+  // heartbeat channel — no management port or API key is exposed by the runtime.
+  const workflowKeys = workflowMgt ? '\nenableWorkflowManagement = true' : '';
   const base = `[wso2.icp.runtime.bridge]
 environment = "${envName}"
 project = "${projectHandle}"
@@ -100,7 +102,7 @@ secret = "${secret}"${workflowKeys}
   if (!workflowMgt) return base;
   return `${base}
 
-${workflowManagementToml(integrationHandle, secret)}`;
+${workflowManagementToml(integrationHandle)}`;
 }
 
 function AddRuntimeModal({
@@ -191,7 +193,7 @@ function AddRuntimeModal({
             {/* On the results step so it can be flipped without spending another secret on a fresh
                 dialog. Hidden for a Workflow integration, which is always enabled, and for MI, whose
                 deployment.toml has no workflow configuration. */}
-            {isBI && !alwaysWorkflowMgt && <FormControlLabel control={<Switch checked={workflowMgtChoice} onChange={(e) => setWorkflowMgtChoice(e.target.checked)} />} label="Enable Workflow Management" sx={{ display: 'flex', mb: 1 }} />}
+            {isBI && !alwaysWorkflowMgt && <FormControlLabel control={<Switch checked={workflowMgtChoice} onChange={(e) => setWorkflowMgtChoice(e.target.checked)} />} label="Allow workflow management from ICP" sx={{ display: 'flex', mb: 1 }} />}
             <DialogContentText sx={{ mb: 1 }}>
               Add the following configuration to your runtime's <strong>{isBI ? 'Config.toml' : 'deployment.toml'}</strong> file. Change the <strong>runtime</strong> value; it must be unique for each registered runtime.
             </DialogContentText>
@@ -213,7 +215,7 @@ function AddRuntimeModal({
                     </>
                   )}
                 </DialogContentText>
-                <CodeBoxWithCopy code={runtimeImports(workflowMgt)} />
+                <CodeBoxWithCopy code={runtimeImports()} />
               </>
             )}
           </>

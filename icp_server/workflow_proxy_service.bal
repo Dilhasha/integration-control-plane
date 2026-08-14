@@ -43,6 +43,12 @@ configurable boolean workflowProxyAllowInsecureTLS = false;
 // Request timeout (seconds) for calls to the runtime workflow service.
 configurable decimal workflowProxyTimeout = 30;
 
+// Rollout switch for the workflow command tunnel (workflow_tunnel.bal). On by default:
+// runtimes that advertised the workflowCommands capability execute management operations
+// in-process via their heartbeat channel. Set to false to force every request through
+// the legacy callback-URL proxy during a staged rollout or to isolate a tunnel issue.
+configurable boolean workflowTunnelEnabled = true;
+
 const int WORKFLOW_CLIENT_CACHE_MAX_SIZE = 100;
 isolated map<http:Client> workflowClientCache = {};
 
@@ -316,9 +322,11 @@ function proxyWorkflowRequest(string componentId, string environmentId, string[]
     // 4. Prefer the command tunnel: a RUNNING runtime that advertised the
     //    workflowCommands capability executes the operation in-process — no network
     //    path into the integration. Paths outside the tunnel vocabulary (e.g. the
-    //    deprecated /retry-tasks aliases) and runtimes on older bridges fall through
-    //    to the legacy callback-URL proxy below.
-    string?|error tunnelTarget = selectWorkflowCommandTarget(componentId, environmentId);
+    //    deprecated /retry-tasks aliases), runtimes on older bridges, and deployments
+    //    that disabled the tunnel (workflowTunnelEnabled = false) fall through to the
+    //    legacy callback-URL proxy below.
+    string?|error tunnelTarget = workflowTunnelEnabled
+        ? selectWorkflowCommandTarget(componentId, environmentId) : ();
     if tunnelTarget is error {
         return workflowErrorResponse(500, "Failed to resolve workflow runtime: " + tunnelTarget.message());
     }

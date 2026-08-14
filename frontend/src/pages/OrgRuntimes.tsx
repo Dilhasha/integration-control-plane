@@ -165,7 +165,9 @@ secret = "${secret}"
 // toggle stands in for that, and the task queue placeholder below is the same `<integration name>`
 // the bridge block carries so the two still agree once both are filled in.
 function biToml(envName: string, secret: string, workflowMgt: boolean): string {
-  const workflowKeys = workflowMgt ? '\nenableWorkflowManagement = true\n# workflowManagementApiPort = 8234' : '';
+  // enableWorkflowManagement lets the ICP tunnel management operations to the runtime over the
+  // heartbeat channel — no management port or API key is exposed by the runtime.
+  const workflowKeys = workflowMgt ? '\nenableWorkflowManagement = true' : '';
   const base = `[wso2.icp.runtime.bridge]
 environment = "${envName}"
 project = "<project name>"
@@ -176,7 +178,7 @@ secret = "${secret}"${workflowKeys}
   if (!workflowMgt) return base;
   return `${base}
 
-${workflowManagementToml('<integration name>', secret)}`;
+${workflowManagementToml('<integration name>')}`;
 }
 
 function AddRuntimeModal({ env, onClose }: { env: GqlEnvironment; onClose: () => void }) {
@@ -231,7 +233,7 @@ function AddRuntimeModal({ env, onClose }: { env: GqlEnvironment; onClose: () =>
             </Tabs>
             {/* Workflow support is a Ballerina-only capability, and the toggle lives on the results
                 step so it can be flipped without spending another secret on a fresh dialog. */}
-            {tab === 0 && <FormControlLabel control={<Switch checked={workflowMgt} onChange={(e) => setWorkflowMgt(e.target.checked)} />} label="Enable Workflow Management" sx={{ display: 'flex', mb: 1 }} />}
+            {tab === 0 && <FormControlLabel control={<Switch checked={workflowMgt} onChange={(e) => setWorkflowMgt(e.target.checked)} />} label="Allow workflow management from ICP" sx={{ display: 'flex', mb: 1 }} />}
             <DialogContentText sx={{ mb: 1 }}>
               Add the following configuration to your runtime's <strong>{tab === 0 ? 'Config.toml' : 'deployment.toml'}</strong> file. Change the <strong>project, integration and runtime</strong> values as needed. The runtime value must be unique for each
               runtime you register.
@@ -260,7 +262,7 @@ function AddRuntimeModal({ env, onClose }: { env: GqlEnvironment; onClose: () =>
                     </>
                   )}
                 </DialogContentText>
-                <CodeBoxWithCopy code={runtimeImports(workflowMgt)} />
+                <CodeBoxWithCopy code={runtimeImports()} />
                 <Alert severity="info" sx={{ mt: 2 }}>
                   The above configuration is for runtimes using the <strong>Default</strong> integration. If you're using the <strong>MI</strong> integration, switch to the MI tab to see the correct configuration.
                 </Alert>
