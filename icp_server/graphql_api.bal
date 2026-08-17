@@ -1160,6 +1160,45 @@ service /graphql on graphqlListener {
         return {runtimeId, appName: trimmedAppName, faultStackTrace};
     }
 
+    isolated resource function get dataServiceFaultStackTrace(graphql:Context context, string runtimeId, string serviceName) returns types:DataServiceFaultStackTrace|error {
+        string trimmedServiceName = serviceName.trim();
+        if trimmedServiceName == "" {
+            return error("Data service name must not be empty");
+        }
+        types:UserContextV2 userContext = check extractUserContext(context);
+        log:printDebug("Fetching Data Service fault stack trace", userId = userContext.userId, runtimeId = runtimeId, serviceName = trimmedServiceName);
+
+        types:Runtime? runtime = check storage:getRuntimeById(runtimeId);
+        if runtime is () {
+            log:printWarn("Runtime not found for Data Service fault stack trace query", userId = userContext.userId, runtimeId = runtimeId);
+            return error("Runtime not found");
+        }
+
+        types:AccessScope scope = auth:buildScopeFromContext(runtime.component.projectId, runtime.component.id, runtime.environment.id);
+
+        if !check auth:hasAnyPermission(userContext.userId, [auth:PERMISSION_INTEGRATION_VIEW, auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
+            log:printWarn("Attempt to access Data Service fault stack trace without permission", userId = userContext.userId, runtimeId = runtimeId, serviceName = trimmedServiceName);
+            return error("Unauthorized");
+        }
+
+        if runtime.status != types:RUNNING {
+            log:printWarn("Runtime is not online for Data Service fault stack trace query", userId = userContext.userId, runtimeId = runtimeId, status = runtime.status);
+            return error("Runtime is not online");
+        }
+
+        string baseUrl = check storage:buildManagementBaseUrl(runtime.managementHostname, runtime.managementPort);
+        log:printDebug("Calling MI management API for Data Service fault stack trace", runtimeId = runtimeId, serviceName = trimmedServiceName, baseUrl = baseUrl);
+        http:Client mgmtClient = check (artifactsApiAllowInsecureTLS
+            ? new (baseUrl, {secureSocket: {enable: false}})
+            : new (baseUrl));
+
+        string hmacToken = check storage:issueRuntimeHmacToken(runtimeId);
+
+        string faultStackTrace = check mi_management:fetchDataServiceFaultStackTrace(mgmtClient, hmacToken, trimmedServiceName);
+        log:printDebug("Successfully fetched Data Service fault stack trace", runtimeId = runtimeId, serviceName = trimmedServiceName);
+        return {runtimeId, serviceName: trimmedServiceName, faultStackTrace};
+    }
+
     // Get Inbound Endpoints for a specific environment and component
     isolated resource function get inboundEndpointsByEnvironmentAndComponent(graphql:Context context, string environmentId, string componentId, types:PaginationInput? pagination = ()) returns types:InboundEndpointsPage|error {
         types:UserContextV2 userContext = check extractUserContext(context);
@@ -1543,17 +1582,12 @@ service /graphql on graphqlListener {
             return {items: [], pageInfo: {total: 0, 'limit: 0, offset: 0}};
         }
 
+        // Data services report their deployment state ("Active"/"Faulty") directly in the
+        // heartbeat, exactly like Composite Apps. The state is stored (normalized) on the
+        // artifact record, so it is returned as-is without reconcile overriding it.
         types:DataService[] result = check storage:getDataServicesByEnvironmentAndComponent(environmentId, componentId);
         if result.length() == 0 {
             return {items: [], pageInfo: {total: 0, 'limit: 0, offset: 0}};
-        }
-        map<map<types:ArtifactStateField>> sm = check storage:queryArtifactState(componentId, environmentId);
-        foreach types:DataService a in result {
-            types:ArtifactStateField? s = stateOf(sm, a.name, "data-service", "status");
-            if s is types:ArtifactStateField {
-                a.state = <types:ArtifactState>s.value;
-                a.stateInSync = s.inSync;
-            }
         }
         [int, int, types:PageInfo] [sliceFrom, sliceTo, pageInfo] = buildPageResult(result.length(), pagination);
         return {items: result.slice(sliceFrom, sliceTo), pageInfo};
@@ -2613,6 +2647,157 @@ service /graphql on graphqlListener {
         return component;
     }
 
+    // Report whether an integration (project + component combo) has had its Moesif metrics
+    // dashboard created/linked. Resolves the component by componentId OR by projectId +
+    // componentHandler, then returns the `dashboardsCreated` flag that drives the UI.
+    isolated resource function get moesifMetricsConfig(graphql:Context context, string? componentId, string? projectId, string? componentHandler) returns types:MoesifMetricsConfigStatus|error {
+        types:UserContextV2 userContext = check extractUserContext(context);
+
+        types:Component? component = ();
+        if componentId is string {
+            component = check storage:getComponentById(componentId);
+        } else if projectId is string && componentHandler is string {
+            component = check storage:getComponentByProjectAndHandler(projectId, componentHandler);
+        } else {
+            return error("Either componentId or (projectId and componentHandler) must be provided");
+        }
+
+        if component is () {
+            return error("Integration not found");
+        }
+
+        // Users with view, edit or manage permissions can read the configuration status.
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = component.id);
+        if !check auth:hasAnyPermission(userContext.userId,
+                [auth:PERMISSION_INTEGRATION_VIEW, auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
+            log:printWarn("Attempt to read Moesif metrics config without permission", userId = userContext.userId, componentId = component.id);
+            return error("Insufficient permissions to view this integration");
+        }
+
+        boolean dashboardsCreated = check storage:getComponentMoesifDashboardsCreated(component.id);
+        return {dashboardsCreated};
+    }
+
+    // Mint a short-lived Moesif workspace access token and return the embed URL so
+    // the UI can render the metrics dashboard in an iframe. Reads the stored
+    // workspace id + Management API key for the integration and calls the Moesif
+    // portal API. The token expires after ~1 hour, so the UI should re-query
+    // before then. Requires view, edit or manage permission.
+    isolated resource function get moesifDashboardEmbed(graphql:Context context, string componentId) returns types:MoesifDashboardEmbed|error {
+        types:UserContextV2 userContext = check extractUserContext(context);
+
+        types:Component? component = check storage:getComponentById(componentId);
+        if component is () {
+            return error("Integration not found");
+        }
+
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId);
+        if !check auth:hasAnyPermission(userContext.userId,
+                [auth:PERMISSION_INTEGRATION_VIEW, auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
+            return error("Insufficient permissions to view Moesif metrics for this integration");
+        }
+
+        record {|string? workspaceId; string? managementKey;|}? embedDetails = check storage:getComponentMoesifEmbedDetails(componentId);
+        if embedDetails is () {
+            return error("Moesif metrics dashboard has not been created for this integration yet");
+        }
+        string? workspaceId = embedDetails.workspaceId;
+        string? managementKey = embedDetails.managementKey;
+        if workspaceId is () || workspaceId.trim().length() == 0
+                || managementKey is () || managementKey.trim().length() == 0 {
+            return error("Moesif metrics dashboard has not been created for this integration yet");
+        }
+
+        MoesifWorkspaceEmbed|error embed = generateMoesifWorkspaceAccessToken(managementKey, workspaceId);
+        if embed is error {
+            log:printError("Failed to generate Moesif workspace access token", 'error = embed, componentId = componentId);
+            return error(string `Failed to generate Moesif dashboard embed: ${embed.message()}`);
+        }
+        return {workspaceId: embed.workspaceId, accessToken: embed.accessToken, embedUrl: embed.embedUrl};
+    }
+
+    // List the Moesif applications the supplied Management API key can access. Requires edit or manage permission on the integration to read the API key.
+    isolated resource function get moesifApplications(graphql:Context context, string componentId, string managementApiKey) returns types:MoesifApplication[]|error {
+        types:UserContextV2 userContext = check extractUserContext(context);
+
+        types:Component? component = check storage:getComponentById(componentId);
+        if component is () {
+            return error("Integration not found");
+        }
+
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId);
+        if !check auth:hasAnyPermission(userContext.userId,
+                [auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
+            return error("Insufficient permissions to list Moesif applications for this integration");
+        }
+
+        string trimmedToken = stripBearerPrefix(managementApiKey.trim());
+        if trimmedToken.length() == 0 {
+            return error("Moesif Management API token must not be empty");
+        }
+
+        types:MoesifApplication[]|error applications = listMoesifApplications(trimmedToken);
+        if applications is error {
+            log:printError("Failed to list Moesif applications", 'error = applications, componentId = componentId);
+            return error(string `Failed to list Moesif applications: ${applications.message()}`);
+        }
+        return applications;
+    }
+
+    // Link an integration to its Moesif metrics dashboard. The user imports the
+    // ICP metrics template into Moesif and sets the workspace sharing to Public;
+    // this call then discovers the imported dashboard's workspace id (via the
+    // supplied Management API token) and records it against the component so the
+    // embed can mint access tokens. Requires edit or manage permission.
+    isolated remote function createMoesifDashboards(graphql:Context context, string componentId, string managementApiKey, string moesifAppId) returns types:MoesifMetricsConfigStatus|error {
+        types:UserContextV2 userContext = check extractUserContext(context);
+
+        types:Component? component = check storage:getComponentById(componentId);
+        if component is () {
+            return error("Integration not found");
+        }
+
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId);
+        if !check auth:hasAnyPermission(userContext.userId,
+                [auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
+            return error("Insufficient permissions to create Moesif dashboards for this component");
+        }
+
+        string trimmedToken = stripBearerPrefix(managementApiKey.trim());
+        if trimmedToken.length() == 0 {
+            return error("Moesif Management API token must not be empty");
+        }
+
+        string trimmedAppId = moesifAppId.trim();
+        if trimmedAppId.length() == 0 {
+            return error("Moesif Application ID must not be empty");
+        }
+
+        // Discover the imported dashboard's workspace id via the Moesif
+        // Management API (the user imports the template + sets it Public first).
+        // The Collector Application ID is used only transiently here for
+        // discovery; it is not persisted against the integration.
+        string|error workspaceId = discoverMoesifMetricsWorkspaceId(trimmedToken, trimmedAppId,
+                isMI = component.componentType == types:MI);
+        if workspaceId is error {
+            log:printError("Failed to link Moesif dashboards", 'error = workspaceId, componentId = componentId);
+            return error(string `Failed to link Moesif dashboards: ${workspaceId.message()}`);
+        }
+
+        // Persist the workspace id and the Management API key so the UI can later
+        // mint short-lived access tokens and embed the workspace metrics chart.
+        // The component is already resolved above, so a zero affected-row count
+        // (a MySQL no-op update with unchanged values) still counts as success.
+        _ = check storage:updateComponentMoesifDashboardDetails(componentId, workspaceId, trimmedToken);
+
+        storage:logAuditEvent(storage:AUDIT_COMPONENT_UPDATE, userId = userContext.userId,
+                resourceType = storage:AUDIT_RESOURCE_COMPONENT, resourceId = componentId,
+                details = string `Moesif metrics dashboards created for component '${component.name}' by '${userContext.username}'`,
+                clientIp = userContext.clientIp, userAgent = userContext.userAgent);
+
+        return {dashboardsCreated: true};
+    }
+
     // Delete a component V2 - with detailed response
     isolated remote function deleteComponentV2(graphql:Context context, string orgHandler, string componentId, string projectId) returns types:DeleteComponentV2Response|error {
         types:UserContextV2 userContext = check extractUserContext(context);
@@ -2727,7 +2912,8 @@ service /graphql on graphqlListener {
         }
 
         // Call the existing backend method to maintain consistency
-        check storage:updateComponent(targetComponentId, targetName, targetDisplayName, targetDescription, userContext.userId);
+        check storage:updateComponent(targetComponentId, targetName, targetDisplayName, targetDescription, userContext.userId,
+                component.displayType, component.componentSubType);
         storage:logAuditEvent(storage:AUDIT_COMPONENT_UPDATE, userId = userContext.userId,
                 resourceType = storage:AUDIT_RESOURCE_COMPONENT, resourceId = targetComponentId,
                 details = string `Component '${targetName ?: targetComponentId}' updated by '${userContext.username}'`,
@@ -3956,6 +4142,15 @@ service /graphql on graphqlListener {
     isolated resource function get systemInfo(graphql:Context context) returns types:SystemInfo|error {
         _ = check extractUserContext(context);
         return {version: icpVersion};
+    }
+
+    // Reports whether the OpenSearch-backed observability metrics backend is
+    // configured and reachable. The UI uses this to decide the default metrics
+    // provider: when OpenSearch is unavailable it defaults to Moesif and shows
+    // OpenSearch as the secondary option.
+    isolated resource function get observabilityMetricsConfig(graphql:Context context) returns types:ObservabilityMetricsConfigStatus|error {
+        _ = check extractUserContext(context);
+        return {configured: isOpenSearchAvailable()};
     }
 
 }

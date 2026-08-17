@@ -172,6 +172,26 @@ BEGIN
 END;
 /
 
+-- Moesif metrics configuration for a component (kept separate from components to
+-- isolate provider secrets and avoid sparse columns on the core table).
+CREATE TABLE component_moesif_config (
+    component_id CHAR(36) PRIMARY KEY,
+    dashboards_created NUMBER(1) DEFAULT 0 NOT NULL CHECK (dashboards_created IN (0, 1)),
+    workspace_id VARCHAR2(512 CHAR) NULL,
+    management_key VARCHAR2(4000 CHAR) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT fk_moesif_config_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE
+);
+
+CREATE OR REPLACE TRIGGER trg_moesif_config_updated_at
+BEFORE UPDATE ON component_moesif_config
+FOR EACH ROW
+BEGIN
+    :NEW.updated_at := CURRENT_TIMESTAMP;
+END;
+/
+
 CREATE TABLE environments (
     environment_id CHAR(36) PRIMARY KEY,
     name VARCHAR2(200 CHAR) NOT NULL UNIQUE, -- e.g., dev, stage, prod
@@ -724,6 +744,7 @@ CREATE TABLE runtimes (
     runtime_hostname VARCHAR2(255 CHAR) NULL,
     runtime_port VARCHAR2(10 CHAR) NULL,
     callback_url VARCHAR2(500 CHAR) NULL,
+    try_it_host VARCHAR2(255 CHAR) NULL,
     platform_name VARCHAR2(50 CHAR) DEFAULT 'ballerina' NOT NULL,
     platform_version VARCHAR2(50 CHAR) NULL,
     platform_home VARCHAR2(255 CHAR) NULL,
@@ -1374,11 +1395,9 @@ CREATE TABLE mi_data_service_artifacts (
     artifact_id CHAR(36) NOT NULL UNIQUE,
     description CLOB NULL,
     wsdl CLOB NULL,
-    state VARCHAR2(20 CHAR) DEFAULT 'enabled' NOT NULL CHECK (state IN (
-        'enabled',
-        'disabled'
-    )),
+    state VARCHAR2(20 CHAR) DEFAULT 'Active' NOT NULL CHECK (state IN ('Active', 'Faulty')),
     composite_app VARCHAR2(200 CHAR) NULL,
+    error_message CLOB NULL, -- Error message when state is Faulty (data service failed to deploy)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
     PRIMARY KEY (runtime_id, service_name),

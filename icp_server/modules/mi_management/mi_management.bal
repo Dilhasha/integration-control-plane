@@ -558,6 +558,28 @@ public isolated function fetchCompositeAppFaultStackTrace(http:Client mgmtClient
     return stackTrace;
 }
 
+// Fetch the fault stack trace for a faulty Data Service from the MI management API
+// GET /management/data-services/{serviceName}/fault
+public isolated function fetchDataServiceFaultStackTrace(http:Client mgmtClient, string hmacToken, string serviceName) returns string|error {
+    string encodedServiceName = check url:encode(serviceName, "UTF-8");
+    string path = string `${MGMT_API_PATH}/data-services/${encodedServiceName}/fault`;
+    log:printDebug("Calling MI management API for Data Service fault stacktrace", path = path);
+    MgmtDataServiceFaultResponse respResult = check mgmtClient->get(path, {
+        [HEADER_AUTHORIZATION]: string `Bearer ${hmacToken}`,
+        [HEADER_ACCEPT]: CONTENT_TYPE_JSON
+    });
+    string? stackTrace = respResult?.faultStackTrace;
+    if stackTrace is () {
+        log:printWarn("No fault stack trace found for Data Service", serviceName = serviceName);
+        return error(string `No fault stack trace available for Data Service: ${serviceName}`);
+    }
+    if stackTrace.trim().length() == 0 {
+        log:printWarn("Empty fault stack trace found for Data Service", serviceName = serviceName);
+        return error(string `No fault stack trace available for Data Service: ${serviceName}`);
+    }
+    return stackTrace;
+}
+
 public isolated function createRegistryManagementClient(types:Runtime runtime, string runtimeId, boolean allowInsecureTLS) returns types:RegistryApiClient|error {
     log:printDebug("Creating registry management client", runtimeId = runtimeId, hostname = runtime.managementHostname, port = runtime.managementPort);
 

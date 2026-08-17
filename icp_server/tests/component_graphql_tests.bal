@@ -450,3 +450,89 @@ function testGetComponentArtifactTypesNoPermission() returns error? {
     // Should return error (query returns error for artifact operations)
     test:assertTrue(response.errors is json, "Query should return errors for insufficient permissions");
 }
+
+// =============================================================================
+// Test: Create component - every integration type the create form can produce
+// =============================================================================
+
+// Every value in SUPPORTED_DISPLAY_TYPES_BY_RUNTIME (component_repository.bal) must actually be
+// creatable on the runtime it is listed under: one missing from the allowlist is rejected with
+// "Unsupported integration type", making that integration type unusable. The list below is a copy,
+// so it cannot detect the frontend adding a type - adding one means updating the allowlist, this
+// list, and resolveDisplayType in frontend/src/constants/integrationTypes.tsx together.
+@test:Config {
+    groups: ["component-graphql", "create-component"]
+}
+function testCreateComponentAcceptsEveryIntegrationType() returns error? {
+    string mutation = string `
+        mutation CreateComponent($component: ComponentInput!) {
+            createComponent(component: $component) {
+                id
+                displayType
+            }
+        }
+    `;
+
+    // The technology each display type belongs to, so the created integration's metadata is the
+    // combination the create form would actually produce.
+    [string, string][] displayTypes = [
+        ["ballerinaService", "BI"],
+        ["miApiService", "MI"],
+        ["scheduledTask", "BI"],
+        ["miCronjob", "MI"],
+        ["ballerinaEventHandler", "BI"],
+        ["miEventHandler", "MI"],
+        ["ballerinaWorkflow", "BI"]
+    ];
+
+    foreach int i in 0 ..< displayTypes.length() {
+        [string, string] [displayType, componentType] = displayTypes[i];
+        json variables = {
+            component: {
+                name: string `test-integration-type-${i}`,
+                displayName: string `Test ${displayType}`,
+                description: "Integration type allowlist coverage",
+                projectId: PROJECT_1_ID,
+                componentType: componentType,
+                displayType: displayType
+            }
+        };
+
+        json response = check executeGraphQL(mutation, project1AdminToken, variables);
+        test:assertFalse(response.errors is json,
+                string `Creating an integration of type ${displayType} must be accepted`);
+
+        json created = check (check response.data).createComponent;
+        test:assertEquals(check created.displayType, displayType,
+                string `The created integration must read back as ${displayType}`);
+    }
+}
+
+// A type the create form cannot produce is still rejected, so the allowlist keeps its purpose.
+@test:Config {
+    groups: ["component-graphql", "create-component"]
+}
+function testCreateComponentRejectsUnknownIntegrationType() returns error? {
+    string mutation = string `
+        mutation CreateComponent($component: ComponentInput!) {
+            createComponent(component: $component) { id }
+        }
+    `;
+
+    json variables = {
+        component: {
+            name: "test-integration-bogus-type",
+            displayName: "Bogus",
+            description: "Unknown integration type",
+            projectId: PROJECT_1_ID,
+            displayType: "notAnIntegrationType"
+        }
+    };
+
+    json response = check executeGraphQL(mutation, project1AdminToken, variables);
+    test:assertTrue(response.errors is json, "An unknown integration type must be rejected");
+
+    // Assert on the message too, so an unrelated failure (permissions, validation) cannot pass.
+    test:assertTrue(response.toJsonString().includes("Unsupported integration type"),
+            string `Rejection must come from the display-type allowlist, got: ${response.toJsonString()}`);
+}

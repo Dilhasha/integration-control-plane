@@ -16,14 +16,15 @@
  * under the License.
  */
 
-import { Alert, Button, CircularProgress, Grid, PageContent, Stack, TextField, Typography } from '@wso2/oxygen-ui';
+import { Alert, Box, Button, CircularProgress, Grid, PageContent, Stack, TextField, Typography } from '@wso2/oxygen-ui';
 import { ArrowLeft } from '@wso2/oxygen-ui-icons-react';
 import { useState, useEffect, type JSX } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useUpdateComponent, type UpdateComponentInput } from '../api/mutations';
 import { useComponentByHandler, useProjectByHandler } from '../api/queries';
-import { integrationTypeLabel } from '../constants/integrationTypes';
-import { technologyLabel } from '../constants/technologies';
+import IntegrationTypeSelector from '../components/IntegrationTypeSelector';
+import { integrationTypeFromStored, resolveComponentSubType, resolveDisplayType, type IntegrationType } from '../constants/integrationTypes';
+import { technologyLabel, type Technology } from '../constants/technologies';
 import { resourceUrl, narrow, type ProjectScope, type ComponentScope } from '../nav';
 import NotFound from '../components/NotFound';
 
@@ -36,12 +37,14 @@ export default function EditComponent(scope: ProjectScope | ComponentScope): JSX
   const { data: component, error: componentError, isLoading: componentLoading } = useComponentByHandler(projectId, componentHandler);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
+  const [integrationType, setIntegrationType] = useState<IntegrationType>('service');
   const mutation = useUpdateComponent();
 
   useEffect(() => {
     if (component) {
       setDisplayName(component.displayName || '');
       setDescription(component.description || '');
+      setIntegrationType(integrationTypeFromStored(component.displayType, component.componentSubType));
     }
   }, [component]);
 
@@ -53,11 +56,16 @@ export default function EditComponent(scope: ProjectScope | ComponentScope): JSX
 
   const submit = () => {
     if (!component?.id) return;
+    // Technology is not editable here, so the existing runtime is what the new
+    // integration type is encoded against.
+    const technology = component.componentType as Technology;
     const input: UpdateComponentInput = {
       id: component.id,
       displayName: displayName.trim(),
       description: description.trim(),
-      componentType: component.componentType as 'MI' | 'BI',
+      componentType: technology,
+      displayType: resolveDisplayType(technology, integrationType),
+      componentSubType: resolveComponentSubType(technology, integrationType),
     };
     mutation.mutate(input, {
       onSuccess: () => navigate(resourceUrl(narrow(scope, component.handler), 'overview')),
@@ -98,7 +106,7 @@ export default function EditComponent(scope: ProjectScope | ComponentScope): JSX
       )}
 
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid size={{ xs: 12, md: 3 }}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <TextField
             label="Display Name"
             required
@@ -112,16 +120,20 @@ export default function EditComponent(scope: ProjectScope | ComponentScope): JSX
             slotProps={{ htmlInput: { 'aria-label': 'Display Name' } }}
           />
         </Grid>
-        <Grid size={{ xs: 12, md: 3 }}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <TextField label="Name" value={component.handler} fullWidth disabled slotProps={{ htmlInput: { 'aria-label': 'Name' } }} helperText="Name cannot be changed" />
         </Grid>
-        <Grid size={{ xs: 12, md: 3 }}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <TextField label="Technology" value={technologyLabel(component.componentType)} fullWidth disabled slotProps={{ htmlInput: { 'aria-label': 'Technology' } }} helperText="Technology cannot be changed" />
         </Grid>
-        <Grid size={{ xs: 12, md: 3 }}>
-          <TextField label="Integration Type" value={integrationTypeLabel(component.displayType, component.componentSubType)} fullWidth disabled slotProps={{ htmlInput: { 'aria-label': 'Integration Type' } }} helperText="Integration Type cannot be changed" />
-        </Grid>
       </Grid>
+
+      <Box sx={{ mb: 4 }}>
+        <Typography variant="h5" sx={{ mb: 2 }}>
+          Integration Type
+        </Typography>
+        <IntegrationTypeSelector selected={integrationType} onSelect={setIntegrationType} technology={component.componentType as Technology} />
+      </Box>
 
       <TextField
         label="Description"

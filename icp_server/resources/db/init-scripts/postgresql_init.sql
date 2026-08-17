@@ -142,6 +142,21 @@ CREATE INDEX idx_comp_project_id ON components(project_id);
 CREATE TRIGGER update_components_updated_at BEFORE UPDATE ON components
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
+-- Moesif metrics configuration for a component (kept separate from components to
+-- isolate provider secrets and avoid sparse columns on the core table).
+CREATE TABLE component_moesif_config (
+    component_id CHAR(36) PRIMARY KEY,
+    dashboards_created BOOLEAN NOT NULL DEFAULT FALSE,
+    workspace_id VARCHAR(512) NULL,
+    management_key VARCHAR(4096) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_moesif_config_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE
+);
+
+CREATE TRIGGER update_component_moesif_config_updated_at BEFORE UPDATE ON component_moesif_config
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
 CREATE TABLE environments (
     environment_id CHAR(36) PRIMARY KEY,
     name VARCHAR(200) NOT NULL UNIQUE, -- e.g., dev, stage, prod
@@ -630,6 +645,7 @@ CREATE TABLE runtimes (
     runtime_hostname VARCHAR(255) NULL,
     runtime_port VARCHAR(10) NULL,
     callback_url VARCHAR(500) NULL,
+    try_it_host VARCHAR(255) NULL,
     platform_name VARCHAR(50) NOT NULL DEFAULT 'ballerina',
     platform_version VARCHAR(50) NULL,
     platform_home VARCHAR(255) NULL,
@@ -1131,8 +1147,9 @@ CREATE TABLE mi_data_service_artifacts (
     service_name VARCHAR(200) NOT NULL,
     description TEXT NULL,
     wsdl TEXT NULL,
-    state VARCHAR(20) NOT NULL DEFAULT 'enabled' CHECK (state IN ('enabled', 'disabled')),
+    state VARCHAR(20) NOT NULL DEFAULT 'Active' CHECK (state IN ('Active', 'Faulty')),
     composite_app VARCHAR(200) NULL,
+    error_message TEXT NULL, -- Error message when state is Faulty (data service failed to deploy)
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (runtime_id, service_name),

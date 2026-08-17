@@ -173,6 +173,8 @@ function updateFrontendConfig() returns error? {
         "VITE_GRAPHQL_URL": backendGraphqlEndpoint,
         "VITE_AUTH_BASE_URL": backendAuthBaseUrl,
         "VITE_OBSERVABILITY_URL": backendObservabilityEndpoint,
+        "VITE_WORKFLOW_URL": backendWorkflowEndpoint,
+        "VITE_TRYIT_URL": backendTryitEndpoint,
         "VITE_WS_URL": backendWsUrl,
         "VITE_SSO_ENABLED": ssoEnabled,
         "VITE_SSO_ISSUER": ssoIssuer,

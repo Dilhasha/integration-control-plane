@@ -1,0 +1,598 @@
+{
+  "dashboards": [
+    {
+      "_id": "6941174087aa28566b8b97ed",
+      "name": "Overall",
+      "dashboard_ids": [],
+      "workspace_ids": [
+        ["6943e426d3d2c00ae55ac962", "6941174287aa28566b8b97f1", "69411744b7927846fd87377b"],
+        ["69411744b7927846fd873779", "6941174587aa28566b8b97fc", "6941174387aa28566b8b97f8"],
+        ["69411745b7927846fd87377e", "69411746d3d2c00ae559a7a7", "6941174687aa28566b8b97ff"],
+        ["69411747d3d2c00ae559a7aa", "69411747b7927846fd873781"]
+      ],
+      "parent": null,
+      "sort_order": 5
+    }
+  ],
+  "workspaces": [
+    {
+      "_id": "6943e426d3d2c00ae55ac962",
+      "type": "events",
+      "name": "Distribution by Component Type",
+      "args": "",
+      "es_query": {
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "match_all": {}
+            },
+            "aggs": {
+              "metadata.entityType.raw": {
+                "terms": {
+                  "field": "metadata.entityType.raw",
+                  "size": "10",
+                  "min_doc_count": 1,
+                  "order": {
+                    "_id|cardinality": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              },
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?seg[groups][0][field]=metadata.entityType.raw&seg[groups][0][func]=terms&seg[groups][0][buckets]=10&seg[groups][0][by]=metric&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Distribution%20by%20Component%20Type&seg[chartType]=pie"
+    },
+    {
+      "_id": "6941174287aa28566b8b97f1",
+      "type": "events",
+      "name": "Total Requests",
+      "args": "",
+      "es_query": {
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "match_all": {}
+            },
+            "aggs": {
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?seg[metrics][0][i]=70f472d2&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Total%20Requests"
+    },
+    {
+      "_id": "69411744b7927846fd87377b",
+      "type": "events",
+      "name": "Fault Responses",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "terms": {
+            "metadata.faultResponse": ["true"]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "terms": {
+                "metadata.faultResponse": ["true"]
+              }
+            },
+            "aggs": {
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=metadata.faultResponse&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=eq&evtcf[filtersGroups][0][filters][0][value][0]=true&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Fault%20Responses"
+    },
+    {
+      "_id": "69411744b7927846fd873779",
+      "type": "events",
+      "name": "Overall Message Count Over Time",
+      "args": "",
+      "es_query": {
+        "size": 0,
+        "aggs": {
+          "entTmSrs": {
+            "filter": {
+              "match_all": {}
+            },
+            "aggs": {
+              "request.time": {
+                "date_histogram": {
+                  "field": "request.time",
+                  "interval": "1h",
+                  "time_zone": "Asia/Colombo"
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "time",
+      "funnel_query": {},
+      "urlQuery": "?evt_ts[metrics][0][metricName]=count%28event_id%29&evt_ts[metrics][0][customName]=Overall%20Message%20Count%20Over%20Time&evt_ts[chartType]=bar&evt_ts[interval]=1h"
+    },
+    {
+      "_id": "6941174587aa28566b8b97fc",
+      "type": "events",
+      "name": "Success Requests",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "terms": {
+            "metadata.failure": ["false"]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "terms": {
+                "metadata.failure": ["false"]
+              }
+            },
+            "aggs": {
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=metadata.failure&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=eq&evtcf[filtersGroups][0][filters][0][value][0]=false&evt_ts[chartType]=bar&evt_ts[metrics][0][i]=10619adf&evt_ts[metrics][0][metricName]=count%28event_id%29&evt_ts[metrics][0][customName]=Success%20Requests&seg[metrics][0][i]=10619adf&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Success%20Requests"
+    },
+    {
+      "_id": "6941174387aa28566b8b97f8",
+      "type": "events",
+      "name": "Failure Rate",
+      "args": "",
+      "es_query": {
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "match_all": {}
+            },
+            "aggs": {
+              "metadata.failure": {
+                "terms": {
+                  "field": "metadata.failure",
+                  "size": 5,
+                  "min_doc_count": 1,
+                  "order": {
+                    "_id|cardinality": "desc"
+                  }
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              },
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?seg[groups][0][field]=metadata.failure&seg[groups][0][func]=terms&seg[groups][0][by]=metric&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Failure%20Rate&seg[chartType]=pie"
+    },
+    {
+      "_id": "69411745b7927846fd87377e",
+      "type": "events",
+      "name": "Top APIs by Request Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "should": [
+              {
+                "exists": {
+                  "field": "metadata.apiDetails.api.raw"
+                }
+              },
+              {
+                "exists": {
+                  "field": "metadata.apiDetails.api"
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "bool": {
+                "should": [
+                  {
+                    "exists": {
+                      "field": "metadata.apiDetails.api.raw"
+                    }
+                  },
+                  {
+                    "exists": {
+                      "field": "metadata.apiDetails.api"
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "metadata.apiDetails.api.raw": {
+                "terms": {
+                  "field": "metadata.apiDetails.api.raw",
+                  "size": "10",
+                  "min_doc_count": 1,
+                  "order": {
+                    "_id|cardinality": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              },
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=2d2c86d6&evtcf[filtersGroups][0][filters][0][field]=metadata.apiDetails.api.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=exists&evtcf[filtersGroups][0][filters][0][value]=&seg[groups][0][field]=metadata.apiDetails.api.raw&seg[groups][0][func]=terms&seg[groups][0][buckets]=10&seg[groups][0][by]=metric&seg[metrics][0][i]=ebd0193e&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Top%20APIs%20by%20Request%20Count"
+    },
+    {
+      "_id": "69411746d3d2c00ae559a7a7",
+      "type": "events",
+      "name": "Top Proxy Services by Request Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "should": [
+              {
+                "exists": {
+                  "field": "metadata.proxyServiceDetails.name.raw"
+                }
+              },
+              {
+                "exists": {
+                  "field": "metadata.proxyServiceDetails.name"
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "bool": {
+                "should": [
+                  {
+                    "exists": {
+                      "field": "metadata.proxyServiceDetails.name.raw"
+                    }
+                  },
+                  {
+                    "exists": {
+                      "field": "metadata.proxyServiceDetails.name"
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "metadata.proxyServiceDetails.name.raw": {
+                "terms": {
+                  "field": "metadata.proxyServiceDetails.name.raw",
+                  "size": "10",
+                  "min_doc_count": 1,
+                  "order": {
+                    "_id|cardinality": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              },
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=metadata.proxyServiceDetails.name.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=exists&evtcf[filtersGroups][0][filters][0][value]=&seg[groups][0][field]=metadata.proxyServiceDetails.name.raw&seg[groups][0][func]=terms&seg[groups][0][buckets]=10&seg[groups][0][by]=metric&seg[metrics][0][i]=50aa182c&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Top%20Proxy%20Services%20by%20Request%20Count"
+    },
+    {
+      "_id": "6941174687aa28566b8b97ff",
+      "type": "events",
+      "name": "Top Sequences by Request Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "should": [
+              {
+                "exists": {
+                  "field": "metadata.sequenceDetails.name.raw"
+                }
+              },
+              {
+                "exists": {
+                  "field": "metadata.sequenceDetails.name"
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "bool": {
+                "should": [
+                  {
+                    "exists": {
+                      "field": "metadata.sequenceDetails.name.raw"
+                    }
+                  },
+                  {
+                    "exists": {
+                      "field": "metadata.sequenceDetails.name"
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "metadata.sequenceDetails.name.raw": {
+                "terms": {
+                  "field": "metadata.sequenceDetails.name.raw",
+                  "size": "10",
+                  "min_doc_count": 1,
+                  "order": {
+                    "_id|cardinality": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              },
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=metadata.sequenceDetails.name.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=exists&evtcf[filtersGroups][0][filters][0][value]=&seg[groups][0][field]=metadata.sequenceDetails.name.raw&seg[groups][0][func]=terms&seg[groups][0][buckets]=10&seg[groups][0][by]=metric&seg[metrics][0][i]=694d4fbb&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Top%20Sequences%20by%20Request%20Count"
+    },
+    {
+      "_id": "69411747d3d2c00ae559a7aa",
+      "type": "events",
+      "name": "Top Endpoints by Request Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "terms": {
+            "metadata.entityType.raw": ["Endpoint"]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "terms": {
+                "metadata.entityType.raw": ["Endpoint"]
+              }
+            },
+            "aggs": {
+              "metadata.endpointDetails.name.raw": {
+                "terms": {
+                  "field": "metadata.endpointDetails.name.raw",
+                  "size": "10",
+                  "min_doc_count": 1,
+                  "order": {
+                    "_id|cardinality": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              },
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=metadata.entityType.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=Endpoint&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Top%20Endpoints%20by%20Request%20Count&seg[groups][0][field]=metadata.endpointDetails.name.raw&seg[groups][0][func]=terms&seg[groups][0][buckets]=10&seg[groups][0][by]=metric"
+    },
+    {
+      "_id": "69411747b7927846fd873781",
+      "type": "events",
+      "name": "Top Inbound Endpoints by Request Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "terms": {
+            "metadata.entityType.raw": ["InboundEndpoint"]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "terms": {
+                "metadata.entityType.raw": ["InboundEndpoint"]
+              }
+            },
+            "aggs": {
+              "metadata.inboundEndpointDetails.name.raw": {
+                "terms": {
+                  "field": "metadata.inboundEndpointDetails.name.raw",
+                  "size": "10",
+                  "min_doc_count": 1,
+                  "order": {
+                    "_id|cardinality": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "_id|cardinality": {
+                    "cardinality": {
+                      "field": "_id"
+                    }
+                  }
+                }
+              },
+              "_id|cardinality": {
+                "cardinality": {
+                  "field": "_id"
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=metadata.entityType.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=InboundEndpoint&seg[groups][0][field]=metadata.inboundEndpointDetails.name.raw&seg[groups][0][func]=terms&seg[groups][0][buckets]=10&seg[groups][0][by]=metric&seg[metrics][0][i]=e19d1a0a&seg[metrics][0][metricName]=count%28event_id%29&seg[metrics][0][customName]=Top%20Inbound%20Endpoints%20by%20Request%20Count"
+    }
+  ]
+}

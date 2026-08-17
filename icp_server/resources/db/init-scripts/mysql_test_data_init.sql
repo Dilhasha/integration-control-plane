@@ -17,7 +17,7 @@ VALUES ('550e8400-e29b-41d4-a716-446655440000', 'admin', 'Super Admin', TRUE);
 
 INSERT INTO group_user_mapping (group_id, user_uuid)
 VALUES (
-    (SELECT group_id FROM user_groups WHERE group_name = 'Super Admins'),
+    (SELECT group_id FROM user_groups WHERE group_name = 'Super Admins' AND org_uuid = 1),
     '550e8400-e29b-41d4-a716-446655440000'
 );
 

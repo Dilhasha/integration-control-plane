@@ -19,6 +19,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { observabilityMetricsApiUrl } from '../paths';
 import { authenticatedFetch } from '../auth/tokenManager';
+import { gql } from './graphql';
 
 export interface MetricsRequest {
   componentId?: string;
@@ -88,6 +89,32 @@ async function fetchMetrics(req: MetricsRequest): Promise<MetricsResponse> {
     }
     throw error;
   }
+}
+
+// ── OpenSearch observability metrics availability ──
+
+// Whether the OpenSearch-backed observability metrics backend is configured and
+// reachable. The metrics landing page uses this to choose the default provider:
+// when OpenSearch is unavailable it defaults to Moesif and shows OpenSearch as
+// the secondary option.
+export interface ObservabilityMetricsConfigStatus {
+  configured: boolean;
+}
+
+const OBSERVABILITY_METRICS_CONFIG_QUERY = `
+  query ObservabilityMetricsConfig {
+    observabilityMetricsConfig {
+      configured
+    }
+  }`;
+
+// Reads whether OpenSearch observability metrics are configured/available.
+export function useObservabilityMetricsConfig() {
+  return useQuery<ObservabilityMetricsConfigStatus>({
+    queryKey: ['observability-metrics-config'],
+    queryFn: () => gql<{ observabilityMetricsConfig: ObservabilityMetricsConfigStatus }>(OBSERVABILITY_METRICS_CONFIG_QUERY).then((d) => d.observabilityMetricsConfig),
+    staleTime: 5 * 60_000,
+  });
 }
 
 export function useMetrics(req: MetricsRequest | null, getTimeRange?: () => { startTime: string; endTime: string }) {

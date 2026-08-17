@@ -108,6 +108,18 @@ CREATE TABLE components (
     INDEX idx_project_id (project_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
+-- Moesif metrics configuration for a component (kept separate from components to
+-- isolate provider secrets and avoid sparse columns on the core table).
+CREATE TABLE component_moesif_config (
+    component_id CHAR(36) PRIMARY KEY,
+    dashboards_created BOOLEAN NOT NULL DEFAULT FALSE,
+    workspace_id VARCHAR(512) NULL,
+    management_key VARCHAR(4096) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_moesif_config_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 CREATE TABLE environments (
     environment_id CHAR(36) PRIMARY KEY,
     name VARCHAR(200) NOT NULL UNIQUE, -- e.g., dev, stage, prod
@@ -575,6 +587,7 @@ CREATE TABLE runtimes (
     runtime_hostname VARCHAR(255) NULL,
     runtime_port VARCHAR(10) NULL,
     callback_url VARCHAR(500) NULL,
+    try_it_host VARCHAR(255) NULL,
     platform_name VARCHAR(50) NOT NULL DEFAULT 'ballerina',
     platform_version VARCHAR(50) NULL,
     platform_home VARCHAR(255) NULL,
@@ -1048,11 +1061,9 @@ CREATE TABLE mi_data_service_artifacts (
     artifact_id CHAR(36) NOT NULL UNIQUE,
     description TEXT NULL,
     wsdl TEXT NULL,
-    state ENUM(
-        'enabled',
-        'disabled'
-    ) NOT NULL DEFAULT 'enabled',
+    state ENUM('Active', 'Faulty') NOT NULL DEFAULT 'Active',
     composite_app VARCHAR(200) NULL,
+    error_message TEXT NULL, -- Error message when state is Faulty (data service failed to deploy)
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (runtime_id, service_name),

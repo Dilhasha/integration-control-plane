@@ -47,8 +47,8 @@ import {
   Tooltip,
   Typography,
 } from '@wso2/oxygen-ui';
-import { RefreshCw, ListFilter, LayoutGrid, Server, Settings, Play, Square, Plus, X, Trash2, UserPlus, Code, Sliders, Link as LinkIcon, FileText, BookOpen, Package, Tag, Check, Copy, Layers } from '@wso2/oxygen-ui-icons-react';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RefreshCw, ListFilter, LayoutGrid, Server, Settings, Play, Square, Plus, X, Trash2, UserPlus, Code, Sliders, Link as LinkIcon, FileText, BookOpen, Package, Tag, FlaskConical, Layers } from '@wso2/oxygen-ui-icons-react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import { useArtifacts, useRefreshEnvironmentArtifacts, useComponentRuntimes, type GqlArtifact, type GqlEnvironment } from '../api/queries';
@@ -56,14 +56,16 @@ import { useUpdateArtifactTracingStatus, useUpdateArtifactStatisticsStatus } fro
 import { useUpdateArtifactStatus, useUpdateListenerState, useTriggerTask } from '../api/mutations';
 import { useListMiUsers, useCreateMiUser, useDeleteMiUser } from '../api/miUsers';
 import { ArtifactApiDefinition, ServiceResources, ServiceListeners, AutomationExecutions, ProxyApiReference } from './ArtifactTabs';
-import { SchemaDisclosure } from './workflow/shared';
 import { StartWorkflowDialog, type Toast as WorkflowToast } from './workflow/AdminPortal';
+import WorkflowInstancesPanel from './workflow/WorkflowInstancesPanel';
 import { ArtifactTypeSelector } from './ArtifactDetail';
 import Authorized from './Authorized';
 import { Permissions } from '../constants/permissions';
-import { resourceUrl, useScope } from '../nav';
+import { hasComponent, resourceUrl, useScope } from '../nav';
+import { isWorkflowIntegration } from '../constants/integrationTypes';
 import { ENTRY_POINT_CONFIG, ENTRY_POINT_DETAIL_TABS, type SelectedArtifact, type TabProps } from './artifact-config';
 import SyncSwitch from './SyncSwitch';
+import CopyButton from './CopyButton';
 
 // Stable reference for useArtifacts' `data` fallback — a fresh `[]` literal on every render (the
 // default in `const { data: x = [] } = ...`) changes identity even when the query is disabled and
@@ -84,33 +86,44 @@ function EntryTypeChip({ cfg }: { cfg?: { label: string; color: string; bgColor:
   return <Chip label={cfg.label} size="small" sx={{ bgcolor: cfg.bgColor, color: cfg.color, fontWeight: 700, fontSize: 11, minWidth: 60, justifyContent: 'center' }} />;
 }
 
-// Mirrors devant's EndpointUrlsPanel CopyButton — same 2s "Copied!" revert and icon sizing.
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(resetTimer.current), []);
-  const handleCopy = useCallback(() => {
-    void navigator.clipboard
-      ?.writeText(value)
-      .then(() => {
-        setCopied(true);
-        clearTimeout(resetTimer.current);
-        resetTimer.current = setTimeout(() => setCopied(false), 2000);
-      })
-      .catch(() => setCopied(false));
-  }, [value]);
-  return (
-    <Tooltip title={copied ? 'Copied!' : `Copy ${label}`}>
-      <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25, flexShrink: 0 }}>
-        {copied ? <Check size={13} /> : <Copy size={13} />}
-      </IconButton>
-    </Tooltip>
-  );
-}
-
 // swagger-ui-react is ~1.3MB gzipped - code-split it out of the main bundle since it's only
 // needed when a user actually opens the API docs drawer for a BI service.
 const OpenApiDefinitionsDrawer = lazy(() => import('./OpenApiDefinitionsDrawer').then((m) => ({ default: m.OpenApiDefinitionsDrawer })));
+
+/**
+ * View Workflows / Start New Workflow, with the start dialog and its toast.
+ *
+ * Rendered beside the definition selector, which only a Workflow integration has - workflow
+ * definitions are not listed for any other integration type.
+ */
+function WorkflowActions({ componentId, envId, workflowType }: { componentId: string; envId: string; workflowType: string }) {
+  const [startOpen, setStartOpen] = useState(false);
+  const [toast, setToast] = useState<WorkflowToast>(null);
+  const navigate = useNavigate();
+  const scope = useScope();
+
+  return (
+    <>
+      <Button variant="contained" size="small" startIcon={<LayoutGrid size={14} />} onClick={() => navigate(`${resourceUrl(scope, 'workflows')}?tab=management&type=${encodeURIComponent(workflowType)}&env=${encodeURIComponent(envId)}`)}>
+        View Workflows
+      </Button>
+      <Authorized permissions={[Permissions.WORKFLOW_MANAGE_WORKFLOWS]}>
+        <Button variant="contained" size="small" startIcon={<Play size={14} />} onClick={() => setStartOpen(true)}>
+          Start New Workflow
+        </Button>
+      </Authorized>
+      {startOpen && (
+        <StartWorkflowDialog scope={{ targets: [{ componentId, componentName: '', handler: hasComponent(scope) ? scope.component : '' }], environmentId: envId }} initialWorkflowType={workflowType} onClose={() => setStartOpen(false)} onToast={setToast} />
+      )}
+      <Snackbar open={toast !== null} autoHideDuration={4000} onClose={() => setToast(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        {/* Alert stays mounted so the Snackbar's exit transition can play after the toast clears. */}
+        <Alert severity={toast?.severity ?? 'success'} onClose={() => setToast(null)} sx={{ width: '100%' }}>
+          {toast?.message}
+        </Alert>
+      </Snackbar>
+    </>
+  );
+}
 
 function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArtifact; onOpenDrawerTab: (tab: string) => void }) {
   const [tracingEnabled, setTracingEnabled] = useState(false);
@@ -125,8 +138,6 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
   const [listenerToggleError, setListenerToggleError] = useState<string | null>(null);
   const [triggerConfirmDialogOpen, setTriggerConfirmDialogOpen] = useState(false);
   const [triggerSuccessMessage, setTriggerSuccessMessage] = useState<string | null>(null);
-  const [startWorkflowOpen, setStartWorkflowOpen] = useState(false);
-  const [workflowToast, setWorkflowToast] = useState<WorkflowToast>(null);
   const { artifact, artifactType, envId, componentId, projectId } = selected;
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -143,7 +154,6 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
   const overviewFields = (config?.overviewFields ?? '').split(', ').filter(Boolean);
   const showTracingToggle = ['RestApi', 'ProxyService', 'InboundEndpoint'].includes(artifactType);
   const showParametersButton = artifactType === 'InboundEndpoint';
-  const showInstancesButton = artifactType === 'Workflow';
   const showWsdlButton = artifactType === 'ProxyService';
   const showStatisticsToggle = ['RestApi', 'ProxyService', 'InboundEndpoint'].includes(artifactType);
   const showStatusToggle = ['ProxyService', 'InboundEndpoint'].includes(artifactType);
@@ -163,18 +173,7 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
   // Track if any preceding controls are visible for proper divider placement
   const hasPrecedingControls = compositeApp || showStatusToggle || showStatusChip || showTracingToggle || showStatisticsToggle || showListenerToggle;
   const hasHeaderControls =
-    !!compositeApp ||
-    showStatusChip ||
-    showStatusToggle ||
-    showTracingToggle ||
-    showStatisticsToggle ||
-    showListenerToggle ||
-    showParametersButton ||
-    showWsdlButton ||
-    showInstancesButton ||
-    showTaskToggle ||
-    showTaskTrigger ||
-    (showApiDocsButton && !!apiDocsRuntimeId);
+    !!compositeApp || showStatusChip || showStatusToggle || showTracingToggle || showStatisticsToggle || showListenerToggle || showParametersButton || showWsdlButton || showTaskToggle || showTaskTrigger || (showApiDocsButton && !!apiDocsRuntimeId);
 
   const artifactName = artifactType === 'Automation' ? (artifact.packageName?.toString() ?? '') : (artifact.name?.toString() ?? '');
   const artifactKey = `${artifactType}-${artifactName}`;
@@ -460,27 +459,17 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
                 View WSDL
               </Button>
             )}
-            {showInstancesButton && (
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<LayoutGrid size={14} />}
-                onClick={() => navigate(`${resourceUrl(scope, 'workflows')}?tab=admin&type=${encodeURIComponent(artifactName)}&env=${encodeURIComponent(envId)}`)}
-                sx={{ ml: showParametersButton || showWsdlButton ? 0 : 'auto' }}>
-                View Instances
-              </Button>
-            )}
-            {showInstancesButton && (
-              <Authorized permissions={[Permissions.WORKFLOW_MANAGE_WORKFLOWS]}>
-                <Button variant="contained" size="small" startIcon={<Play size={14} />} onClick={() => setStartWorkflowOpen(true)}>
-                  Start Workflow
-                </Button>
-              </Authorized>
-            )}
             {showApiDocsButton && apiDocsRuntimeId && (
-              <Button variant="contained" size="small" startIcon={<BookOpen size={14} />} onClick={() => setViewingApiDocs(true)} sx={{ ml: 'auto' }}>
-                View API Docs
-              </Button>
+              <Stack direction="row" gap={1} sx={{ ml: 'auto' }}>
+                <Authorized permissions={[Permissions.INTEGRATION_EDIT, Permissions.INTEGRATION_MANAGE]}>
+                  <Button variant="outlined" size="small" startIcon={<FlaskConical size={14} />} onClick={() => navigate(`${resourceUrl(scope, 'test')}?service=${encodeURIComponent(artifactName)}&env=${encodeURIComponent(envId)}`)}>
+                    Test
+                  </Button>
+                </Authorized>
+                <Button variant="contained" size="small" startIcon={<BookOpen size={14} />} onClick={() => setViewingApiDocs(true)}>
+                  View API Docs
+                </Button>
+              </Stack>
             )}
           </Stack>
         )}
@@ -509,16 +498,15 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
             ))}
           </Box>
         )}
-        {artifactType === 'Workflow' && (
-          <Box sx={{ px: 2, py: 1.5 }}>
-            {artifact.inputSchema ? (
-              <SchemaDisclosure schema={String(artifact.inputSchema)} />
-            ) : (
-              <Typography variant="caption" color="text.secondary">
-                No input schema defined for this workflow.
-              </Typography>
-            )}
-          </Box>
+        {/* Listing instances calls /workflows, which the proxy gates on the workflow view permission,
+            so the panel is only rendered for someone who can actually load it. */}
+        {/* hasComponent narrows the scope so the task queue is a string: the panel must never run its
+            query unscoped, which would list the other integrations' runs too. This page only renders
+            at integration scope, so the guard is a type-level guarantee rather than a live branch. */}
+        {artifactType === 'Workflow' && hasComponent(scope) && (
+          <Authorized permissions={[Permissions.WORKFLOW_VIEW_WORKFLOWS, Permissions.WORKFLOW_MANAGE_WORKFLOWS]}>
+            <WorkflowInstancesPanel componentId={componentId} environmentId={envId} workflowType={artifactName} taskQueue={scope.component} />
+          </Authorized>
         )}
         {/* pt: 0 for Service — it's the first block rendered (no header/overview above it here), so
             the grid's own mb above already provides the gap; adding padding-top on top of that
@@ -552,18 +540,11 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
           {listenerToggleError}
         </Alert>
       </Snackbar>
-      {startWorkflowOpen && <StartWorkflowDialog scope={{ componentId, environmentId: envId }} initialWorkflowType={artifactName} onClose={() => setStartWorkflowOpen(false)} onToast={setWorkflowToast} />}
       {viewingApiDocs && apiDocsRuntimeId && (
         <Suspense fallback={null}>
           <OpenApiDefinitionsDrawer runtimeId={apiDocsRuntimeId} onClose={() => setViewingApiDocs(false)} serviceBasePath={artifact.basePath?.toString()} />
         </Suspense>
       )}
-      <Snackbar open={workflowToast !== null} autoHideDuration={4000} onClose={() => setWorkflowToast(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
-        {/* Alert stays mounted so the Snackbar's exit transition can play after the toast clears. */}
-        <Alert severity={workflowToast?.severity ?? 'success'} onClose={() => setWorkflowToast(null)} sx={{ width: '100%' }}>
-          {workflowToast?.message}
-        </Alert>
-      </Snackbar>
     </>
   );
 }
@@ -573,6 +554,7 @@ function EntryPointsList({
   componentId,
   projectId,
   componentType,
+  displayType,
   isOnline,
   onOpenDrawer,
   onSelectionChange,
@@ -581,6 +563,7 @@ function EntryPointsList({
   componentId: string;
   projectId: string;
   componentType: string;
+  displayType?: string;
   isOnline: boolean;
   onOpenDrawer: (a: GqlArtifact, type: string, envId: string, tab: string) => void;
   onSelectionChange?: (entry: { artifact: GqlArtifact; type: string } | null) => void;
@@ -589,23 +572,30 @@ function EntryPointsList({
   const navigate = useNavigate();
   const scope = useScope();
   const isMI = componentType === 'MI';
+  // Workflow definitions are shown for a Workflow integration and no other type. Its BI runtime also
+  // reports the service and listener artifacts that host the workflow engine, but those are
+  // implementation detail rather than something the integration exposes - so the two sets do not mix
+  // in either direction.
+  const workflowOnly = isWorkflowIntegration(displayType);
 
   const { data: apis = EMPTY_ARTIFACTS, isLoading: loadingApis } = useArtifacts('RestApi', envId, componentId, { enabled: isMI, active: isOnline });
   const { data: proxies = EMPTY_ARTIFACTS, isLoading: loadingProxies } = useArtifacts('ProxyService', envId, componentId, { enabled: isMI, active: isOnline });
   const { data: inboundEps = EMPTY_ARTIFACTS, isLoading: loadingInbound } = useArtifacts('InboundEndpoint', envId, componentId, { enabled: isMI, active: isOnline });
   const { data: tasks = EMPTY_ARTIFACTS, isLoading: loadingTasks } = useArtifacts('Task', envId, componentId, { enabled: isMI, active: isOnline });
-  const { data: services = EMPTY_ARTIFACTS, isLoading: loadingServices } = useArtifacts('Service', envId, componentId, { enabled: !isMI, active: isOnline });
-  const { data: automations = EMPTY_ARTIFACTS, isLoading: loadingAutomations } = useArtifacts('Automation', envId, componentId, { enabled: !isMI, active: isOnline });
-  const { data: workflows = EMPTY_ARTIFACTS, isLoading: loadingWorkflows } = useArtifacts('Workflow', envId, componentId, { enabled: !isMI, active: isOnline });
+  const { data: services = EMPTY_ARTIFACTS, isLoading: loadingServices } = useArtifacts('Service', envId, componentId, { enabled: !isMI && !workflowOnly, active: isOnline });
+  const { data: automations = EMPTY_ARTIFACTS, isLoading: loadingAutomations } = useArtifacts('Automation', envId, componentId, { enabled: !isMI && !workflowOnly, active: isOnline });
+  const { data: workflows = EMPTY_ARTIFACTS, isLoading: loadingWorkflows } = useArtifacts('Workflow', envId, componentId, { enabled: !isMI && workflowOnly, active: isOnline });
 
-  const isLoading = isMI ? loadingApis || loadingProxies || loadingInbound || loadingTasks : loadingServices || loadingAutomations || loadingWorkflows;
+  const isLoading = isMI ? loadingApis || loadingProxies || loadingInbound || loadingTasks : workflowOnly ? loadingWorkflows : loadingServices || loadingAutomations;
 
   const allEntryPoints = useMemo(
     () =>
       isMI
         ? [...apis.map((a) => ({ artifact: a, type: 'RestApi' })), ...proxies.map((a) => ({ artifact: a, type: 'ProxyService' })), ...inboundEps.map((a) => ({ artifact: a, type: 'InboundEndpoint' })), ...tasks.map((a) => ({ artifact: a, type: 'Task' }))]
-        : [...services.map((a) => ({ artifact: a, type: 'Service' })), ...workflows.map((a) => ({ artifact: a, type: 'Workflow' })), ...automations.map((a) => ({ artifact: a, type: 'Automation' }))],
-    [isMI, apis, proxies, inboundEps, tasks, services, workflows, automations],
+        : workflowOnly
+          ? workflows.map((a) => ({ artifact: a, type: 'Workflow' }))
+          : [...services.map((a) => ({ artifact: a, type: 'Service' })), ...automations.map((a) => ({ artifact: a, type: 'Automation' }))],
+    [isMI, workflowOnly, apis, proxies, inboundEps, tasks, services, workflows, automations],
   );
 
   const allKeys = new Set(
@@ -650,27 +640,40 @@ function EntryPointsList({
   const isProxy = selectedEntry?.type === 'ProxyService';
   const primaryLabel = isProxy ? '' : isTask ? 'Class' : isMI ? 'URL' : 'Package';
   const secondaryLabel = isProxy ? '' : isTask ? 'Group' : isMI ? 'Context' : 'API';
+  // A workflow integration lists workflow definitions, and the management API reports no package or
+  // API for them - Package read as an em dash and API only repeated the name in the selector - so
+  // the selector is named for what it holds and those two columns are dropped.
+  const selectorLabel = workflowOnly ? 'Workflow Definitions' : 'Endpoint';
 
   return (
     <>
-      {/* Endpoint / Package / API grid — mirrors devant's endpoint panel layout. MI components
-          don't have a package/API concept, so they show URL/Context instead (or group/class for Tasks). */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: '220px 1fr 1fr', columnGap: 2, rowGap: 0.75, alignItems: 'start', mb: 2 }}>
+      {/* Selector / Package / API grid — mirrors devant's endpoint panel layout. MI components
+          don't have a package/API concept, so they show URL/Context instead (or group/class for Tasks);
+          workflow integrations have neither and show the selector alone. */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: workflowOnly ? 'minmax(220px, 360px) 1fr' : '220px 1fr 1fr', columnGap: 2, rowGap: 0.75, alignItems: 'start', mb: 2 }}>
         <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-          Endpoint
+          {selectorLabel}
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-          {primaryLabel}
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
-          {secondaryLabel}
-        </Typography>
+        {workflowOnly ? (
+          // Empty header cell above the actions, so grid auto-placement keeps the selector and the
+          // buttons on the same row.
+          <Box />
+        ) : (
+          <>
+            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+              {primaryLabel}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+              {secondaryLabel}
+            </Typography>
+          </>
+        )}
 
         <Select
           size="small"
           value={activeKey}
           onChange={(e) => setSelectedKey(e.target.value)}
-          inputProps={{ 'aria-label': 'Endpoint' }}
+          inputProps={{ 'aria-label': selectorLabel }}
           sx={{ fontSize: '13px', width: '100%' }}
           renderValue={(val) => {
             const entry = allEntryPoints.find(({ artifact: a, type }) => `${type}::${type === 'Automation' ? a.packageName : a.name}` === val);
@@ -701,39 +704,45 @@ function EntryPointsList({
           })}
         </Select>
 
-        {(() => {
-          if (isProxy)
+        {workflowOnly && selectedEntry && (
+          <Stack direction="row" gap={1} sx={{ alignSelf: 'center', justifyContent: 'flex-end' }}>
+            <WorkflowActions componentId={componentId} envId={envId} workflowType={selectedEntry.artifact.name?.toString() ?? ''} />
+          </Stack>
+        )}
+        {!workflowOnly &&
+          (() => {
+            if (isProxy)
+              return (
+                <>
+                  <Box />
+                  <Box />
+                </>
+              );
+            const primaryValue = (isTask ? selectedEntry?.artifact.class : isMI ? selectedEntry?.artifact.url : selectedEntry?.artifact.package)?.toString();
+            const secondaryValue = (isTask ? selectedEntry?.artifact.group : isMI ? selectedEntry?.artifact.context : selectedEntry?.artifact.name)?.toString();
             return (
               <>
-                <Box />
-                <Box />
+                <Stack direction="row" alignItems="center" gap={0.75} sx={{ minWidth: 0, alignSelf: 'center' }}>
+                  <Box component="span" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main' }}>
+                    {isTask ? <Layers size={15} /> : isMI ? <LinkIcon size={15} /> : <Package size={15} />}
+                  </Box>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {primaryValue ?? '—'}
+                  </Typography>
+                  {primaryValue ? <CopyButton value={primaryValue} label={primaryLabel} /> : null}
+                </Stack>
+
+                <Stack direction="row" alignItems="center" gap={0.75} sx={{ alignSelf: 'center' }}>
+                  <Box component="span" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main' }}>
+                    <Tag size={15} />
+                  </Box>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                    {secondaryValue ?? '—'}
+                  </Typography>
+                </Stack>
               </>
             );
-          const primaryValue = (isTask ? selectedEntry?.artifact.class : isMI ? selectedEntry?.artifact.url : selectedEntry?.artifact.package)?.toString();
-          const secondaryValue = (isTask ? selectedEntry?.artifact.group : isMI ? selectedEntry?.artifact.context : selectedEntry?.artifact.name)?.toString();
-          return (
-            <>
-              <Stack direction="row" alignItems="center" gap={0.75} sx={{ minWidth: 0, alignSelf: 'center' }}>
-                <Box component="span" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main' }}>
-                  {isTask ? <Layers size={15} /> : isMI ? <LinkIcon size={15} /> : <Package size={15} />}
-                </Box>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {primaryValue ?? '—'}
-                </Typography>
-                {primaryValue ? <CopyButton value={primaryValue} label={primaryLabel} /> : null}
-              </Stack>
-
-              <Stack direction="row" alignItems="center" gap={0.75} sx={{ alignSelf: 'center' }}>
-                <Box component="span" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main' }}>
-                  <Tag size={15} />
-                </Box>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                  {secondaryValue ?? '—'}
-                </Typography>
-              </Stack>
-            </>
-          );
-        })()}
+          })()}
       </Box>
       {selectedEntry && <EntryPointDetail selected={{ artifact: selectedEntry.artifact, artifactType: selectedEntry.type, envId, componentId, projectId }} onOpenDrawerTab={(tab) => onOpenDrawer(selectedEntry.artifact, selectedEntry.type, envId, tab)} />}
     </>
@@ -745,6 +754,7 @@ export default function Environment({
   componentId,
   projectId,
   componentType,
+  displayType,
   onSelectArtifact,
   onOpenDrawerForTab,
 }: {
@@ -752,6 +762,7 @@ export default function Environment({
   componentId: string;
   projectId: string;
   componentType: string;
+  displayType?: string;
   onSelectArtifact: (a: GqlArtifact, type: string, envId: string) => void;
   onOpenDrawerForTab: (a: GqlArtifact, type: string, envId: string, tab: string) => void;
 }) {
@@ -1093,7 +1104,7 @@ export default function Environment({
           </Stack>
         )}
         {(componentType !== 'MI' || viewMode === 'entryPoints') && (
-          <EntryPointsList envId={env.id} componentId={componentId} projectId={projectId} componentType={componentType} isOnline={isOnline} onOpenDrawer={onOpenDrawerForTab} onSelectionChange={setCurrentEntryPoint} />
+          <EntryPointsList envId={env.id} componentId={componentId} projectId={projectId} componentType={componentType} displayType={displayType} isOnline={isOnline} onOpenDrawer={onOpenDrawerForTab} onSelectionChange={setCurrentEntryPoint} />
         )}
         {componentType === 'MI' && viewMode === 'allArtifacts' && <ArtifactTypeSelector envId={env.id} componentId={componentId} onSelectArtifact={onSelectArtifact} />}
       </CardContent>

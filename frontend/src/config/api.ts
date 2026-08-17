@@ -27,6 +27,7 @@ interface RuntimeConfig {
   VITE_AUTH_BASE_URL?: string;
   VITE_OBSERVABILITY_URL?: string;
   VITE_WORKFLOW_URL?: string;
+  VITE_TRYIT_URL?: string;
   VITE_WS_URL?: string;
   VITE_SSO_ENABLED?: boolean;
   VITE_SSO_ISSUER?: string;
@@ -40,6 +41,7 @@ export interface ApiConfig {
   authBaseUrl: string;
   observabilityUrl: string;
   workflowUrl: string;
+  tryitUrl: string;
   wsUrl: string;
   ssoEnabled: boolean;
   ssoIssuer: string;
@@ -61,6 +63,7 @@ const DEFAULT_CONFIG: ApiConfig = {
   authBaseUrl: 'https://localhost:9446/auth',
   observabilityUrl: 'https://localhost:9446/icp/observability',
   workflowUrl: 'https://localhost:9446/icp/workflow',
+  tryitUrl: 'https://localhost:9446/icp/tryit',
   wsUrl: 'wss://localhost:9446/runtime-status',
   ssoEnabled: false,
   ssoIssuer: '',
@@ -87,6 +90,7 @@ export async function loadConfig(): Promise<void> {
       authBaseUrl: config.VITE_AUTH_BASE_URL || DEFAULT_CONFIG.authBaseUrl,
       observabilityUrl: config.VITE_OBSERVABILITY_URL || DEFAULT_CONFIG.observabilityUrl,
       workflowUrl: config.VITE_WORKFLOW_URL || DEFAULT_CONFIG.workflowUrl,
+      tryitUrl: config.VITE_TRYIT_URL || DEFAULT_CONFIG.tryitUrl,
       wsUrl: config.VITE_WS_URL || DEFAULT_CONFIG.wsUrl,
       ssoEnabled: config.VITE_SSO_ENABLED ?? DEFAULT_CONFIG.ssoEnabled,
       ssoIssuer: config.VITE_SSO_ISSUER || DEFAULT_CONFIG.ssoIssuer,
@@ -135,3 +139,10 @@ export const getIcpVersion = (): string => window.API_CONFIG.version;
  * `subpath` is the runtime-side workflow API path (e.g. "workflows?status=RUNNING").
  */
 export const workflowApiUrl = (componentId: string, environmentId: string, subpath: string): string => `${window.API_CONFIG.workflowUrl.replace(/\/+$/, '')}/${encodeURIComponent(componentId)}/${encodeURIComponent(environmentId)}/${subpath}`;
+
+/**
+ * Builds a URL to the Try-It proxy for a specific runtime instance + listener port. `subpath`
+ * (e.g. a service's basePath) is forwarded verbatim to that runtime by tryit_proxy_service.bal.
+ */
+export const tryitApiUrl = (componentId: string, environmentId: string, runtimeId: string, port: number, subpath: string): string =>
+  `${window.API_CONFIG.tryitUrl.replace(/\/+$/, '')}/${encodeURIComponent(componentId)}/${encodeURIComponent(environmentId)}/${encodeURIComponent(runtimeId)}/${port}${subpath}`;

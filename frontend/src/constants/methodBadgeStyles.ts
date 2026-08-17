@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-// Shared HTTP method badge styling — used by ArtifactTabs' resource lists (ResourceRow) and
-// OpenApiDefinitionsDrawer's Swagger UI overrides, so both views show a service's resources
-// identically (colors, badge, and label text). Kept in its own module (rather than exported
-// from ArtifactTabs) so the swagger-ui drawer, which is lazy-loaded into its own chunk to keep
-// swagger-ui-react out of the main bundle, doesn't statically import ArtifactTabs back.
+// Shared HTTP method badge styling — used by ArtifactTabs' resource lists (ResourceRow),
+// OpenApiDefinitionsDrawer's Swagger UI overrides, and TestConsoleSwaggerPanel's Swagger UI
+// overrides, so all views show a service's resources identically (colors, badge, and label
+// text). Kept in its own module (rather than exported from ArtifactTabs) so the swagger-ui
+// consumers, which are lazy-loaded into their own chunk to keep swagger-ui-react out of the
+// main bundle, don't statically import ArtifactTabs back.
 export const HTTP_METHOD_BADGE_COLORS: Record<string, string> = {
   GET: '#0095FF',
   POST: '#36B475',
@@ -47,3 +48,23 @@ export const RESOURCE_LABEL_TEXT_SX = {
   fontWeight: 500,
   wordBreak: 'break-word',
 } as const;
+
+// Swagger UI's own per-method classes (opblock-get, opblock-post, ...) — recolor and reformat
+// them to match ResourceRow above, so a service's resources look the same whether viewed in the
+// Artifacts tab, the OpenAPI docs dialog, or the Test Console.
+const ALL_HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace'];
+export const swaggerMethodColorSx = Object.fromEntries(
+  ALL_HTTP_METHODS.map((method) => {
+    const color = HTTP_METHOD_BADGE_COLORS[method.toUpperCase()] ?? DEFAULT_METHOD_BADGE_COLOR;
+    return [
+      `& .swagger-ui .opblock.opblock-${method}`,
+      {
+        borderColor: color,
+        background: `${color}1a`,
+        '& .opblock-summary': { borderColor: color },
+        '& .opblock-summary-method': { ...METHOD_BADGE_TEXT_SX, background: color },
+        '& .opblock-summary-path, & .opblock-summary-path__deprecated': { ...RESOURCE_LABEL_TEXT_SX, fontFamily: 'inherit', color: 'text.primary' },
+      },
+    ];
+  }),
+);

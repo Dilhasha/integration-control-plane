@@ -243,6 +243,12 @@ export interface UpdateComponentInput {
   displayName: string;
   description: string;
   componentType: 'MI' | 'BI';
+  /**
+   * Integration type. Sent as a pair with `componentSubType`: supplying
+   * `displayType` clears a stale subtype when `componentSubType` is absent.
+   */
+  displayType?: string;
+  componentSubType?: string;
 }
 
 const UPDATE_COMPONENT = `

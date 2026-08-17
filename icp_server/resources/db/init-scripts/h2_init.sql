@@ -121,6 +121,20 @@ CREATE TABLE components (
 
 CREATE INDEX idx_components_project_id ON components (project_id);
 
+-- Per-integration Moesif metrics configuration (optional feature). Kept in a
+-- separate table so the credential (management_key) and provider-specific
+-- settings do not widen the core components table. One row per configured
+-- component; removed automatically when the component is deleted.
+CREATE TABLE component_moesif_config (
+    component_id CHAR(36) PRIMARY KEY,
+    dashboards_created BOOLEAN NOT NULL DEFAULT FALSE,
+    workspace_id VARCHAR(512),
+    management_key VARCHAR(4096),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_moesif_config_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE
+);
+
 CREATE TABLE environments (
     environment_id CHAR(36) PRIMARY KEY,
     name VARCHAR(200) NOT NULL UNIQUE,
@@ -757,6 +771,7 @@ CREATE TABLE runtimes (
     runtime_hostname VARCHAR(255),
     runtime_port VARCHAR(10),
     callback_url VARCHAR(500),
+    try_it_host VARCHAR(255),
     platform_name VARCHAR(50) NOT NULL DEFAULT 'ballerina',
     platform_version VARCHAR(50),
     platform_home VARCHAR(255),
@@ -1273,8 +1288,9 @@ CREATE TABLE mi_data_service_artifacts (
     artifact_id CHAR(36) NOT NULL UNIQUE,
     description TEXT,
     wsdl TEXT,
-    state VARCHAR(20) NOT NULL DEFAULT 'enabled',
+    state VARCHAR(20) NOT NULL DEFAULT 'Active' CHECK (state IN ('Active', 'Faulty')),
     composite_app VARCHAR(200),
+    error_message CLOB, -- Error message when state is Faulty (data service failed to deploy)
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (runtime_id, service_name),

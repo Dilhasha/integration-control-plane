@@ -18,22 +18,26 @@
 
 import { Alert, Box, Button, Card, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton, ListingTable, Snackbar, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { Eye, RefreshCw } from '@wso2/oxygen-ui-icons-react';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import SchemaFormFields from './SchemaFormFields';
-import { buildFormResult, formatTime, humanizeKey, parseFormSchema, sectionTitleSx, sortByStartTimeDesc, unescapeRoleName } from './helpers';
-import { StatusChip, type WorkflowScope } from './shared';
+import { buildFormResult, formatTime, gatewayScope, humanizeKey, ownerLabel, ownerScope, parseFormSchema, sectionTitleSx, sortByStartTimeDesc, unescapeRoleName, type PortalScope } from './helpers';
+import { DetailRow, StatusChip, SubmitError, WorkflowIdLink, type WorkflowScope } from './shared';
+import { ReviewActivities, StatusFilter } from './AdminPortal';
 import Authorized from '../Authorized';
 import { Permissions } from '../../constants/permissions';
-import { useQueries } from '@tanstack/react-query';
-import { humanTaskQueryOptions, useCompleteHumanTask, useFailHumanTask, useHumanTask, useHumanTasks, usePendingTaskCount, type HumanTask } from '../../api/workflows';
+import { useCompleteHumanTask, useFailHumanTask, useHumanTask, useHumanTasks, type HumanTask } from '../../api/workflows';
 
 const emptySx = { py: 4, textAlign: 'center', color: 'text.secondary' } as const;
 
+// Statuses a human task reports. Pending is the default: it is the work waiting on the user, and the
+// rest are the history that used to live in its own view.
+const HUMAN_TASK_STATUSES = ['All', 'PENDING', 'COMPLETED', 'FAILED', 'TERMINATED'];
+
 /**
  * Maps a runtime human-task status to its display status: a pending task's child workflow
- * reports RUNNING (shown as PENDING), and TERMINATED shows as REJECTED.
+ * reports RUNNING (shown as PENDING). Failed tasks report FAILED directly.
  */
-const taskDisplayStatus = (s?: string) => (s === 'RUNNING' ? 'PENDING' : s === 'TERMINATED' ? 'REJECTED' : s);
+const taskDisplayStatus = (s?: string) => (s === 'RUNNING' ? 'PENDING' : s);
 
 /**
  * Display name for a human task: the title when set, else the task name with its
@@ -49,34 +53,19 @@ function taskDisplayName(t?: HumanTask): string {
   return t.taskId;
 }
 
-/** True when the task's completion result is the rejection sentinel sent by the Reject action. */
-function isRejectedTask(task?: HumanTask): boolean {
-  const r = task?.result;
-  return typeof r === 'object' && r !== null && (r as Record<string, unknown>).__rejected === true;
-}
-
 type Toast = { severity: 'success' | 'error'; message: string } | null;
 
-export default function UserPortal({ componentId, environmentId }: WorkflowScope) {
-  const scope: WorkflowScope = { componentId, environmentId };
-  const [view, setView] = useState<'tasks' | 'history'>('tasks');
+/**
+ * Hosts the two user-facing workflow views. Which one shows is decided by the page's tabs, so this
+ * only dispatches and owns the toast both views report through.
+ */
+export default function UserPortal({ targets, environmentId, taskQueue, view }: PortalScope & { view: 'tasks' | 'reviews' }) {
+  const scope: PortalScope = { targets, environmentId, taskQueue };
   const [toast, setToast] = useState<Toast>(null);
-  const { data: pendingCount } = usePendingTaskCount(scope);
 
   return (
     <>
-      <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 2 }}>
-        <Button variant={view === 'tasks' ? 'contained' : 'outlined'} size="small" onClick={() => setView('tasks')}>
-          My Tasks
-        </Button>
-        <Button variant={view === 'history' ? 'contained' : 'outlined'} size="small" onClick={() => setView('history')}>
-          History
-        </Button>
-        <Box sx={{ flex: 1 }} />
-        {pendingCount !== undefined && <Chip label={`${pendingCount} pending`} size="small" color={pendingCount > 0 ? 'info' : 'default'} />}
-      </Stack>
-
-      {view === 'tasks' ? <MyTasks scope={scope} onToast={setToast} /> : <TaskHistory scope={scope} onToast={setToast} />}
+      {view === 'tasks' ? <MyTasks scope={scope} onToast={setToast} /> : <ReviewActivities scope={scope} onToast={setToast} />}
 
       <Snackbar open={toast !== null} autoHideDuration={4000} onClose={() => setToast(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
         {toast ? (
@@ -89,17 +78,18 @@ export default function UserPortal({ componentId, environmentId }: WorkflowScope
   );
 }
 
-function TaskTable({ tasks, onOpen, showActionable }: { tasks: HumanTask[]; onOpen: (id: string) => void; showActionable?: boolean }) {
+function TaskTable({ tasks, onOpen, environmentId, integrationLabel }: { tasks: HumanTask[]; onOpen: (t: HumanTask) => void; environmentId: string; integrationLabel?: (taskQueue?: string) => string }) {
   return (
     <ListingTable>
       <ListingTable.Head>
         <ListingTable.Row>
           <ListingTable.Cell>Task</ListingTable.Cell>
           <ListingTable.Cell>Workflow Name</ListingTable.Cell>
+          {integrationLabel && <ListingTable.Cell>Integration</ListingTable.Cell>}
           <ListingTable.Cell>Workflow ID</ListingTable.Cell>
           <ListingTable.Cell>Status</ListingTable.Cell>
           <ListingTable.Cell>Started</ListingTable.Cell>
-          <ListingTable.Cell>{showActionable ? 'Open' : 'View'}</ListingTable.Cell>
+          <ListingTable.Cell>Open</ListingTable.Cell>
         </ListingTable.Row>
       </ListingTable.Head>
       <ListingTable.Body>
@@ -108,7 +98,7 @@ function TaskTable({ tasks, onOpen, showActionable }: { tasks: HumanTask[]; onOp
             <ListingTable.Cell>
               <Stack direction="row" alignItems="center" gap={1}>
                 <Typography variant="body2">{taskDisplayName(t)}</Typography>
-                {showActionable && t.canComplete === false && (
+                {taskDisplayStatus(t.status) === 'PENDING' && t.canComplete === false && (
                   <Tooltip title="You do not have a matching role to complete this task">
                     <Chip label="Read-only" size="small" variant="outlined" sx={{ fontSize: 10, height: 18 }} />
                   </Tooltip>
@@ -118,8 +108,13 @@ function TaskTable({ tasks, onOpen, showActionable }: { tasks: HumanTask[]; onOp
             <ListingTable.Cell>
               <Typography variant="body2">{t.parentWorkflowType ?? '—'}</Typography>
             </ListingTable.Cell>
+            {integrationLabel && (
+              <ListingTable.Cell>
+                <Typography variant="body2">{integrationLabel(t.taskQueue)}</Typography>
+              </ListingTable.Cell>
+            )}
             <ListingTable.Cell>
-              <Typography sx={{ fontFamily: 'monospace', fontSize: 12 }}>{t.parentWorkflowId ?? '—'}</Typography>
+              <WorkflowIdLink workflowId={t.parentWorkflowId} environmentId={environmentId} />
             </ListingTable.Cell>
             <ListingTable.Cell>
               <StatusChip status={taskDisplayStatus(t.status)} />
@@ -127,7 +122,7 @@ function TaskTable({ tasks, onOpen, showActionable }: { tasks: HumanTask[]; onOp
             <ListingTable.Cell>{formatTime(t.startTime)}</ListingTable.Cell>
             <ListingTable.Cell>
               <Tooltip title="Open task">
-                <IconButton size="small" onClick={() => onOpen(t.taskId)} aria-label="Open task">
+                <IconButton size="small" onClick={() => onOpen(t)} aria-label="Open task">
                   <Eye size={16} />
                 </IconButton>
               </Tooltip>
@@ -139,14 +134,18 @@ function TaskTable({ tasks, onOpen, showActionable }: { tasks: HumanTask[]; onOp
   );
 }
 
-function MyTasks({ scope, onToast }: { scope: WorkflowScope; onToast: (t: Toast) => void }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  const { data: page, isLoading, error, refetch, isFetching } = useHumanTasks(scope, { status: 'PENDING', limit: 50 });
+function MyTasks({ scope, onToast }: { scope: PortalScope; onToast: (t: Toast) => void }) {
+  // Opened against the integration that owns the task, per the task's own task queue.
+  const [open, setOpen] = useState<HumanTask | null>(null);
+  const [status, setStatus] = useState('PENDING');
+  const { data: page, isLoading, error, refetch, isFetching } = useHumanTasks(gatewayScope(scope), { status: status === 'All' ? undefined : status, taskQueue: scope.taskQueue, limit: 50 });
   const tasks = sortByStartTimeDesc(page?.items ?? []);
+  const multi = scope.targets.length > 1;
 
   return (
     <>
-      <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 2 }}>
+      <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 2 }} flexWrap="wrap">
+        <StatusFilter options={HUMAN_TASK_STATUSES} value={status} onChange={setStatus} />
         <Box sx={{ flex: 1 }} />
         <Tooltip title="Refresh">
           <IconButton size="small" onClick={() => refetch()} aria-label="Refresh">
@@ -160,52 +159,12 @@ function MyTasks({ scope, onToast }: { scope: WorkflowScope; onToast: (t: Toast)
       ) : error ? (
         <Typography sx={emptySx}>{error instanceof Error ? error.message : 'Failed to load tasks.'}</Typography>
       ) : tasks.length === 0 ? (
-        <Typography sx={emptySx}>No pending tasks.</Typography>
+        <Typography sx={emptySx}>{status === 'All' ? 'No tasks.' : `No ${status.toLowerCase()} tasks.`}</Typography>
       ) : (
-        <TaskTable tasks={tasks} onOpen={setOpenId} showActionable />
+        <TaskTable tasks={tasks} onOpen={setOpen} environmentId={scope.environmentId} integrationLabel={multi ? (taskQueue) => ownerLabel(scope, taskQueue) : undefined} />
       )}
 
-      {openId && <TaskDetailDialog scope={scope} taskId={openId} actionable onClose={() => setOpenId(null)} onToast={onToast} />}
-    </>
-  );
-}
-
-function TaskHistory({ scope, onToast }: { scope: WorkflowScope; onToast: (t: Toast) => void }) {
-  const [tab, setTab] = useState<'Completed' | 'Rejected'>('Completed');
-  const [openId, setOpenId] = useState<string | null>(null);
-  // A rejected task closes as COMPLETED with a rejection result — the list API cannot
-  // distinguish it, so fetch each completed task's detail and classify by result.__rejected.
-  // TERMINATED tasks (cancelled/terminated externally) are also grouped under Rejected.
-  const completedQuery = useHumanTasks(scope, { status: 'COMPLETED', limit: 50 });
-  const terminatedQuery = useHumanTasks(scope, { status: 'TERMINATED', limit: 50 });
-  const completedItems = completedQuery.data?.items ?? [];
-  const detailQueries = useQueries({ queries: completedItems.map((t) => humanTaskQueryOptions(scope, t.taskId)) });
-
-  const isLoading = completedQuery.isLoading || terminatedQuery.isLoading || detailQueries.some((q) => q.isLoading);
-  const error = completedQuery.error ?? terminatedQuery.error;
-
-  const rejectedFlags = detailQueries.map((q) => isRejectedTask(q.data));
-  const tasks = sortByStartTimeDesc(tab === 'Completed' ? completedItems.filter((_, i) => !rejectedFlags[i]) : [...completedItems.filter((_, i) => rejectedFlags[i]).map((t) => ({ ...t, status: 'REJECTED' })), ...(terminatedQuery.data?.items ?? [])]);
-
-  return (
-    <>
-      <Stack direction="row" gap={1} sx={{ mb: 2 }} flexWrap="wrap">
-        {(['Completed', 'Rejected'] as const).map((t) => (
-          <Chip key={t} label={t} size="small" color={tab === t ? 'primary' : 'default'} variant={tab === t ? 'filled' : 'outlined'} onClick={() => setTab(t)} />
-        ))}
-      </Stack>
-
-      {isLoading ? (
-        <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
-      ) : error ? (
-        <Typography sx={emptySx}>{error instanceof Error ? error.message : 'Failed to load history.'}</Typography>
-      ) : tasks.length === 0 ? (
-        <Typography sx={emptySx}>No tasks in this category.</Typography>
-      ) : (
-        <TaskTable tasks={tasks} onOpen={setOpenId} />
-      )}
-
-      {openId && <TaskDetailDialog scope={scope} taskId={openId} onClose={() => setOpenId(null)} onToast={onToast} />}
+      {open && <TaskDetailDialog scope={ownerScope(scope, open.taskQueue)} taskId={open.taskId} actionable={taskDisplayStatus(open.status) === 'PENDING'} onClose={() => setOpen(null)} onToast={onToast} />}
     </>
   );
 }
@@ -218,23 +177,6 @@ function payloadDetailEntries(payload: unknown): Array<[string, string]> | null 
   return entries.map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]);
 }
 
-function DetailRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <Stack direction="row" gap={2}>
-      <Typography variant="body2" sx={{ width: 140, flexShrink: 0, fontWeight: 600, color: 'text.disabled' }}>
-        {label}
-      </Typography>
-      {typeof children === 'string' ? (
-        <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
-          {children}
-        </Typography>
-      ) : (
-        children
-      )}
-    </Stack>
-  );
-}
-
 function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { scope: WorkflowScope; taskId: string; actionable?: boolean; onClose: () => void; onToast: (t: Toast) => void }) {
   const { data: task, isLoading, error: taskError } = useHumanTask(scope, taskId);
   const complete = useCompleteHumanTask(scope);
@@ -245,6 +187,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
   const [err, setErr] = useState('');
   const [formValues, setFormValues] = useState<Record<string, string | boolean>>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const busy = complete.isPending || fail.isPending;
   const canComplete = task?.canComplete !== false;
@@ -263,6 +206,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
   };
 
   const mutateComplete = (result: unknown) => {
+    setSubmitError(null);
     complete.mutate(
       { taskId, result },
       {
@@ -270,7 +214,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
           onToast({ severity: 'success', message: 'Task completed.' });
           onClose();
         },
-        onError: (e) => onToast({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to complete task.' }),
+        onError: (e) => setSubmitError(e instanceof Error && e.message ? e.message : 'Failed to complete task.'),
       },
     );
   };
@@ -302,14 +246,15 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
       setErr('Reason is required.');
       return;
     }
+    setSubmitError(null);
     fail.mutate(
       { taskId, reason: reason.trim() },
       {
         onSuccess: () => {
-          onToast({ severity: 'success', message: 'Task failed/rejected.' });
+          onToast({ severity: 'success', message: 'Task marked as failed.' });
           onClose();
         },
-        onError: (e) => onToast({ severity: 'error', message: e instanceof Error ? e.message : 'Failed to reject task.' }),
+        onError: (e) => setSubmitError(e instanceof Error && e.message ? e.message : 'Failed to fail the task.'),
       },
     );
   };
@@ -319,6 +264,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
     setMode('view');
     setErr('');
     setFieldErrors({});
+    setSubmitError(null);
   };
 
   return (
@@ -326,7 +272,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
       <DialogTitle sx={sectionTitleSx}>
         <Stack direction="row" alignItems="center" gap={1.5}>
           <span>{task ? taskDisplayName(task) : taskId}</span>
-          {task?.status && <StatusChip status={isRejectedTask(task) ? 'REJECTED' : taskDisplayStatus(task.status)} />}
+          {task?.status && <StatusChip status={taskDisplayStatus(task.status)} />}
         </Stack>
       </DialogTitle>
       <DialogContent>
@@ -336,6 +282,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
           <Typography sx={emptySx}>{taskError instanceof Error ? taskError.message : 'Failed to load task details.'}</Typography>
         ) : (
           <Stack gap={2} sx={{ mt: 1 }}>
+            <SubmitError message={submitError} onClear={() => setSubmitError(null)} />
             {task?.description && (
               <Card variant="outlined" sx={{ bgcolor: 'action.hover' }}>
                 <Typography variant="subtitle2" sx={{ px: 2, py: 1.5, ...sectionTitleSx }}>
@@ -417,7 +364,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
           {actionable && !!task && mode === 'view' && (
             <>
               <Button color="warning" disabled={busy} onClick={() => setMode('fail')}>
-                Reject
+                Fail
               </Button>
               <Tooltip title={canComplete ? '' : 'You do not have a matching role to complete this task'}>
                 <span>
@@ -440,7 +387,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
           )}
           {mode === 'fail' && (
             <Button variant="contained" color="warning" disabled={busy} onClick={submitFail}>
-              {fail.isPending ? 'Submitting…' : 'Submit Rejection'}
+              {fail.isPending ? 'Submitting…' : 'Fail Task'}
             </Button>
           )}
         </Authorized>

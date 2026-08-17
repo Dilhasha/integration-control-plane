@@ -317,6 +317,14 @@ public type Node record {
     int usedMemory?;
 };
 
+// Optional Heartbeat fields this server release understands. Advertised in every
+// HeartbeatResponse as `supportedHeartbeatFields` so a bridge can self-limit to what the
+// connected server actually supports instead of relying on a shared version number —
+// older bridges/servers that predate this negotiation simply never see the field and stay
+// on the baseline heartbeat shape. Update this list whenever an optional field is added to
+// Heartbeat below.
+final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS = ["workflowCallbackUrl", "tryItHost", "openApiDefinitions"];
+
 // Heartbeat that includes all runtime information for registration/updates.
 // Open record so parsing tolerates fields from a newer agent that this server
 // version doesn't yet know about (e.g. a future addition sent before a rolling
@@ -334,6 +342,7 @@ public type Heartbeat record {
     string version?;
     string runtimeHostname?; // MI management API hostname
     string runtimePort?; // MI management API port
+    string tryItHost?; // Bare, reachable host/IP for this runtime process (BI), used by the Try-It proxy
     Node nodeInfo;
     Artifacts artifacts;
     string runtimeHash;
@@ -398,6 +407,7 @@ public type HeartbeatResponse record {
     boolean fullHeartbeatRequired?;
     ControlCommand[] commands?;
     string[] errors?;
+    string[] & readonly supportedHeartbeatFields = SUPPORTED_HEARTBEAT_FIELDS;
 };
 
 public enum MIControlAction {
@@ -583,6 +593,7 @@ public type RuntimeDBRecord record {
     string runtime_hostname?;
     string runtime_port?;
     string callback_url?;
+    string try_it_host?;
     string platform_name?;
     string platform_version?;
     string platform_home?;
@@ -934,6 +945,14 @@ public type WorkflowTarget record {|
     string? keyId;
 |};
 
+// Resolved target for a Try-It proxy request: the runtime's self-reported reachable host
+// (try_it_host from the heartbeat) plus the requested listener's protocol, used together to
+// pick http vs https when building the outbound base URL (see tryitScheme in tryit_proxy_service.bal).
+public type TryItTarget record {|
+    string host;
+    string protocol;
+|};
+
 public type Automation record {
     @sql:Column {
         name: "package_org"
@@ -1212,15 +1231,23 @@ public type DataService record {
     string name;
     string description?;
     string wsdl?;
+    // Canonical deployment state exposed by the control plane: "Active" or "Faulty".
     @sql:Column {
         name: "dataservice_state"
     }
-    ArtifactState state = "enabled";
+    string state = "Active";
+    // Raw state reported by the runtime bridge in the heartbeat payload (e.g. "active", "faulty").
+    string status?;
     boolean? stateInSync = ();
     @sql:Column {
         name: "composite_app"
     }
     string compositeApp?;
+    // Error message when state is "Faulty" (data service failed to deploy)
+    @sql:Column {
+        name: "error_message"
+    }
+    string? errorMessage?;
     string[] runtimeIds?;
     ArtifactRuntimeInfo[]? runtimes?;
 };
@@ -1257,6 +1284,13 @@ public type CompositeAppArtifact record {
 public type CompositeAppFaultStackTrace record {
     string runtimeId;
     string appName;
+    string faultStackTrace;
+};
+
+// Response type for Data Service fault stack trace query
+public type DataServiceFaultStackTrace record {
+    string runtimeId;
+    string serviceName;
     string faultStackTrace;
 };
 
@@ -1610,6 +1644,9 @@ public type ComponentUpdateInput record {
     string version?;
     string labels?;
     string serviceAccessMode?;
+    // Integration type. Written as a pair with componentSubType — see
+    // storage:updateComponent. Omit to leave the recorded type unchanged.
+    string displayType?;
 
     // Extended fields (accepted for compatibility but may not be persisted)
     string apiId?;
@@ -2643,4 +2680,35 @@ public type ValidatedRuntime record {|
 
 public type SystemInfo record {|
     string version;
+|};
+
+// Reports whether the OpenSearch-backed observability metrics backend is
+// configured and reachable. The UI uses this to decide the default metrics
+// provider (falling back to Moesif when OpenSearch is not configured).
+public type ObservabilityMetricsConfigStatus record {|
+    boolean configured;
+|};
+
+// Reports whether an integration (project + component combo) has had its Moesif
+// metrics dashboard created/linked. `dashboardsCreated` is true once the Moesif
+// workspace/dashboard has been successfully discovered and recorded for the
+// integration; this single flag drives the UI (setup vs. embedded dashboard).
+public type MoesifMetricsConfigStatus record {|
+    boolean dashboardsCreated;
+|};
+
+// A short-lived descriptor the UI uses to embed a Moesif metrics dashboard in an
+// iframe. `workspaceId` identifies the embedded workspace, `accessToken` is the
+// minted workspace access token (valid for ~1 hour), and `embedUrl` is the
+// fully-formed iframe src (`.../ws/{workspaceId}?embed=true#{accessToken}`).
+public type MoesifDashboardEmbed record {|
+    string workspaceId;
+    string accessToken;
+    string embedUrl;
+|};
+
+// A Moesif application the supplied Management API key can access.
+public type MoesifApplication record {|
+    string id;
+    string name;
 |};

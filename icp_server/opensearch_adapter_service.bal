@@ -111,6 +111,26 @@ type OpenSearchResponse record {
 // This client is optional - if initialization fails, OpenSearch endpoints will return service unavailable
 final http:Client? opensearchClient;
 
+// Reports whether the OpenSearch-backed observability metrics backend is
+// configured and reachable. The UI uses this to pick the
+// default metrics provider.
+isolated function isOpenSearchAvailable() returns boolean {
+    http:Client? httpClient = opensearchClient;
+    if httpClient is () {
+        return false;
+    }
+    http:Response|error probe = httpClient->get("/");
+    if probe is error {
+        log:printDebug(string `OpenSearch availability probe failed: ${probe.message()}`);
+        return false;
+    }
+    if probe.statusCode < 200 || probe.statusCode >= 300 {
+        log:printDebug(string `OpenSearch availability probe returned non-success status code: ${probe.statusCode}`);
+        return false;
+    }
+    return true;
+}
+
 // HTTP service configuration
 listener http:Listener openSerachObservabilityListener = new (defaultOpensearchAdaptorPort,
     config = {

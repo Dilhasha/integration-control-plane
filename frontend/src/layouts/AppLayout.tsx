@@ -50,21 +50,24 @@ import { useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate, Outlet, NavLink } from 'react-router';
 import Logo from '../components/Logo';
-import { BarChart3, Bell, Building, ChevronDown, ChevronRight, Layers, LayoutDashboard, LogOut, Plus, ScrollText, Search, Server, Shield, Sliders, User as UserIcon, Workflow, X } from '@wso2/oxygen-ui-icons-react';
+import { BarChart3, Bell, Building, ChevronDown, ChevronRight, FlaskConical, Layers, LayoutDashboard, LogOut, Plus, ScrollText, Search, Server, Shield, Sliders, User as UserIcon, Workflow, X } from '@wso2/oxygen-ui-icons-react';
 import { useProjectByHandler, useProjects, useComponents, useAllEnvironments } from '../api/queries';
 import { useMultiEnvRuntimeStatusSubscription } from '../api/subscriptions';
 import { useNotificationPreferences } from '../hooks/useNotificationPreferences';
 import { useScope, useResource, resourceUrl, broaden, narrow, newProjectUrl, newComponentUrl, sidebarItems, hasProject, hasComponent, type Resource } from '../nav';
 import { useNotificationsContext } from '../contexts/NotificationsContext';
+import { LayoutProvider } from '../contexts/LayoutContext';
 import { cookiePolicyUrl, loginUrl, orgUrl, privacyPolicyUrl, profileUrl } from '../paths';
 import { useAuth } from '../auth/AuthContext';
 import { useAccessControl } from '../contexts/AccessControlContext';
 import { ALL_USER_MGT_PERMISSIONS, Permissions } from '../constants/permissions';
+import { isWorkflowIntegration } from '../constants/integrationTypes';
 import { getIcpVersion } from '../config/api';
 
 const SIDEBAR_ICONS: Record<Resource, JSX.Element> = {
   overview: <LayoutDashboard size={20} />,
   workflows: <Workflow size={20} />,
+  test: <FlaskConical size={20} />,
   logs: <ScrollText size={20} />,
   loggers: <Sliders size={20} />,
   metrics: <BarChart3 size={20} />,
@@ -74,7 +77,7 @@ const SIDEBAR_ICONS: Record<Resource, JSX.Element> = {
 };
 
 const SIDEBAR_CATEGORIES: { label: string; resources: Resource[] }[] = [
-  { label: '', resources: ['overview', 'workflows', 'runtimes'] },
+  { label: '', resources: ['overview', 'workflows', 'test', 'runtimes'] },
   { label: 'Observability', resources: ['logs', 'loggers', 'metrics'] },
   { label: 'Infrastructure', resources: ['environments'] },
   { label: 'Management', resources: ['access-control'] },
@@ -132,7 +135,11 @@ export default function AppLayout(): JSX.Element {
       case 'overview':
         return 'overview';
       case 'workflows':
-        return 'workflows';
+        // Only workflow integrations have this view; at project level it always applies.
+        return !hasComponent(targetScope) || isWorkflowIntegration(components.find((c) => c.id === targetComponentId)?.displayType) ? 'workflows' : 'overview';
+      case 'test':
+        // Only integrations that expose a service have anything to test.
+        return isWorkflowIntegration(components.find((c) => c.id === targetComponentId)?.displayType) ? 'overview' : 'test';
       case 'access-control': {
         const perms: string[] = [...ALL_USER_MGT_PERMISSIONS];
         if (hasProject(targetScope)) perms.push(Permissions.PROJECT_EDIT, Permissions.PROJECT_MANAGE);
@@ -160,7 +167,20 @@ export default function AppLayout(): JSX.Element {
     accessControlPerms.push(Permissions.INTEGRATION_EDIT, Permissions.INTEGRATION_MANAGE);
   }
   const canSeeAccessControl = hasAnyPermission(accessControlPerms, projectId || undefined, componentId);
-  const items = sidebarItems(scope, resource).filter((item) => item.resource !== 'access-control' || canSeeAccessControl);
+  // Two integration-level entries depend on the integration's type, and each stays hidden until
+  // `currentComponent` resolves — the same way access control waits on its permissions — so neither is
+  // offered and then withdrawn once the type is known.
+  //
+  // Workflows applies only to a workflow integration. Project level is unaffected: a project's
+  // workflow data is namespace-wide, not tied to one integration.
+  const showWorkflows = !hasComponent(scope) || isWorkflowIntegration(currentComponent?.displayType);
+  // The Test Console drives a service's packed OpenAPI definition, so it applies to every type except
+  // workflow, which exposes workflows rather than services.
+  const showTest = !!currentComponent && !isWorkflowIntegration(currentComponent.displayType);
+  const items = sidebarItems(scope, resource)
+    .filter((item) => item.resource !== 'access-control' || canSeeAccessControl)
+    .filter((item) => item.resource !== 'workflows' || showWorkflows)
+    .filter((item) => item.resource !== 'test' || showTest);
 
   return (
     <AppShell>
@@ -582,7 +602,9 @@ export default function AppLayout(): JSX.Element {
       </AppShell.Sidebar>
 
       <AppShell.Main>
-        <Outlet />
+        <LayoutProvider value={{ sidebarWidth: shell.sidebarCollapsed ? shell.sidebarCollapsedWidth : shell.sidebarWidth }}>
+          <Outlet />
+        </LayoutProvider>
       </AppShell.Main>
 
       <AppShell.Footer>

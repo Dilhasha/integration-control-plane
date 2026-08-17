@@ -18,11 +18,14 @@
 
 import { Box, Card, CardContent, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { useRef, type JSX } from 'react';
-import { INTEGRATION_TYPES, type IntegrationType } from '../constants/integrationTypes';
+import { integrationTypesFor, type IntegrationType } from '../constants/integrationTypes';
+import type { Technology } from '../constants/technologies';
 
 interface IntegrationTypeSelectorProps {
   selected: IntegrationType;
   onSelect: (type: IntegrationType) => void;
+  /** Narrows the tiles to the types this technology offers (e.g. Workflow is Ballerina-only). */
+  technology: Technology;
 }
 
 /**
@@ -33,18 +36,19 @@ interface IntegrationTypeSelectorProps {
  * Keyboard model is the standard radio-group one: a roving tabIndex puts a single
  * stop in the tab order, and the arrow keys move the selection between options.
  */
-export default function IntegrationTypeSelector({ selected, onSelect }: IntegrationTypeSelectorProps): JSX.Element {
+export default function IntegrationTypeSelector({ selected, onSelect, technology }: IntegrationTypeSelectorProps): JSX.Element {
   const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const options = integrationTypesFor(technology);
 
   const moveSelection = (from: number, delta: number) => {
-    const next = (from + delta + INTEGRATION_TYPES.length) % INTEGRATION_TYPES.length;
-    onSelect(INTEGRATION_TYPES[next].id);
+    const next = (from + delta + options.length) % options.length;
+    onSelect(options[next].id);
     cardRefs.current[next]?.focus();
   };
 
   return (
     <Box role="radiogroup" aria-label="Integration Type" sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-      {INTEGRATION_TYPES.map((opt, index) => {
+      {options.map((opt, index) => {
         const isActive = selected === opt.id;
         return (
           <Card

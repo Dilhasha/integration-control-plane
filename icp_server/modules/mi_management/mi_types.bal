@@ -46,3 +46,9 @@ type MgmtCompositeAppFaultResponse record {
     string errorMessage?;
     string faultStackTrace?;
 };
+
+type MgmtDataServiceFaultResponse record {
+    string serviceName?;
+    string errorMessage?;
+    string faultStackTrace?;
+};

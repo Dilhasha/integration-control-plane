@@ -59,7 +59,7 @@ import { Permissions } from '../constants/permissions';
 import { technologyLabel } from '../constants/technologies';
 import { useAccessControl } from '../contexts/AccessControlContext';
 import type { OrgScope } from '../nav';
-import { workflowManagementToml } from '../utils/runtimeToml';
+import { runtimeImports, workflowManagementToml } from '../utils/runtimeToml';
 
 const drawerSx = {
   '& .MuiDrawer-paper': { width: '45%', maxWidth: 560, minWidth: 360, position: 'fixed', top: 64, height: 'calc(100% - 64px)', borderLeft: '1px solid', borderColor: 'divider' },
@@ -160,18 +160,23 @@ secret = "${secret}"
 #icp_url = "https://<hostname>:9445"`;
 }
 
+// This dialog is org-scoped: the project and integration are fill-in placeholders, so it cannot
+// derive workflow management from an integration's type the way the component Runtime page does. The
+// toggle stands in for that, and the task queue placeholder below is the same `<integration name>`
+// the bridge block carries so the two still agree once both are filled in.
 function biToml(envName: string, secret: string, workflowMgt: boolean): string {
+  const workflowKeys = workflowMgt ? '\nenableWorkflowManagement = true\n# workflowManagementApiPort = 8234' : '';
   const base = `[wso2.icp.runtime.bridge]
 environment = "${envName}"
 project = "<project name>"
 integration = "<integration name>"
 runtime = "<unique id for the runtime>"
-secret = "${secret}"
+secret = "${secret}"${workflowKeys}
 #serverUrl="https://<hostname>:9445"`;
   if (!workflowMgt) return base;
   return `${base}
 
-${workflowManagementToml(secret)}`;
+${workflowManagementToml('<integration name>', secret)}`;
 }
 
 function AddRuntimeModal({ env, onClose }: { env: GqlEnvironment; onClose: () => void }) {
@@ -211,10 +216,6 @@ function AddRuntimeModal({ env, onClose }: { env: GqlEnvironment; onClose: () =>
             <Alert severity="warning" sx={{ mb: 2 }}>
               <strong>The secret will be shown once — copy it before closing.</strong>
             </Alert>
-            <FormControlLabel control={<Switch checked={workflowMgt} onChange={(e) => setWorkflowMgt(e.target.checked)} />} label="Enable Workflow Management" sx={{ display: 'flex' }} />
-            <DialogContentText variant="caption" sx={{ mb: 2, display: 'block' }}>
-              Applies to Default (BI) runtimes only — the MI configuration is not affected.
-            </DialogContentText>
             <Button variant="contained" onClick={handleGenerate} disabled={createMutation.isPending}>
               {createMutation.isPending ? 'Generating...' : 'Generate Secret'}
             </Button>
@@ -228,9 +229,18 @@ function AddRuntimeModal({ env, onClose }: { env: GqlEnvironment; onClose: () =>
               <Tab label="Default" />
               <Tab label="MI" />
             </Tabs>
+            {/* Workflow support is a Ballerina-only capability, and the toggle lives on the results
+                step so it can be flipped without spending another secret on a fresh dialog. */}
+            {tab === 0 && <FormControlLabel control={<Switch checked={workflowMgt} onChange={(e) => setWorkflowMgt(e.target.checked)} />} label="Enable Workflow Management" sx={{ display: 'flex', mb: 1 }} />}
             <DialogContentText sx={{ mb: 1 }}>
               Add the following configuration to your runtime's <strong>{tab === 0 ? 'Config.toml' : 'deployment.toml'}</strong> file. Change the <strong>project, integration and runtime</strong> values as needed. The runtime value must be unique for each
               runtime you register.
+              {tab === 0 && workflowMgt && (
+                <>
+                  {' '}
+                  Keep <strong>taskQueue</strong> the same as the <strong>integration</strong> value.
+                </>
+              )}
             </DialogContentText>
             {config && <CodeBoxWithCopy code={config} />}
             {tab === 0 && (
@@ -240,9 +250,17 @@ function AddRuntimeModal({ env, onClose }: { env: GqlEnvironment; onClose: () =>
                 </DialogContentText>
                 <CodeBoxWithCopy code={`[build-options]\nremoteManagement = true`} />
                 <DialogContentText sx={{ mb: 1 }}>
-                  Import wso2/icp.runtime.bridge to your runtime's <strong>main.bal</strong> file:
+                  {workflowMgt ? (
+                    <>
+                      Add the following imports to your runtime's <strong>main.bal</strong> file:
+                    </>
+                  ) : (
+                    <>
+                      Import wso2/icp.runtime.bridge to your runtime's <strong>main.bal</strong> file:
+                    </>
+                  )}
                 </DialogContentText>
-                <CodeBoxWithCopy code={`import wso2/icp.runtime.bridge as _;`} />
+                <CodeBoxWithCopy code={runtimeImports(workflowMgt)} />
                 <Alert severity="info" sx={{ mt: 2 }}>
                   The above configuration is for runtimes using the <strong>Default</strong> integration. If you're using the <strong>MI</strong> integration, switch to the MI tab to see the correct configuration.
                 </Alert>

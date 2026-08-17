@@ -131,6 +131,10 @@ type Query {
     componentId: String!
     pagination: PaginationInput
   ): DataServicesPage!
+  dataServiceFaultStackTrace(
+    runtimeId: String!
+    serviceName: String!
+  ): DataServiceFaultStackTrace
   dataSourcesByEnvironmentAndComponent(
     environmentId: String!
     componentId: String!
@@ -695,8 +699,16 @@ type DataService {
   name: String!
   description: String
   wsdl: String
-  state: ArtifactState!
+  state: String!
+  errorMessage: String
+  faultStackTrace: String
   compositeApp: String
+}
+
+type DataServiceFaultStackTrace {
+  runtimeId: String!
+  serviceName: String!
+  faultStackTrace: String!
 }
 
 # ============================================
@@ -1375,6 +1387,11 @@ input ComponentUpdateInput {
   version: String
   labels: String
   serviceAccessMode: String
+  # Integration type. Written as a pair with componentSubType: supplying
+  # displayType clears a stale componentSubType when that is omitted. Omit
+  # displayType to leave the recorded type unchanged.
+  displayType: String
+  componentSubType: String
 
   # Extended fields (accepted for compatibility but may not be persisted)
   apiId: String
@@ -1383,7 +1400,6 @@ input ComponentUpdateInput {
   skipDeploy: Boolean
   endpointShortUrlEnabled: Boolean
   isUnifiedConfigMapping: Boolean
-  componentSubType: String
 }
 
 # ============================================

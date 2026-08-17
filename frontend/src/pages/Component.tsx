@@ -71,6 +71,7 @@ export default function Component(scope: ComponentScope): JSX.Element {
               componentId={component.id}
               projectId={projectId}
               componentType={component.componentType}
+              displayType={component.displayType}
               onSelectArtifact={(a, type, envId) => setSelectedArtifact({ artifact: a, artifactType: type, envId, componentId: component.id, projectId })}
               onOpenDrawerForTab={(a, type, envId, tab) => setSelectedArtifact({ artifact: a, artifactType: type, envId, componentId: component.id, projectId, initialTab: tab })}
             />

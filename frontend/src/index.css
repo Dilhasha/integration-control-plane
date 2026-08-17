@@ -1,11 +1,19 @@
 :root {
-  color-scheme: light dark;
+  /* Native widgets - scrollbars above all - follow the console's own theme, which Oxygen marks on the
+     root as data-color-scheme. Declaring "light dark" instead makes the browser follow the OS, so a
+     dark-mode machine got black scrollbars while the UI stayed light; hardcoding either value gets it
+     wrong in the other theme. This is the light default, overridden for dark below. */
+  color-scheme: light;
   color: rgba(255, 255, 255, 0.87);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+html[data-color-scheme='dark'] {
+  color-scheme: dark;
 }
 
 html,

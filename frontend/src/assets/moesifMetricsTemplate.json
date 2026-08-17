@@ -1,0 +1,248 @@
+{
+  "dashboards": [
+    {
+      "_id": "6a75da0487769f027193c0dc",
+      "name": "Application Metrics",
+      "dashboard_ids": [],
+      "workspace_ids": [["6a7af59c87769f027193ea87", "6a7aed5c87769f027193ea3c"]],
+      "parent": null,
+      "sort_order": 1
+    }
+  ],
+  "workspaces": [
+    {
+      "_id": "6a7af59c87769f027193ea87",
+      "type": "events",
+      "name": "Total Request Summary",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "must": [
+              {
+                "terms": {
+                  "metadata.metric_name.raw": ["requests_total"]
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.error.raw": ["true"]
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "prefix": {
+                      "metadata.metric_tags.entrypoint_function_module.raw": "wso2/icp.runtime.bridge"
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "entTmSrs": {
+            "filter": {
+              "bool": {
+                "must": [
+                  {
+                    "terms": {
+                      "metadata.metric_name.raw": ["requests_total"]
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.error.raw": ["true"]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "prefix": {
+                          "metadata.metric_tags.entrypoint_function_module.raw": "wso2/icp.runtime.bridge"
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "metadata.metric_tags.entrypoint_function_name.raw": {
+                "terms": {
+                  "field": "metadata.metric_tags.entrypoint_function_name.raw",
+                  "size": "5",
+                  "min_doc_count": 1,
+                  "order": {
+                    "metadata__metric_value|weighted_sum": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "request.time": {
+                    "date_histogram": {
+                      "field": "request.time",
+                      "interval": "1s",
+                      "time_zone": "Asia/Colombo"
+                    },
+                    "aggs": {
+                      "metadata__metric_value|weighted_sum": {
+                        "sum": {
+                          "script": {
+                            "field_script": "[metadata.metric_value]*[weight|1]"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "metadata__metric_value|weighted_sum": {
+                    "sum": {
+                      "script": {
+                        "field_script": "[metadata.metric_value]*[weight|1]"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-1h",
+        "to": "now"
+      },
+      "view": "time",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_contain&evtcf[filtersGroups][0][filters][2][value][0]=wso2%2Ficp.runtime.bridge&evtcf[filtersGroups][0][filters][3][field]=metadata.metric_tags.entrypoint_function_name.raw&evtcf[filtersGroups][0][filters][3][op]=not_contain&evtcf[filtersGroups][0][filters][3][value][0]=interceptResponseError&evt_ts[groups][0][field]=metadata.metric_tags.entrypoint_function_name.raw&evt_ts[groups][0][func]=terms&evt_ts[groups][0][buckets]=5&evt_ts[groups][0][by]=metric&evt_ts[metrics][0][id]=dde52dcf&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=weighted_sum&evt_ts[interval]=1s&evt_ts[logScale]=true&evt_ts[stacked]=true"
+    },
+    {
+      "_id": "6a7aed5c87769f027193ea3c",
+      "type": "events",
+      "name": "Total Request Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "must": [
+              {
+                "terms": {
+                  "metadata.metric_name.raw": ["requests_total"]
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.error.raw": ["true"]
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "prefix": {
+                      "metadata.metric_tags.entrypoint_function_module.raw": "wso2/icp.runtime.bridge"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "entTmSrs": {
+            "filter": {
+              "bool": {
+                "must": [
+                  {
+                    "terms": {
+                      "metadata.metric_name.raw": ["requests_total"]
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.error.raw": ["true"]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "prefix": {
+                          "metadata.metric_tags.entrypoint_function_module.raw": "wso2/icp.runtime.bridge"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "request.time": {
+                "date_histogram": {
+                  "field": "request.time",
+                  "interval": "1s",
+                  "time_zone": "Asia/Colombo"
+                },
+                "aggs": {
+                  "metadata__metric_value|weighted_avg": {
+                    "weighted_avg": {
+                      "value": {
+                        "field": "metadata.metric_value"
+                      },
+                      "weight": {
+                        "field": "weight",
+                        "missing": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "dateRange": {
+        "from": "-1h",
+        "to": "now"
+      },
+      "view": "time",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_contain&evtcf[filtersGroups][0][filters][2][value][0]=wso2%2Ficp.runtime.bridge&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=weighted_avg&evt_ts[interval]=1s"
+    }
+  ]
+}

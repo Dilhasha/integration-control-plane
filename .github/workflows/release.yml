@@ -63,7 +63,7 @@ jobs:
       - name: Setup Ballerina
         uses: ballerina-platform/setup-ballerina@v1.1.0
         with:
-          version: 2201.13.2
+          version: 2201.13.4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -150,8 +150,12 @@ jobs:
           echo "=== frontend/public/config.json ==="
           jq .VITE_ICP_VERSION frontend/public/config.json
 
+      # Only packages the distribution (frontend + backend build), skipping the unit/E2E test
+      # suite — those already gate every PR into main via pr-check.yml, so re-running them here
+      # only adds release-pipeline fragility (flaky Testcontainers/Docker startup on the runner)
+      # without adding safety.
       - name: Build distribution package
-        run: ./gradlew clean build
+        run: ./gradlew clean packageICP
         env:
           CI: true
 
@@ -202,8 +206,11 @@ jobs:
           format: "table"
           severity: "CRITICAL,HIGH"
           exit-code: "1"
-          skip-setup-trivy: true
 
+      # if: always() so a report is still generated when the gate above fails on findings —
+      # skip-setup-trivy is intentionally omitted (defaults to false) so this step installs its
+      # own trivy binary instead of assuming an earlier step already did: relying on that
+      # assumption breaks whenever an earlier step in the job is skipped or fails first.
       - name: Generate Trivy report (table format)
         uses: aquasecurity/trivy-action@0.35.0
         if: always()
@@ -213,7 +220,6 @@ jobs:
           format: "table"
           severity: "CRITICAL,HIGH,MEDIUM"
           exit-code: "0"
-          skip-setup-trivy: true
 
       - name: Upload Trivy scan results as artifact
         uses: actions/upload-artifact@v4

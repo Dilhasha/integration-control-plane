@@ -312,13 +312,15 @@ public isolated function getRuntimeWorkflowTarget(string componentId, string env
         WHERE component_id = ${componentId} AND environment_id = ${environmentId}
             AND status = 'RUNNING'`, usableCallbackUrlPredicate());
     stream<record {|string callback_url; string? key_id;|}, sql:Error?> rs = dbClient->query(query);
-    record {|string callback_url; string? key_id;|}[] rows = check from var r in rs
-        limit 1
-        select r;
-    if rows.length() == 0 {
+    record {|record {|string callback_url; string? key_id;|} value;|}|sql:Error? row = rs.next();
+    check rs.close();
+    if row is sql:Error {
+        return row;
+    }
+    if row is () {
         return ();
     }
-    return {callbackUrl: rows[0].callback_url, keyId: rows[0].key_id};
+    return {callbackUrl: row.value.callback_url, keyId: row.value.key_id};
 }
 
 // Distinct callback URLs of RUNNING runtimes — the only URLs the workflow proxy can
@@ -333,6 +335,58 @@ public isolated function getRunningWorkflowCallbackUrls() returns string[]|error
     stream<record {|string callback_url;|}, sql:Error?> rs = dbClient->query(query);
     return from var r in rs
         select r.callback_url;
+}
+
+// Predicate matching a usable (non-null, non-empty) try_it_host — same Oracle caveat as
+// usableCallbackUrlPredicate above.
+isolated function usableTryItHostPredicate() returns sql:ParameterizedQuery =>
+    isOracle() ? ` AND r.try_it_host IS NOT NULL` : ` AND r.try_it_host IS NOT NULL AND r.try_it_host <> ''`;
+
+// A wrapper listener's own protocol column can be its package name (e.g. "graphql" for
+// graphql:Listener, which composes an http:Listener privately) rather than "HTTP"/"HTTPS" — only
+// ever treat it as https when it case-insensitively says so; everything else is plain http.
+public isolated function tryitScheme(string protocol) returns string =>
+    protocol.toLowerAscii() == "https" ? "https" : "http";
+
+// Resolves the Try-It proxy target for one explicit runtime+port: the runtime's self-reported
+// reachable host and the requested listener's protocol. This single query does double duty as
+// both the runtime-ownership check (the row only exists if runtimeId truly belongs to
+// componentId+environmentId) and the port-ownership check (the row only exists if `port`
+// matches a real registered listener_port for that runtime) — a forged runtimeId or an
+// unregistered port both collapse to the same `()` result, which the proxy surfaces as 404.
+public isolated function getTryItTarget(string componentId, string environmentId, string runtimeId, int port)
+        returns types:TryItTarget?|error {
+    sql:ParameterizedQuery query = sql:queryConcat(`
+        SELECT r.try_it_host AS host, l.protocol AS protocol
+        FROM runtimes r
+        JOIN bi_runtime_listener_artifacts l ON l.runtime_id = r.runtime_id
+        WHERE r.runtime_id = ${runtimeId} AND r.component_id = ${componentId}
+            AND r.environment_id = ${environmentId} AND r.status = 'RUNNING'
+            AND l.listener_port = ${port}`, usableTryItHostPredicate());
+    stream<record {|string host; string protocol;|}, sql:Error?> rs = dbClient->query(query);
+    record {|string host; string protocol;|}[] rows = check from var r in rs
+        limit 1
+        select r;
+    if rows.length() == 0 {
+        return ();
+    }
+    return {host: rows[0].host, protocol: rows[0].protocol};
+}
+
+// Base URLs (scheme://host:port) of RUNNING runtimes' registered listeners with a usable
+// try_it_host — used by the offline-runtime scheduler to prune the Try-It proxy's http:Client
+// cache, mirroring getRunningWorkflowCallbackUrls. Built in Ballerina rather than SQL since
+// string concatenation syntax differs across engines (||/CONCAT/+).
+public isolated function getLiveTryItBaseUrls() returns string[]|error {
+    sql:ParameterizedQuery query = sql:queryConcat(`
+        SELECT DISTINCT r.try_it_host AS host, l.listener_port AS port, l.protocol AS protocol
+        FROM runtimes r
+        JOIN bi_runtime_listener_artifacts l ON l.runtime_id = r.runtime_id
+        WHERE r.status = 'RUNNING' AND l.listener_port IS NOT NULL`, usableTryItHostPredicate());
+    stream<record {|string host; int port; string protocol;|}, sql:Error?> rs = dbClient->query(query);
+    record {|string host; int port; string protocol;|}[] rows = check from var r in rs
+        select r;
+    return rows.map(r => tryitScheme(r.protocol) + "://" + r.host + ":" + r.port.toString());
 }
 
 type ApiRecordInDB record {|
@@ -725,15 +779,33 @@ public isolated function getLocalEntriesForRuntime(string runtimeId) returns typ
 // Get data services for a specific runtime
 public isolated function getDataServicesForRuntime(string runtimeId) returns types:DataService[]|error {
     types:DataService[] serviceList = [];
-    stream<types:DataService, sql:Error?> serviceStream = dbClient->query(`
-        SELECT service_name, description, wsdl, state, composite_app
-        FROM mi_data_service_artifacts 
+    // Bind to an explicit record so the "Faulty" state and error_message (present
+    // only when a data service failed to deploy) are read reliably.
+    stream<record {string service_name; string? description; string? wsdl; string state; string? composite_app; string? error_message;}, sql:Error?> serviceStream = dbClient->query(`
+        SELECT service_name, description, wsdl, state, composite_app, error_message
+        FROM mi_data_service_artifacts
         WHERE runtime_id = ${runtimeId}
     `);
 
-    check from types:DataService serviceRecord in serviceStream
+    check from record {string service_name; string? description; string? wsdl; string state; string? composite_app; string? error_message;} serviceRecord in serviceStream
         do {
-            serviceList.push(serviceRecord);
+            types:DataService dataService = {
+                name: serviceRecord.service_name,
+                state: serviceRecord.state
+            };
+            if serviceRecord.description is string {
+                dataService.description = serviceRecord.description;
+            }
+            if serviceRecord.wsdl is string {
+                dataService.wsdl = serviceRecord.wsdl;
+            }
+            if serviceRecord.composite_app is string {
+                dataService.compositeApp = serviceRecord.composite_app;
+            }
+            if serviceRecord.error_message is string {
+                dataService.errorMessage = serviceRecord.error_message;
+            }
+            serviceList.push(dataService);
         };
 
     return serviceList;
@@ -1111,7 +1183,7 @@ public isolated function deleteLogLevel(string runtimeId, string componentName) 
 // Delete all log levels for a specific runtime
 public isolated function deleteAllLogLevels(string runtimeId) returns error? {
     _ = check dbClient->execute(`
-        DELETE FROM bi_runtime_log_levels 
+        DELETE FROM bi_runtime_log_levels
         WHERE runtime_id = ${runtimeId}
     `);
 }

@@ -90,6 +90,8 @@ configurable string[] tlsCiphers = [
 configurable string backendGraphqlEndpoint = publicBaseUrl + "/graphql";
 configurable string backendAuthBaseUrl = publicBaseUrl + "/auth";
 configurable string backendObservabilityEndpoint = publicBaseUrl + "/icp/observability";
+configurable string backendWorkflowEndpoint = publicBaseUrl + "/icp/workflow";
+configurable string backendTryitEndpoint = publicBaseUrl + "/icp/tryit";
 
 // WebSocket endpoint — shares the main HTTPS port so no separate cert trust is needed
 configurable string backendWsUrl = toWsScheme(publicBaseUrl) + "/runtime-status";

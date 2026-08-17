@@ -571,7 +571,7 @@ const ARTIFACT_QUERY_MAP: Record<string, { queryName: string; field: string; fie
     queryName: 'dataServicesByEnvironmentAndComponent',
     field: 'dataServicesByEnvironmentAndComponent',
     fields: 'name, state',
-    gqlFields: 'name, description, state, stateInSync, compositeApp, runtimes { runtimeId, runtimeName, status }',
+    gqlFields: 'name, description, state, stateInSync, errorMessage, compositeApp, runtimes { runtimeId, runtimeName, status }',
   },
   DataSource: {
     queryName: 'dataSourcesByEnvironmentAndComponent',

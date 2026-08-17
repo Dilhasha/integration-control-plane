@@ -147,7 +147,7 @@ function SelectedTypeArtifacts({
     return a.name?.toString().toLowerCase().includes(searchQuery);
   });
   const supportsToggle = ['Endpoint', 'Listener', 'MessageProcessor'].includes(artifactType);
-  const hasStateField = ['Connector', 'CompositeApp'].includes(artifactType);
+  const hasStateField = ['Connector', 'CompositeApp', 'DataService'].includes(artifactType);
   // When search is active: filter client-side from server-fetched full list and slice locally.
   // When no search (serverTotal provided): artifacts already come pre-sliced from the backend.
   const isSearching = query.length > 0;
@@ -290,7 +290,7 @@ function SelectedTypeArtifacts({
                         label={(a.state ?? '—').toString().charAt(0).toUpperCase() + (a.state ?? '—').toString().slice(1).toLowerCase()}
                         size="small"
                         variant="outlined"
-                        color={artifactType === 'CompositeApp' ? ((a.state ?? '').toString() === 'Active' ? 'success' : (a.state ?? '').toString() === 'Faulty' ? 'error' : 'default') : enabled ? 'success' : 'default'}
+                        color={['CompositeApp', 'DataService'].includes(artifactType) ? ((a.state ?? '').toString() === 'Active' ? 'success' : (a.state ?? '').toString() === 'Faulty' ? 'error' : 'default') : enabled ? 'success' : 'default'}
                         sx={{ fontSize: '0.875rem' }}
                       />
                     </Grid>
@@ -448,6 +448,13 @@ const COMPOSITE_APP_FAULT_STACKTRACE_QUERY = `
     }
   }
 `;
+const DATA_SERVICE_FAULT_STACKTRACE_QUERY = `
+  query GetDataServiceFaultStackTrace($runtimeId: String!, $serviceName: String!) {
+    dataServiceFaultStackTrace(runtimeId: $runtimeId, serviceName: $serviceName) {
+      faultStackTrace
+    }
+  }
+`;
 
 export function ArtifactDetail({ selected, onClose }: { selected: SelectedArtifact | null; onClose: () => void }) {
   const [activeTabIndex, setActiveTabIndex] = useState(0);
@@ -478,7 +485,11 @@ export function ArtifactDetail({ selected, onClose }: { selected: SelectedArtifa
   if (!selected) return null;
 
   const { artifact, artifactType, envId, componentId } = selected;
-  const tabs = ARTIFACT_TABS[artifactType] ?? DEFAULT_ARTIFACT_TABS;
+  // A faulty data service failed to deploy, so it has no live artifact on the runtime.
+  // The Overview and Source tabs would trigger management API calls that return 404,
+  // so only expose the Runtimes tab (backed by stored heartbeat data) in that case.
+  const isFaultyDataService = artifactType === 'DataService' && artifact.state?.toString() === 'Faulty';
+  const tabs = isFaultyDataService ? ['Runtimes'] : (ARTIFACT_TABS[artifactType] ?? DEFAULT_ARTIFACT_TABS);
   const validTabIndex = Math.min(activeTabIndex, tabs.length - 1);
   const activeTab = tabs[validTabIndex];
 
@@ -531,7 +542,8 @@ export function ArtifactDetail({ selected, onClose }: { selected: SelectedArtifa
   };
 
   const isFaultyCompositeApp = artifactType === 'CompositeApp' && artifact.state?.toString() === 'Faulty';
-  const errorMessage = isFaultyCompositeApp ? artifact.errorMessage?.toString() : null;
+  const isFaulty = isFaultyCompositeApp || isFaultyDataService;
+  const errorMessage = isFaulty ? artifact.errorMessage?.toString() : null;
   const stacktracePanelId = `stacktrace-panel-${artifactType}-${displayName.replace(/\s+/g, '-').toLowerCase()}`;
   const errorLines = errorMessage
     ? errorMessage
@@ -542,14 +554,14 @@ export function ArtifactDetail({ selected, onClose }: { selected: SelectedArtifa
 
   const loadStacktrace = async () => {
     const runtimeId = (artifact.runtimes as Array<{ runtimeId: string }> | undefined)?.[0]?.runtimeId;
-    const appName = artifact.name?.toString();
+    const artifactName = artifact.name?.toString();
 
-    if (!runtimeId || !appName) {
-      setStacktraceError('No stacktrace available. Missing runtime or Composite App name.');
+    if (!runtimeId || !artifactName) {
+      setStacktraceError(`No stacktrace available. Missing runtime or ${isFaultyDataService ? 'Data Service' : 'Composite App'} name.`);
       return;
     }
 
-    const requestToken = `${runtimeId}::${appName}`;
+    const requestToken = `${runtimeId}::${artifactName}`;
     if (stacktraceLoadedFor === requestToken || stacktraceLoading) return;
 
     stacktraceRequestRef.current = requestToken;
@@ -557,17 +569,27 @@ export function ArtifactDetail({ selected, onClose }: { selected: SelectedArtifa
     setStacktraceError(null);
 
     try {
-      const result = await gql<{ compositeAppFaultStackTrace: { faultStackTrace: string } }>(COMPOSITE_APP_FAULT_STACKTRACE_QUERY, {
-        runtimeId,
-        appName,
-      });
+      let faultStackTrace: string | null = null;
+      if (isFaultyDataService) {
+        const result = await gql<{ dataServiceFaultStackTrace: { faultStackTrace: string } }>(DATA_SERVICE_FAULT_STACKTRACE_QUERY, {
+          runtimeId,
+          serviceName: artifactName,
+        });
+        if (stacktraceRequestRef.current !== requestToken) return;
+        faultStackTrace = result.dataServiceFaultStackTrace?.faultStackTrace || null;
+      } else {
+        const result = await gql<{ compositeAppFaultStackTrace: { faultStackTrace: string } }>(COMPOSITE_APP_FAULT_STACKTRACE_QUERY, {
+          runtimeId,
+          appName: artifactName,
+        });
+        if (stacktraceRequestRef.current !== requestToken) return;
+        faultStackTrace = result.compositeAppFaultStackTrace?.faultStackTrace || null;
+      }
 
-      if (stacktraceRequestRef.current !== requestToken) return;
-
-      setStacktrace(result.compositeAppFaultStackTrace?.faultStackTrace || null);
+      setStacktrace(faultStackTrace);
       setStacktraceLoadedFor(requestToken);
     } catch (error) {
-      console.error('Error fetching composite app stacktrace:', error);
+      console.error('Error fetching artifact stacktrace:', error);
       if (stacktraceRequestRef.current === requestToken) {
         setStacktraceError('Failed to load stacktrace.');
       }
@@ -601,7 +623,7 @@ export function ArtifactDetail({ selected, onClose }: { selected: SelectedArtifa
           </IconButton>
         </Stack>
       </Stack>
-      {isFaultyCompositeApp && (
+      {isFaulty && (
         <Box sx={{ px: 2, pt: 1.5, pb: 3, backgroundColor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider' }}>
           <Stack spacing={0} alignItems="flex-start">
             <Chip label="Faulty" size="small" color="error" sx={{ mt: 0.5 }} />

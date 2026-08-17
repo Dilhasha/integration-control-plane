@@ -16,32 +16,48 @@
  * under the License.
  */
 
-import { Box, Chip, Collapse, Stack, Typography } from '@wso2/oxygen-ui';
+import { Alert, Box, Chip, Collapse, Link, Stack, Typography } from '@wso2/oxygen-ui';
 import { ChevronRight } from '@wso2/oxygen-ui-icons-react';
-import { useState, type JSX } from 'react';
+import { useState, type JSX, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
+import { resourceUrl, useScope } from '../../nav';
 import CodeViewer from '../CodeViewer';
+import { STATUS_COLORS } from './helpers';
 
 export interface WorkflowScope {
   componentId: string;
   environmentId: string;
 }
 
-type ChipColor = 'default' | 'primary' | 'success' | 'error' | 'warning' | 'info';
+/**
+ * Returns a handler that opens the Workflows admin view pre-filtered by a workflow ID — the same
+ * destination as the start-workflow dialog's "View Running Workflow" action.
+ */
+function useViewWorkflowById(environmentId: string): (workflowId: string) => void {
+  const navigate = useNavigate();
+  const scope = useScope();
+  return (workflowId: string) => {
+    navigate(`${resourceUrl(scope, 'workflows')}?tab=management&workflowId=${encodeURIComponent(workflowId)}&env=${encodeURIComponent(environmentId)}`);
+  };
+}
 
-const STATUS_COLORS: Record<string, ChipColor> = {
-  RUNNING: 'info',
-  COMPLETED: 'success',
-  FAILED: 'error',
-  TERMINATED: 'error',
-  CANCELED: 'warning',
-  CANCELLED: 'warning',
-  TIMED_OUT: 'warning',
-  CONTINUED_AS_NEW: 'default',
-  SUSPENDED: 'warning',
-  PENDING: 'info',
-  OPEN: 'info',
-  REJECTED: 'error',
-};
+/** Renders a workflow ID as a monospace link that opens the Workflows admin view filtered by that ID. */
+export function WorkflowIdLink({ workflowId, environmentId, onNavigate }: { workflowId?: string; environmentId: string; onNavigate?: () => void }): JSX.Element {
+  const viewWorkflow = useViewWorkflowById(environmentId);
+  if (!workflowId) return <Typography sx={{ fontFamily: 'monospace', fontSize: 12 }}>—</Typography>;
+  return (
+    <Link
+      component="button"
+      type="button"
+      onClick={() => {
+        onNavigate?.();
+        viewWorkflow(workflowId);
+      }}
+      sx={{ fontFamily: 'monospace', fontSize: 12, textAlign: 'left', wordBreak: 'break-all', cursor: 'pointer', color: 'text.primary', textDecorationColor: 'inherit' }}>
+      {workflowId}
+    </Link>
+  );
+}
 
 /** Renders a status string as a colour-coded chip. */
 export function StatusChip({ status }: { status?: string }): JSX.Element {
@@ -49,6 +65,39 @@ export function StatusChip({ status }: { status?: string }): JSX.Element {
   const color = STATUS_COLORS[normalized] ?? 'default';
   const label = status ? status.charAt(0).toUpperCase() + status.slice(1).toLowerCase().replace(/_/g, ' ') : '—';
   return <Chip label={label} size="small" color={color} variant="outlined" />;
+}
+
+/** A label/value row used in task and activity detail cards. String children render as body text. */
+export function DetailRow({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+  return (
+    <Stack direction="row" gap={2}>
+      <Typography variant="body2" sx={{ width: 140, flexShrink: 0, fontWeight: 600, color: 'text.disabled' }}>
+        {label}
+      </Typography>
+      {typeof children === 'string' ? (
+        <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
+          {children}
+        </Typography>
+      ) : (
+        children
+      )}
+    </Stack>
+  );
+}
+
+/**
+ * Dialog-level banner for a submission the runtime rejected. Generated forms only pre-check required
+ * fields and type coercion, so schema constraints (pattern / minimum / format / nested shape) are
+ * caught server-side — and that message has to be shown inline, because a toast pops behind the open
+ * dialog it belongs to. Renders nothing when there is no error.
+ */
+export function SubmitError({ message, onClear }: { message: string | null; onClear: () => void }): JSX.Element | null {
+  if (!message) return null;
+  return (
+    <Alert severity="error" onClose={onClear} sx={{ '& .MuiAlert-message': { whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }}>
+      {message}
+    </Alert>
+  );
 }
 
 /** A compact, theme-consistent expandable panel for revealing a JSON schema/payload. */

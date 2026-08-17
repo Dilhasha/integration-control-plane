@@ -21,7 +21,8 @@ import { X } from '@wso2/oxygen-ui-icons-react';
 import SwaggerUI from 'swagger-ui-react';
 import 'swagger-ui-react/swagger-ui.css';
 import { useOpenApiDefinitionsByRuntime, type GqlOpenApiDefinition } from '../api/queries';
-import { HTTP_METHOD_BADGE_COLORS, DEFAULT_METHOD_BADGE_COLOR, METHOD_BADGE_TEXT_SX, RESOURCE_LABEL_TEXT_SX } from '../constants/methodBadgeStyles';
+import { swaggerMethodColorSx } from '../constants/methodBadgeStyles';
+import { matchesServiceBasePath } from '../utils/openApiMatching';
 
 function SwaggerSpecView({ definition }: { definition: GqlOpenApiDefinition }): JSX.Element {
   const parsed = useMemo(() => {
@@ -40,23 +41,10 @@ function SwaggerSpecView({ definition }: { definition: GqlOpenApiDefinition }): 
     );
   }
 
-  return <SwaggerUI spec={parsed.spec} docExpansion="list" />;
-}
-
-// Mirrors the swagger-pack compiler plugin's uniqueFileName() (icp-runtime-bridge): each packed
-// file is named `<module>_<normalizedBasePath>_openapi.json` (or just `<normalizedBasePath>_...`
-// for the default module), where normalizedBasePath strips leading slashes and collapses
-// `/{}` into `_`. There's no explicit foreign key from a Service artifact to its packed file, so
-// matching by this same normalization is the best available correlation.
-function normalizeBasePath(basePath: string): string {
-  const stripped = basePath.replace(/^\/+/, '').replace(/[/{}]+/g, '_');
-  return stripped || 'root';
-}
-
-function matchesServiceBasePath(fileName: string, basePath: string): boolean {
-  const normalized = normalizeBasePath(basePath);
-  const withoutSuffix = fileName.replace(/_openapi\.json$/, '');
-  return withoutSuffix === normalized || withoutSuffix.endsWith(`_${normalized}`);
+  // This is a read-only docs viewer, not a request-execution console (see TestConsole.tsx for
+  // that) — an empty supportedSubmitMethods hides Swagger UI's own "Try it out" button on every
+  // operation, since there's no invoke URL override or auth header injection wired up here.
+  return <SwaggerUI spec={parsed.spec} docExpansion="list" supportedSubmitMethods={[]} />;
 }
 
 const dialogSx = {
@@ -76,26 +64,6 @@ const headerSx = {
   borderBottom: '1px solid',
   borderColor: 'divider',
 };
-
-// Swagger UI's own per-method classes (opblock-get, opblock-post, ...) — recolor and reformat
-// them to match ArtifactTabs' ResourceRow (getMethodBadgeSx / RESOURCE_LABEL_SX), so a service's
-// resources look the same whether viewed in the Artifacts tab or in this OpenAPI viewer.
-const ALL_HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace'];
-const swaggerMethodColorSx = Object.fromEntries(
-  ALL_HTTP_METHODS.map((method) => {
-    const color = HTTP_METHOD_BADGE_COLORS[method.toUpperCase()] ?? DEFAULT_METHOD_BADGE_COLOR;
-    return [
-      `& .swagger-ui .opblock.opblock-${method}`,
-      {
-        borderColor: color,
-        background: `${color}1a`,
-        '& .opblock-summary': { borderColor: color },
-        '& .opblock-summary-method': { ...METHOD_BADGE_TEXT_SX, background: color },
-        '& .opblock-summary-path, & .opblock-summary-path__deprecated': { ...RESOURCE_LABEL_TEXT_SX, fontFamily: 'inherit', color: 'text.primary' },
-      },
-    ];
-  }),
-);
 
 // Scope the (otherwise globally-styled) Swagger UI CSS to this container and keep it from
 // fighting the surrounding oxygen-ui chrome (dialog background, font, max-width centering).
