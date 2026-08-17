@@ -658,20 +658,36 @@ public isolated function getSSOGroupMappingsByIssuer(int orgId, string issuer) r
 public isolated function deleteSSOGroupMapping(string mappingId, int orgId) returns error? {
     log:printDebug("Deleting SSO group mapping", mappingId = mappingId, orgId = orgId);
 
-    sql:ExecutionResult|sql:Error result = dbClient->execute(
-        `DELETE FROM sso_group_mappings
-         WHERE mapping_id = ${mappingId} AND org_uuid = ${orgId}`
-    );
-
-    if result is sql:Error {
-        log:printError("Failed to delete SSO group mapping", 'error = result, mappingId = mappingId);
-        return error("An unexpected error occurred. Please contact your administrator.", result);
-    }
-    if result.affectedRowCount == 0 {
+    // Deleting the mapping must also revoke the memberships it produced. Federated
+    // rows are otherwise only reconciled when each affected user next logs in, which
+    // would leave access in place for an unbounded time after an admin revoked it.
+    // The mapping tuple is unique, so no other mapping can justify these rows.
+    types:SSOGroupMapping|error mapping = getSSOGroupMappingById(mappingId);
+    if mapping is error || mapping.orgUuid != orgId {
         return error("SSO group mapping not found");
     }
 
-    log:printInfo("Successfully deleted SSO group mapping", mappingId = mappingId);
+    transaction {
+        sql:ExecutionResult federatedResult = check dbClient->execute(
+            `DELETE FROM federated_group_user_mapping
+             WHERE org_uuid = ${orgId} AND issuer = ${mapping.issuer}
+               AND claim_name = ${mapping.claimName} AND claim_value = ${mapping.claimValue}
+               AND group_id = ${mapping.groupId}`
+        );
+
+        sql:ExecutionResult result = check dbClient->execute(
+            `DELETE FROM sso_group_mappings
+             WHERE mapping_id = ${mappingId} AND org_uuid = ${orgId}`
+        );
+
+        // Lost a race with a concurrent delete; leave the transaction unapplied.
+        error? notFound = result.affectedRowCount == 0 ? error("SSO group mapping not found") : ();
+        check notFound;
+
+        check commit;
+        log:printInfo("Successfully deleted SSO group mapping", mappingId = mappingId,
+                revokedMemberships = federatedResult.affectedRowCount);
+    }
 }
 
 // Add an SSO-owned group membership. Manual memberships remain in group_user_mapping.
@@ -781,12 +797,25 @@ public isolated function reconcileFederatedGroupUserMappings(int orgId, string i
                      WHERE id = ${existing.id}`
                 );
             } else {
-                _ = check dbClient->execute(
+                sql:ExecutionResult|sql:Error insertResult = dbClient->execute(
                     `INSERT INTO federated_group_user_mapping
                         (org_uuid, issuer, user_uuid, group_id, claim_name, claim_value)
                      VALUES (${orgId}, ${issuer}, ${userId}, ${desired.groupId},
                              ${desired.claimName}, ${desired.claimValue})`
                 );
+                // Two concurrent logins for the same user can both read an empty
+                // existing set and then race to insert. The unique constraint means
+                // the loser's desired state is already satisfied, so a duplicate key
+                // here is success, not a reason to fail the login.
+                error? insertFailure = ();
+                if insertResult is sql:Error && classifySqlError(insertResult) != DUPLICATE_KEY {
+                    insertFailure = insertResult;
+                }
+                check insertFailure;
+                if insertResult is sql:Error {
+                    log:printDebug("Federated membership already inserted by a concurrent login",
+                            userId = userId, groupId = desired.groupId);
+                }
             }
         }
 

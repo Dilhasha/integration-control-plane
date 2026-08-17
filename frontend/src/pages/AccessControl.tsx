@@ -72,20 +72,7 @@ export default function AccessControl(): JSX.Element {
           <Tab label="Users" />
           <Tab label="Roles" />
           <Tab label="Groups" />
-          {window.API_CONFIG.ssoEnabled && (
-            <Tab
-              label={
-                <>
-                  <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>
-                    SSO
-                  </Box>
-                  <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                    SSO Mappings
-                  </Box>
-                </>
-              }
-            />
-          )}
+          {window.API_CONFIG.ssoEnabled && <Tab label={SSO_TAB_LABEL} />}
         </Tabs>
       </Box>
       {safeIndex === 0 && <UsersTab orgHandler={orgHandler} />}
@@ -124,20 +111,7 @@ export function OrgAccessControl({ org }: { org: string }): JSX.Element {
           <Tab label="Users" />
           <Tab label="Roles" />
           <Tab label="Groups" />
-          {window.API_CONFIG.ssoEnabled && (
-            <Tab
-              label={
-                <>
-                  <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>
-                    SSO
-                  </Box>
-                  <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
-                    SSO Mappings
-                  </Box>
-                </>
-              }
-            />
-          )}
+          {window.API_CONFIG.ssoEnabled && <Tab label={SSO_TAB_LABEL} />}
         </Tabs>
       </Box>
       {safeIndex === 0 && <UsersTab orgHandler={org} />}
