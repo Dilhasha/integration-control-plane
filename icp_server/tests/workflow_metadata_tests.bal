@@ -102,6 +102,59 @@ function testWorkflowMetadataUpsertFromHeartbeat() returns error? {
         "A full heartbeat without metadata must clear the stored row");
 }
 
+// A component auto-created from a heartbeat carries the generic integration type: the
+// bridge registers the runtime before anything knows whether the integration contains
+// workflows. The first heartbeat carrying workflow metadata records it as a workflow
+// integration — without which an auto-registered integration shows no workflow features
+// even though its workflows are registered and its metadata is stored, which is the
+// difference between the auto-registration path and creating the integration by hand and
+// picking Workflow.
+@test:Config {groups: ["workflow-metadata"]}
+function testWorkflowMetadataRecordsWorkflowIntegrationType() returns error? {
+    cleanupRuntime(WF_META_RUNTIME_ID);
+    // Put the component back to the generic type so this holds whatever else has run.
+    check storage:updateComponent(WF_COMPONENT_2_ID, (), (), (), SUPER_ADMIN_USER_ID, "service");
+    types:Component generic = check storage:getComponentById(WF_COMPONENT_2_ID);
+    test:assertEquals(generic.displayType, "service", "Precondition: the generic integration type");
+
+    types:HeartbeatResponse response = check storage:processHeartbeat(
+            buildWorkflowMetadataHeartbeat(WF_META_RUNTIME_ID, "wf-meta-type-runtime", true),
+            preResolved = true);
+    test:assertTrue(response.acknowledged);
+
+    types:Component promoted = check storage:getComponentById(WF_COMPONENT_2_ID);
+    test:assertEquals(promoted.displayType, "ballerinaWorkflow",
+        "A runtime reporting workflow metadata must mark its integration as a workflow one");
+
+    // Re-reporting is a no-op rather than an error.
+    types:HeartbeatResponse repeat = check storage:processHeartbeat(
+            buildWorkflowMetadataHeartbeat(WF_META_RUNTIME_ID, "wf-meta-type-runtime", true),
+            preResolved = true);
+    test:assertTrue(repeat.acknowledged);
+    types:Component again = check storage:getComponentById(WF_COMPONENT_2_ID);
+    test:assertEquals(again.displayType, "ballerinaWorkflow");
+}
+
+// An integration type an operator chose is never overwritten: only the generic default is
+// promoted, so a deliberate choice survives a runtime that reports workflows.
+@test:Config {groups: ["workflow-metadata"]}
+function testWorkflowMetadataKeepsDeliberateIntegrationType() returns error? {
+    cleanupRuntime(WF_META_RUNTIME_ID);
+    check storage:updateComponent(WF_COMPONENT_2_ID, (), (), (), SUPER_ADMIN_USER_ID, "ballerinaService");
+
+    types:HeartbeatResponse response = check storage:processHeartbeat(
+            buildWorkflowMetadataHeartbeat(WF_META_RUNTIME_ID, "wf-meta-type-keep", true),
+            preResolved = true);
+    test:assertTrue(response.acknowledged);
+
+    types:Component unchanged = check storage:getComponentById(WF_COMPONENT_2_ID);
+    test:assertEquals(unchanged.displayType, "ballerinaService",
+        "A chosen integration type must survive a workflow-reporting runtime");
+
+    // Leave the fixture as the other tests in this group expect it.
+    check storage:updateComponent(WF_COMPONENT_2_ID, (), (), (), SUPER_ADMIN_USER_ID, "service");
+}
+
 // The definitions resolver prefers stored metadata: no call into the integration, one
 // Workflow item per workflow type deduped across the component's runtimes, workerCount =
 // number of RUNNING runtimes declaring the type.

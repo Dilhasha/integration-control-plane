@@ -839,6 +839,19 @@ isolated function insertRuntimeArtifacts(string runtimeId, types:Heartbeat heart
     check insertRuntimeLogLevels(runtimeId, heartbeat);
     check upsertOpenApiDefinitions(runtimeId, heartbeat);
     check upsertWorkflowMetadata(runtimeId, heartbeat);
+    check recordWorkflowIntegrationType(heartbeat);
+}
+
+// A runtime that reports workflow metadata belongs to a workflow integration. Record that
+// on the component, because a component auto-created from a heartbeat carries the generic
+// integration type and the integration-level Workflows view keys on the type — see
+// `promoteToWorkflowIntegration`, which leaves any deliberately chosen type alone.
+isolated function recordWorkflowIntegrationType(types:Heartbeat heartbeat) returns error? {
+    map<json>? workflowMetadata = heartbeat?.workflowMetadata;
+    if workflowMetadata is () || workflowMetadata.length() == 0 {
+        return;
+    }
+    check promoteToWorkflowIntegration(heartbeat.component);
 }
 
 // Delete this runtime's stored workflow metadata and insert the document from this

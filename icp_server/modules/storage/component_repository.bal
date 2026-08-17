@@ -28,6 +28,15 @@ import ballerina/uuid;
 // distinction, so it is accepted for either. Adding an integration type means
 // adding its value under every runtime that offers it; a type one runtime cannot
 // run is simply absent there, as Workflow is for MI.
+// The generic integration type: the column default, what pre-integration-type clients
+// wrote, and what a component auto-created from a heartbeat starts as — at registration
+// time nothing yet knows what the integration contains.
+const string GENERIC_DISPLAY_TYPE = "service";
+
+// The workflow integration type. The integration-level Workflows view keys on it, so a
+// workflow integration that carries the generic type shows no workflow features.
+const string WORKFLOW_DISPLAY_TYPE = "ballerinaWorkflow";
+
 final readonly & map<string[]> SUPPORTED_DISPLAY_TYPES_BY_RUNTIME = {
     // The workflow engine and its management API are Ballerina-only, so
     // `ballerinaWorkflow` has no MI counterpart.
@@ -833,4 +842,37 @@ isolated function mapToComponent(types:ComponentInDB component) returns types:Co
         createdBy: getDisplayNameById(component.component_created_by),
         updatedBy: getDisplayNameById(component.component_updated_by)
     };
+}
+
+// Records that a component is a workflow integration, if it is not already typed as
+// something an operator chose.
+//
+// A component auto-created from a heartbeat carries the generic integration type: the
+// bridge registers a runtime before anything knows whether the integration contains
+// workflows, so registration cannot tell. The first heartbeat that carries workflow
+// metadata settles it — the integration registered workflows with its runtime — and the
+// integration-level Workflows view keys on the integration type, so without this an
+// auto-registered workflow integration shows no workflow features at all. (Creating the
+// integration by hand and picking Workflow sets the type up front, which is why that
+// path has always worked.)
+//
+// Only the generic type is promoted, and only for Ballerina components, since the
+// workflow engine is Ballerina-only: a type an operator chose deliberately is left
+// alone, and re-running this is a no-op.
+//
+// + componentId - The component the reporting runtime belongs to
+// + return - An error only if the update itself fails
+public isolated function promoteToWorkflowIntegration(string componentId) returns error? {
+    sql:ExecutionResult result = check dbClient->execute(`
+        UPDATE components
+        SET display_type = ${WORKFLOW_DISPLAY_TYPE}
+        WHERE component_id = ${componentId}
+            AND component_type = ${types:BI}
+            AND display_type = ${GENERIC_DISPLAY_TYPE}
+    `);
+    int? affected = result.affectedRowCount;
+    if affected is int && affected > 0 {
+        log:printInfo(string `Component ${componentId} reported workflows; recorded it as a ` +
+                string `${WORKFLOW_DISPLAY_TYPE} integration`);
+    }
 }
