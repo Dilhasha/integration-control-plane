@@ -2,6 +2,7 @@
 -- Add SSO group mapping tables and effective membership views (SQL Server)
 -- ============================================================================
 
+IF OBJECT_ID('sso_group_mappings', 'U') IS NULL
 CREATE TABLE sso_group_mappings (
     mapping_id VARCHAR(36) PRIMARY KEY,
     org_uuid INT NOT NULL DEFAULT 1,
@@ -30,6 +31,9 @@ CREATE TABLE sso_group_mappings (
 );
 GO
 
+DROP TRIGGER IF EXISTS trg_sso_group_mappings_updated_at;
+GO
+
 CREATE TRIGGER trg_sso_group_mappings_updated_at
 ON sso_group_mappings
 AFTER UPDATE
@@ -43,6 +47,7 @@ BEGIN
 END;
 GO
 
+IF OBJECT_ID('federated_group_user_mapping', 'U') IS NULL
 CREATE TABLE federated_group_user_mapping (
     id BIGINT IDENTITY (1, 1) PRIMARY KEY,
     org_uuid INT NOT NULL DEFAULT 1,
@@ -62,6 +67,9 @@ CREATE TABLE federated_group_user_mapping (
     INDEX idx_fed_group_user_group (group_id),
     INDEX idx_fed_group_user_issuer_claim (issuer, claim_name, claim_value)
 );
+GO
+
+DROP TRIGGER IF EXISTS trg_federated_group_user_mapping_updated_at;
 GO
 
 CREATE TRIGGER trg_federated_group_user_mapping_updated_at

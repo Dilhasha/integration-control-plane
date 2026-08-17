@@ -23,7 +23,9 @@ This application supports runtime configuration, allowing you to modify backend 
   "VITE_AUTH_BASE_URL": "https://localhost:9446/auth",
   "VITE_OBSERVABILITY_URL": "https://localhost:9446/icp/observability",
   "VITE_SSO_ENABLED": false,
-  "VITE_DISABLE_PASSWORD_LOGIN": false,
+  "VITE_SSO_ISSUER": "",
+  "VITE_PASSWORD_LOGIN_DISABLED": false,
+  "VITE_FEDERATED_ACCESS_CONTROL_ENABLED": false,
   "VITE_ICP_VERSION": "2.0.0-SNAPSHOT"
 }
 ```

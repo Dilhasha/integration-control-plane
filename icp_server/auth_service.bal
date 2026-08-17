@@ -1409,6 +1409,27 @@ service /auth on httpListener {
             };
         }
 
+        // A mapping grants whatever the target group's roles grant, which may reach
+        // wider than the scope the mapping is administered at. Without this check a
+        // project-scoped administrator could map a claim onto an org-wide group
+        // (Super Admins included) and escalate privileges. Require the caller to
+        // hold the permission at every scope the target group's roles apply to.
+        boolean|error mayTargetGroup = canManageTargetGroupScopes(userContext.userId, inputWithOrg.groupId);
+        if mayTargetGroup is error {
+            log:printError("Error checking target group role scopes", mayTargetGroup, groupId = inputWithOrg.groupId);
+            return utils:createInternalServerError("Failed to verify target group permissions");
+        }
+        if !mayTargetGroup {
+            log:printWarn("SSO group mapping rejected — target group grants access beyond the caller's scope",
+                    userId = userContext.userId, groupId = inputWithOrg.groupId);
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to target this group. The group's roles apply beyond " +
+                        "the scope of this mapping; org-level user management is required."
+                }
+            };
+        }
+
         string|error mappingId = storage:createSSOGroupMapping(inputWithOrg);
         if mappingId is error {
             log:printError("Error creating SSO group mapping", mappingId);
@@ -3638,6 +3659,41 @@ isolated function normalizeOptionalId(string? value) returns string? {
 // The sso_group_mappings unique constraint ignores scope, so a duplicate may
 // have been created at a level the caller's tab does not manage. Name the
 // existing mapping's scope in the conflict message to avoid confusion.
+# Checks whether the caller may target a group in an SSO mapping.
+#
+# The mapping's own scope only decides where it is administered; the access it
+# hands out comes from the target group's `group_role_mapping` rows, which may be
+# scoped more widely. The caller must therefore hold user-management permission at
+# every scope those roles apply to, otherwise a narrowly-scoped administrator could
+# grant org-wide access (including Super Admins) through a scoped mapping.
+#
+# + userId - The calling user's ID.
+# + groupId - The target ICP group.
+# + return - true if the caller may target the group, false otherwise, or an error.
+isolated function canManageTargetGroupScopes(string userId, string groupId) returns boolean|error {
+    types:GroupRoleMapping[] roleMappings = check storage:getGroupRoleMappings(groupId);
+
+    foreach types:GroupRoleMapping roleMapping in roleMappings {
+        types:AccessScope roleScope = {orgUuid: roleMapping.orgUuid ?: storage:DEFAULT_ORG_ID};
+        string? roleProject = roleMapping.projectUuid;
+        if roleProject is string {
+            roleScope.projectUuid = roleProject;
+        }
+        string? roleIntegration = roleMapping.integrationUuid;
+        if roleIntegration is string {
+            roleScope.integrationUuid = roleIntegration;
+        }
+
+        boolean hasScopedPermission = check auth:hasAnyPermission(userId,
+                [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], roleScope);
+        if !hasScopedPermission {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 isolated function describeSSOMappingConflict(types:SSOGroupMappingInput input) returns string {
     string baseMessage = "This SSO group mapping already exists";
     types:SSOGroupMappingResponse[]|error mappings =

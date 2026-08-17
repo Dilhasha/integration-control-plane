@@ -699,6 +699,23 @@ public isolated function addFederatedGroupUserMapping(types:FederatedGroupUserMa
         return result;
     }
 
+    if isOracle() {
+        // Oracle returns the ROWID (not the identity value) as lastInsertId,
+        // so read the id back via the unique membership tuple.
+        int|error mappingId = dbClient->queryRow(`
+            SELECT id FROM federated_group_user_mapping
+            WHERE org_uuid = ${orgId} AND issuer = ${input.issuer}
+              AND user_uuid = ${input.userUuid} AND group_id = ${input.groupId}
+              AND claim_name = ${input.claimName} AND claim_value = ${input.claimValue}
+        `);
+        if mappingId is int {
+            log:printInfo("Successfully added federated group membership", mappingId = mappingId);
+            return mappingId;
+        }
+        log:printWarn("Failed to read back federated group membership ID on Oracle", 'error = mappingId);
+        return error("Failed to retrieve mapping ID after creating federated group membership");
+    }
+
     int|string? lastInsertId = result.lastInsertId;
     if lastInsertId is int {
         log:printInfo("Successfully added federated group membership", mappingId = lastInsertId);
