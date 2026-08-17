@@ -149,6 +149,37 @@ function testTunnelBoostWindow() {
     test:assertEquals(workflowBoostHint("unit-runtime-3"), 1);
 }
 
+// The cadence must decay as the runtime goes idle: a runtime that served one workflow
+// request must not be asked for a heartbeat every second from then on. Idle time is set
+// directly rather than waited out, so the whole ramp is checked without sleeping.
+@test:Config {groups: ["workflow-tunnel"]}
+function testTunnelBoostRampDecaysToTheRuntimeInterval() {
+    string runtimeId = "unit-runtime-ramp";
+    [int, int?][] expected = [
+        [0, 1],     // just requested — fastest cadence
+        [4, 1],     // still inside the first step
+        [5, 2],     // first step over
+        [9, 2],
+        [10, 5],
+        [19, 5],
+        [20, 10],
+        [29, 10],
+        [30, ()],   // ramp exhausted — back to the runtime's own interval
+        [120, ()]   // and it stays there
+    ];
+    foreach [int, int?] [idleSeconds, cadence] in expected {
+        lock {
+            workflowTunnel.boostedAt[runtimeId] = nowUnixSeconds() - idleSeconds;
+        }
+        test:assertEquals(workflowBoostHint(runtimeId), cadence,
+                string `A runtime idle for ${idleSeconds}s must be asked for cadence ${cadence.toString()}`);
+    }
+
+    // A new request restarts the ramp, so an active user keeps the fastest cadence.
+    boostWorkflowRuntime(runtimeId);
+    test:assertEquals(workflowBoostHint(runtimeId), 1, "A workflow request must restart the ramp");
+}
+
 // ── End-to-end round trip over real HTTP ──────────────────────────────────────
 
 final http:Client wfRuntimeIcpClient = check new ("https://localhost:9445/icp",

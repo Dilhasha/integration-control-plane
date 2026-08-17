@@ -32,8 +32,10 @@ import ballerina/uuid;
 // command), executed in-process by the runtime's ICP bridge, and its result posted
 // back on POST /icp/commandResult — correlated to the waiting frontend request by
 // commandId. Latency is managed with a boost hint: while a user is actively working
-// with workflow views, heartbeat responses carry nextHeartbeatInSeconds = 1 so the
-// bridge polls every second instead of its regular interval.
+// with workflow views, heartbeat responses carry a nextHeartbeatInSeconds cadence so the
+// bridge polls faster than its regular interval. The cadence decays back to the regular
+// interval as the runtime goes idle — a runtime is not kept at one heartbeat per second
+// because someone once opened a workflow view.
 //
 // All state is in-memory, matching the ICP's single-instance architecture (like the
 // runtime hash cache): a restart loses in-flight commands, whose callers time out
@@ -44,10 +46,17 @@ import ballerina/uuid;
 const decimal WORKFLOW_COMMAND_WAIT_SECONDS = 25;
 // Waiter poll granularity.
 const decimal WORKFLOW_COMMAND_POLL_SECONDS = 0.1;
-// How long a runtime stays boosted after the last workflow request for it.
-const int WORKFLOW_BOOST_WINDOW_SECONDS = 120;
-// The heartbeat cadence asked of a boosted runtime.
-const int WORKFLOW_BOOST_HINT_SECONDS = 1;
+// The cadence asked of a boosted runtime, decaying back to its own interval as it goes
+// idle. Each step is [seconds since the last workflow request, cadence to ask for while
+// the elapsed time is below it]: one heartbeat per second while a user is likely still
+// clicking, then 2s, 5s, and 10s. A flat window at 1s was the first design and cost too
+// much: a runtime serving non-workflow traffic kept heartbeating every second long after
+// the last workflow view was closed. Every workflow request resets the ramp, so an active
+// session still gets the fastest cadence.
+//
+// The bridge ignores a hint that is not shorter than its own interval, so the last step is
+// a no-op for a runtime already on a 10s interval and a mild speed-up for a slower one.
+final readonly & [int, int][] WORKFLOW_BOOST_RAMP = [[5, 1], [10, 2], [20, 5], [30, 10]];
 // The capability a runtime must have advertised to receive WORKFLOW_MGMT commands.
 const string WORKFLOW_COMMANDS_CAPABILITY = "workflowCommands";
 
@@ -60,8 +69,9 @@ type WorkflowTunnelState record {|
     map<types:WorkflowCommandResult> results = {};
     // commandIds with a live waiter; results for unknown ids are dropped (late arrivals).
     map<boolean> waiting = {};
-    // runtimeId → unix seconds until which the runtime is boosted.
-    map<int> boostedUntil = {};
+    // runtimeId → unix seconds of the last workflow request for it, which is where the
+    // boost ramp is measured from.
+    map<int> boostedAt = {};
 |};
 
 isolated WorkflowTunnelState workflowTunnel = {};
@@ -155,26 +165,33 @@ isolated function deliverWorkflowCommands(string runtimeId, types:HeartbeatRespo
     }
 }
 
-// Marks a runtime boosted: its heartbeat responses ask for 1s cadence until the
-// window (sliding, renewed on every workflow request for it) expires.
+// Marks a runtime boosted, restarting the decay ramp: its heartbeat responses ask for the
+// fastest cadence again. Called for every workflow request against the runtime, so an
+// active user keeps it at the top of the ramp.
 isolated function boostWorkflowRuntime(string runtimeId) {
     lock {
-        workflowTunnel.boostedUntil[runtimeId] = nowUnixSeconds() + WORKFLOW_BOOST_WINDOW_SECONDS;
+        workflowTunnel.boostedAt[runtimeId] = nowUnixSeconds();
     }
 }
 
-// The nextHeartbeatInSeconds hint for a runtime, or () when it is not boosted.
+// The nextHeartbeatInSeconds hint for a runtime: the ramp step its idle time falls in, or
+// () once the ramp has run out and the runtime should return to its own interval.
 isolated function workflowBoostHint(string runtimeId) returns int? {
     lock {
-        int? until = workflowTunnel.boostedUntil[runtimeId];
-        if until is () {
+        int? boostedAt = workflowTunnel.boostedAt[runtimeId];
+        if boostedAt is () {
             return ();
         }
-        if until < nowUnixSeconds() {
-            _ = workflowTunnel.boostedUntil.removeIfHasKey(runtimeId);
-            return ();
+        int idleSeconds = nowUnixSeconds() - boostedAt;
+        foreach [int, int] [rampUntil, cadence] in WORKFLOW_BOOST_RAMP {
+            if idleSeconds < rampUntil {
+                return cadence;
+            }
         }
-        return WORKFLOW_BOOST_HINT_SECONDS;
+        // Ramp exhausted: stop tracking the runtime rather than re-evaluating it on every
+        // heartbeat for as long as it lives.
+        _ = workflowTunnel.boostedAt.removeIfHasKey(runtimeId);
+        return ();
     }
 }
 
