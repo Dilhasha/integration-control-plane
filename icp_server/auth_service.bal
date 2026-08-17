@@ -1901,16 +1901,20 @@ service /auth on httpListener {
             }
         }
 
-        // Fetch final groups
+        // Fetch the final manual memberships. This endpoint only ever adds or removes
+        // manual rows, so the result deliberately excludes SSO-owned (federated)
+        // memberships. The response field is named accordingly so callers do not read
+        // it as the user's effective group set — use GET /users, which reports
+        // membershipSource, for that.
         types:Group[]|error finalGroups = storage:getUserManualGroups(userId);
         if finalGroups is error {
             log:printError("Failed to fetch final user groups", finalGroups, userId = userId);
             return utils:createInternalServerError("Failed to fetch final user groups");
         }
 
-        string[] finalIds = [];
+        string[] manualGroupIds = [];
         foreach types:Group g in <types:Group[]>finalGroups {
-            finalIds.push(g.groupId);
+            manualGroupIds.push(g.groupId);
         }
 
         return <http:Ok>{
@@ -1920,7 +1924,7 @@ service /auth on httpListener {
                 addedCount: added,
                 removedCount: removed,
                 errors: errors,
-                groupIds: finalIds
+                manualGroupIds: manualGroupIds
             }
         };
     }
