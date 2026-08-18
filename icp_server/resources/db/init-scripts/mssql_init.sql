@@ -1160,6 +1160,21 @@ BEGIN
 END;
 GO
 
+-- Keep in step with add_workflow_feature_mssql.sql: a fresh install and a migrated
+-- deployment must end up with the same schema, trigger included.
+CREATE TRIGGER trg_bi_workflow_metadata_updated_at
+ON bi_workflow_metadata
+AFTER UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE bi_workflow_metadata
+    SET updated_at = GETDATE()
+    FROM bi_workflow_metadata t
+    INNER JOIN inserted i ON t.runtime_id = i.runtime_id;
+END;
+GO
+
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_service_listener_bindings (
     runtime_id CHAR(36) NOT NULL,

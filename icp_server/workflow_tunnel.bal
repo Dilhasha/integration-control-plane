@@ -91,12 +91,23 @@ isolated function enqueueWorkflowCommand(string runtimeId, types:ControlCommand 
     }
 }
 
-// Removes and returns the commands queued for a runtime — called from the heartbeat
-// and delta-heartbeat handlers so the commands ride the response.
-isolated function takePendingWorkflowCommands(string runtimeId) returns types:ControlCommand[] {
+// Removes and returns the commands queued for a runtime together with its boost hint,
+// under a single lock acquisition — this runs for every heartbeat of every runtime,
+// most of which have neither queued commands nor an active boost. A runtime whose
+// ramp has run out is dropped from the boost tracking here rather than re-evaluated
+// on every heartbeat for as long as it lives.
+isolated function takeWorkflowDelivery(string runtimeId) returns [types:ControlCommand[], int?] {
     lock {
         types:ControlCommand[]? queue = workflowTunnel.pendingCommands.removeIfHasKey(runtimeId);
-        return queue is types:ControlCommand[] ? queue.clone() : [];
+        int? cadence = ();
+        int? boostedAt = workflowTunnel.boostedAt[runtimeId];
+        if boostedAt is int {
+            cadence = rampCadence(nowUnixSeconds() - boostedAt);
+            if cadence is () {
+                _ = workflowTunnel.boostedAt.removeIfHasKey(runtimeId);
+            }
+        }
+        return [queue is types:ControlCommand[] ? queue.clone() : [], cadence];
     }
 }
 
@@ -124,6 +135,11 @@ isolated function completeWorkflowCommand(types:WorkflowCommandResult result) re
 // Blocks until the command's result arrives or the wait deadline passes. On timeout
 // the waiter is deregistered and, if the command was never delivered, it is removed
 // from its runtime's queue so a dead runtime doesn't accumulate stale commands.
+//
+// Polling is a deliberate simplicity trade-off: Ballerina has no condition-variable
+// primitive, a sleeping strand suspends without holding a platform thread, and the
+// lock traffic — ~10 acquisitions/second per in-flight command — is noise next to
+// the heartbeat handlers taking the same lock.
 isolated function awaitWorkflowCommandResult(string commandId, string runtimeId,
         decimal waitSeconds = WORKFLOW_COMMAND_WAIT_SECONDS) returns types:WorkflowCommandResult? {
     decimal waited = 0;
@@ -140,6 +156,14 @@ isolated function awaitWorkflowCommandResult(string commandId, string runtimeId,
     }
     lock {
         _ = workflowTunnel.waiting.removeIfHasKey(commandId);
+        // A result can land between the last poll and this cleanup: the waiting entry was
+        // still present, so it was accepted into `results`. Deliver it instead of leaking
+        // it — commandIds are never reused, so a kept entry would sit there for the life
+        // of the process while the caller is told 504.
+        types:WorkflowCommandResult? racedResult = workflowTunnel.results.removeIfHasKey(commandId);
+        if racedResult is types:WorkflowCommandResult {
+            return racedResult.clone();
+        }
         types:ControlCommand[]? queue = workflowTunnel.pendingCommands[runtimeId];
         if queue is types:ControlCommand[] {
             types:ControlCommand[] remaining = [];
@@ -156,9 +180,15 @@ isolated function awaitWorkflowCommandResult(string commandId, string runtimeId,
 
 // Merges the runtime's queued workflow commands into a heartbeat (or delta-heartbeat)
 // response and stamps the boost hint when the runtime is boosted. Called from the
-// runtime service for every acknowledged heartbeat.
+// runtime service for every heartbeat. Delivery drains the queue, so only an
+// acknowledged response may carry anything: the bridge discards unacknowledged
+// responses without processing commands, and a command removed from the queue on one
+// would be lost while its caller is still blocked.
 isolated function deliverWorkflowCommands(string runtimeId, types:HeartbeatResponse heartbeatResponse) {
-    types:ControlCommand[] tunnelCommands = takePendingWorkflowCommands(runtimeId);
+    if !heartbeatResponse.acknowledged {
+        return;
+    }
+    [types:ControlCommand[], int?] [tunnelCommands, boostHint] = takeWorkflowDelivery(runtimeId);
     if tunnelCommands.length() > 0 {
         log:printDebug(string `Delivering ${tunnelCommands.length()} workflow commands to runtime ${runtimeId}`);
         types:ControlCommand[]? existing = heartbeatResponse.commands;
@@ -170,7 +200,6 @@ isolated function deliverWorkflowCommands(string runtimeId, types:HeartbeatRespo
             heartbeatResponse.commands = tunnelCommands;
         }
     }
-    int? boostHint = workflowBoostHint(runtimeId);
     if boostHint is int {
         heartbeatResponse.nextHeartbeatInSeconds = boostHint;
     }
@@ -178,32 +207,33 @@ isolated function deliverWorkflowCommands(string runtimeId, types:HeartbeatRespo
 
 // Marks a runtime boosted, restarting the decay ramp: its heartbeat responses ask for the
 // fastest cadence again. Called for every workflow request against the runtime, so an
-// active user keeps it at the top of the ramp.
+// active user keeps it at the top of the ramp. Also sweeps entries whose ramp has run
+// out: a runtime that stopped heartbeating (offline, deleted) never reaches the removal
+// in takeWorkflowDelivery, so without this its entry would linger for the life of the
+// process — a slow leak proportional to runtime churn.
 isolated function boostWorkflowRuntime(string runtimeId) {
     lock {
-        workflowTunnel.boostedAt[runtimeId] = nowUnixSeconds();
+        int now = nowUnixSeconds();
+        int rampMax = WORKFLOW_BOOST_RAMP[WORKFLOW_BOOST_RAMP.length() - 1][0];
+        foreach string trackedRuntimeId in workflowTunnel.boostedAt.keys() {
+            int? boostedAt = workflowTunnel.boostedAt[trackedRuntimeId];
+            if boostedAt is int && now - boostedAt >= rampMax {
+                _ = workflowTunnel.boostedAt.removeIfHasKey(trackedRuntimeId);
+            }
+        }
+        workflowTunnel.boostedAt[runtimeId] = now;
     }
 }
 
-// The nextHeartbeatInSeconds hint for a runtime: the ramp step its idle time falls in, or
-// () once the ramp has run out and the runtime should return to its own interval.
-isolated function workflowBoostHint(string runtimeId) returns int? {
-    lock {
-        int? boostedAt = workflowTunnel.boostedAt[runtimeId];
-        if boostedAt is () {
-            return ();
+// The ramp step an idle time falls in, or () once the ramp has run out and the runtime
+// should return to its own heartbeat interval.
+isolated function rampCadence(int idleSeconds) returns int? {
+    foreach [int, int] [rampUntil, cadence] in WORKFLOW_BOOST_RAMP {
+        if idleSeconds < rampUntil {
+            return cadence;
         }
-        int idleSeconds = nowUnixSeconds() - boostedAt;
-        foreach [int, int] [rampUntil, cadence] in WORKFLOW_BOOST_RAMP {
-            if idleSeconds < rampUntil {
-                return cadence;
-            }
-        }
-        // Ramp exhausted: stop tracking the runtime rather than re-evaluating it on every
-        // heartbeat for as long as it lives.
-        _ = workflowTunnel.boostedAt.removeIfHasKey(runtimeId);
-        return ();
     }
+    return ();
 }
 
 isolated function nowUnixSeconds() returns int {

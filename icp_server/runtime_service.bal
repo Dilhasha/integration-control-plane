@@ -187,13 +187,7 @@ service /icp on runtimeListener {
                 heartbeatResponse.commands = reconcileCommands;
             }
 
-            // Delivery drains the queue, so it must only happen into a response the bridge
-            // will act on: an unacknowledged response is discarded there, and the command
-            // would be lost while its caller is still blocked. Nothing between here and the
-            // return can fail today — this keeps that from becoming a silent dependency.
-            if heartbeatResponse.acknowledged {
-                deliverWorkflowCommands(runtimeId, heartbeatResponse);
-            }
+            deliverWorkflowCommands(runtimeId, heartbeatResponse);
 
             log:printDebug(string `Heartbeat processed for runtime=${runtimeId}, kid=${kid}`);
             return heartbeatResponse;
@@ -262,9 +256,7 @@ service /icp on runtimeListener {
                 }
             }
 
-            if heartbeatResponse.acknowledged {
-                deliverWorkflowCommands(runtimeId, heartbeatResponse);
-            }
+            deliverWorkflowCommands(runtimeId, heartbeatResponse);
 
             log:printDebug(string `Delta heartbeat processed for runtime=${runtimeId}, kid=${kid}`);
             return heartbeatResponse;
@@ -301,6 +293,23 @@ service /icp on runtimeListener {
         types:WorkflowCommandResult|error result = resultJson.cloneWithType();
         if result is error {
             return <http:BadRequest>{body: {message: string `Invalid command result: ${result.message()}`}};
+        }
+        // The kid proves org membership scoped to a component+environment; nothing in the
+        // JWT names one runtime instance. Tie the posted result to the key its runtime
+        // authenticates heartbeats with, so a key bound elsewhere cannot answer for it
+        // even knowing the commandId. Replicas sharing the key stay indistinguishable —
+        // that is the shared-secret trust boundary. Fail closed: an unreadable or absent
+        // binding drops the result rather than accepting an unverifiable one.
+        string?|error boundKeyId = storage:getRuntimeKeyId(result.runtimeId);
+        if boundKeyId is error {
+            log:printError(string `Failed to load the key binding for runtime ${result.runtimeId}; dropping its command result`,
+                    'error = boundKeyId);
+            return <http:Accepted>{body: {accepted: true}};
+        }
+        if boundKeyId != kid {
+            log:printWarn(string `Dropping a workflow command result posted with a key not bound to its runtime`,
+                    commandId = result.commandId, runtimeId = result.runtimeId, kid = kid);
+            return <http:Accepted>{body: {accepted: true}};
         }
         boolean delivered = completeWorkflowCommand(result);
         if !delivered {

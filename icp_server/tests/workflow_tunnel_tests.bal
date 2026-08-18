@@ -76,7 +76,8 @@ function testTunnelOperationMapping() {
         <[string, map<json>]>["reviewActivities.decide",
             {taskId: "task-2", action: "proceed-with-input", input: {amount: 9}}]);
 
-    // Outside the vocabulary → () (falls back to the legacy proxy)
+    // Outside the vocabulary → (): the caller answers 404. The legacy callback-URL
+    // proxy these paths used to fall back to is gone.
     test:assertEquals(mapWorkflowRequestToOperation("GET", ["retry-tasks"], {}, {}), ());
     test:assertEquals(mapWorkflowRequestToOperation("POST", ["workflows", "wf-1", "wake"], {}, {}), ());
 }
@@ -97,10 +98,10 @@ function testTunnelQueueAndWaiter() returns error? {
     enqueueWorkflowCommand("unit-runtime", command);
 
     // Delivery drains the queue exactly once.
-    types:ControlCommand[] delivered = takePendingWorkflowCommands("unit-runtime");
+    types:ControlCommand[] delivered = takeWorkflowDelivery("unit-runtime")[0];
     test:assertEquals(delivered.length(), 1);
     test:assertEquals(delivered[0].commandId, "wfc-unit-1");
-    test:assertEquals(takePendingWorkflowCommands("unit-runtime").length(), 0);
+    test:assertEquals(takeWorkflowDelivery("unit-runtime")[0].length(), 0);
 
     // A result for a waited command is accepted and unblocks the waiter.
     test:assertTrue(completeWorkflowCommand({
@@ -152,7 +153,7 @@ function testResultFromAnotherRuntimeIsRefused() {
         test:assertFail("The owning runtime's result must reach the waiter");
     }
     test:assertEquals(result.body, {ok: true}, "The refused result must not have been stored");
-    _ = takePendingWorkflowCommands("unit-runtime-owner");
+    _ = takeWorkflowDelivery("unit-runtime-owner");
 }
 
 @test:Config {groups: ["workflow-tunnel"]}
@@ -170,7 +171,7 @@ function testTunnelWaiterTimeoutCleansQueue() {
 
     types:WorkflowCommandResult? result = awaitWorkflowCommandResult("wfc-unit-timeout", "unit-runtime-2", 0.3);
     test:assertTrue(result is (), "An unanswered command must time out");
-    test:assertEquals(takePendingWorkflowCommands("unit-runtime-2").length(), 0,
+    test:assertEquals(takeWorkflowDelivery("unit-runtime-2")[0].length(), 0,
         "A timed-out command must be removed from its runtime's queue");
     test:assertFalse(completeWorkflowCommand({
         runtimeId: "unit-runtime-2", commandId: "wfc-unit-timeout",
@@ -180,9 +181,9 @@ function testTunnelWaiterTimeoutCleansQueue() {
 
 @test:Config {groups: ["workflow-tunnel"]}
 function testTunnelBoostWindow() {
-    test:assertTrue(workflowBoostHint("unit-runtime-3") is (), "Unboosted runtimes get no hint");
+    test:assertTrue(takeWorkflowDelivery("unit-runtime-3")[1] is (), "Unboosted runtimes get no hint");
     boostWorkflowRuntime("unit-runtime-3");
-    test:assertEquals(workflowBoostHint("unit-runtime-3"), 1);
+    test:assertEquals(takeWorkflowDelivery("unit-runtime-3")[1], 1);
 }
 
 // The cadence must decay as the runtime goes idle: a runtime that served one workflow
@@ -207,13 +208,30 @@ function testTunnelBoostRampDecaysToTheRuntimeInterval() {
         lock {
             workflowTunnel.boostedAt[runtimeId] = nowUnixSeconds() - idleSeconds;
         }
-        test:assertEquals(workflowBoostHint(runtimeId), cadence,
+        test:assertEquals(takeWorkflowDelivery(runtimeId)[1], cadence,
                 string `A runtime idle for ${idleSeconds}s must be asked for cadence ${cadence.toString()}`);
     }
 
     // A new request restarts the ramp, so an active user keeps the fastest cadence.
     boostWorkflowRuntime(runtimeId);
-    test:assertEquals(workflowBoostHint(runtimeId), 1, "A workflow request must restart the ramp");
+    test:assertEquals(takeWorkflowDelivery(runtimeId)[1], 1, "A workflow request must restart the ramp");
+}
+
+@test:Config {groups: ["workflow-tunnel"]}
+function testBoostSweepDropsRuntimesThatNeverHeartbeatAgain() {
+    // A boosted runtime that goes offline never reaches the ramp-exhausted removal in
+    // takeWorkflowDelivery (that runs on its own heartbeats), so the next boost of any
+    // runtime sweeps entries whose ramp has run out — otherwise they would accumulate
+    // for the life of the process, one per churned runtime.
+    lock {
+        workflowTunnel.boostedAt["unit-runtime-gone"] = nowUnixSeconds() - 3600;
+    }
+    boostWorkflowRuntime("unit-runtime-sweeper");
+    lock {
+        test:assertFalse(workflowTunnel.boostedAt.hasKey("unit-runtime-gone"),
+            "A stale boost entry must be swept when another runtime is boosted");
+        _ = workflowTunnel.boostedAt.removeIfHasKey("unit-runtime-sweeper");
+    }
 }
 
 // ── End-to-end round trip over real HTTP ──────────────────────────────────────
@@ -243,8 +261,8 @@ function issueRuntimeToken(string keyId, string keyMaterial) returns string|erro
 
 // alwaysRun: a failure here would otherwise leave WF_TUNNEL_RUNTIME_ID registered, and it
 // advertises workflowCommands for Component 1 / Prod — changing which runtime later tests
-// see selected. The org secret the end-to-end test binds is revoked here for the same
-// reason: every run would otherwise leave another active secret row behind.
+// see selected. The org secrets the tunnel tests create are revoked here for the same
+// reason: every run would otherwise leave more active secret rows behind.
 @test:AfterGroups {value: ["workflow-tunnel"], alwaysRun: true}
 function cleanupWorkflowTunnelTests() {
     cleanupRuntime(WF_TUNNEL_RUNTIME_ID);
@@ -252,17 +270,30 @@ function cleanupWorkflowTunnelTests() {
     lock {
         issuedKeyId = tunnelTestKeyId;
     }
-    if issuedKeyId != "" {
-        error? revoked = storage:revokeOrgSecret(issuedKeyId);
-        if revoked is error {
-            io:println("Failed to revoke the workflow-tunnel test org secret: ", revoked.message());
-        }
+    revokeTestOrgSecret(issuedKeyId);
+    string foreignKeyId;
+    lock {
+        foreignKeyId = tunnelForeignKeyId;
+    }
+    revokeTestOrgSecret(foreignKeyId);
+}
+
+function revokeTestOrgSecret(string keyId) {
+    if keyId == "" {
+        return;
+    }
+    error? revoked = storage:revokeOrgSecret(keyId);
+    if revoked is error {
+        io:println("Failed to revoke a workflow-tunnel test org secret: ", revoked.message());
     }
 }
 
-// The key ID the end-to-end test issues, so the teardown can revoke it even if that test
-// fails partway through.
+// The keys the tunnel tests issue, so the teardown can revoke them even if a test fails
+// partway through. The key material is kept so the foreign-key test can authenticate the
+// way the end-to-end test's simulated bridge does.
 isolated string tunnelTestKeyId = "";
+isolated string tunnelTestKeyMaterial = "";
+isolated string tunnelForeignKeyId = "";
 
 // Full tunnel round trip: a frontend request for a tunnel-capable runtime is answered
 // by a simulated bridge that receives the WORKFLOW_MGMT command in a (boosted)
@@ -290,6 +321,9 @@ function testWorkflowTunnelEndToEnd() returns error? {
     string keyMaterial = orgSecret.substring(dotIdx + 1);
     lock {
         tunnelTestKeyId = keyId;
+    }
+    lock {
+        tunnelTestKeyMaterial = keyMaterial;
     }
     check storage:updateRuntimeKeyId(WF_TUNNEL_RUNTIME_ID, keyId);
     // Bind the secret the way a real first full heartbeat would — the delta-heartbeat
@@ -369,4 +403,103 @@ function testWorkflowTunnelEndToEnd() returns error? {
     test:assertEquals(frontendResponse.statusCode, 200);
     test:assertEquals(check frontendResponse.getJsonPayload(), <json>{count: 7},
         "The frontend response must carry the runtime's result body byte-identically");
+}
+
+// A result posted with a valid org key that is NOT the key the target runtime
+// authenticates with must be refused: the kid only proves org membership, so without
+// this binding any authenticated runtime that learned a commandId could answer a
+// command queued for another runtime, and its body would reach the console as the
+// operation's own result. Reuses the runtime, binding, and key the end-to-end test
+// set up (cleaned up in the group teardown, not per test).
+@test:Config {groups: ["workflow-tunnel"], dependsOn: [testWorkflowTunnelEndToEnd]}
+function testResultPostedWithForeignKeyIsRefused() returns error? {
+    string legitKeyId;
+    lock {
+        legitKeyId = tunnelTestKeyId;
+    }
+    string legitKeyMaterial;
+    lock {
+        legitKeyMaterial = tunnelTestKeyMaterial;
+    }
+
+    // A second, unrelated org secret: authenticates fine, but is not the key
+    // WF_TUNNEL_RUNTIME_ID heartbeats with.
+    string foreignSecret = check storage:createOrgSecret(WF_PROD_ENV_ID, WF_ADMIN_USER_ID);
+    int? foreignDotIdx = foreignSecret.indexOf(".");
+    if foreignDotIdx is () {
+        return error("createOrgSecret returned an unexpected secret format");
+    }
+    string foreignKeyId = foreignSecret.substring(0, foreignDotIdx);
+    string foreignKeyMaterial = foreignSecret.substring(foreignDotIdx + 1);
+    lock {
+        tunnelForeignKeyId = foreignKeyId;
+    }
+    string foreignToken = check issueRuntimeToken(foreignKeyId, foreignKeyMaterial);
+    string legitToken = check issueRuntimeToken(legitKeyId, legitKeyMaterial);
+    string adminToken = check generateV2Token(WF_ADMIN_USER_ID, "admin", []);
+
+    future<http:Response|error> pendingRequest = start wfProxyGet(
+            string `/${COMPONENT_1_ID}/${WF_PROD_ENV_ID}/human-tasks/pending-count`, adminToken);
+
+    // Simulated bridge: catch the command with the runtime's own key, as usual.
+    types:DeltaHeartbeat deltaHeartbeat = {
+        runtimeId: WF_TUNNEL_RUNTIME_ID,
+        runtimeHash: "wf-test-hash-" + WF_TUNNEL_RUNTIME_ID,
+        timestamp: time:utcNow()
+    };
+    map<string> legitAuth = {"Authorization": "Bearer " + legitToken};
+    map<string> foreignAuth = {"Authorization": "Bearer " + foreignToken};
+    string? commandId = ();
+    foreach int attempt in 0 ..< 60 {
+        json deltaResponse = check wfRuntimeIcpClient->post("/deltaHeartbeat", deltaHeartbeat, legitAuth);
+        json|error commandsJson = deltaResponse.commands;
+        if commandsJson is json[] {
+            foreach json commandJson in commandsJson {
+                json|error action = commandJson.action;
+                if action is string && action == "WORKFLOW_MGMT" {
+                    json|error payloadText = commandJson.payload;
+                    if payloadText !is string {
+                        return error("WORKFLOW_MGMT command without a payload");
+                    }
+                    json payload = check payloadText.fromJsonString();
+                    commandId = check payload.commandId;
+                }
+            }
+        }
+        if commandId is string {
+            break;
+        }
+        langRuntime:sleep(0.2);
+    }
+    if commandId !is string {
+        return error("The simulated bridge never received the tunneled command");
+    }
+
+    // The spoof: an authenticated post claiming the target runtime, under the foreign
+    // key. Transport-wise still 202 — the drop is server-side, like other late results.
+    http:Response spoofed = check wfRuntimeIcpClient->post("/commandResult", {
+        runtimeId: WF_TUNNEL_RUNTIME_ID,
+        commandId: commandId,
+        status: "COMPLETED",
+        httpStatus: 200,
+        body: {hijacked: true}
+    }, foreignAuth);
+    test:assertEquals(spoofed.statusCode, 202);
+
+    // Give the waiter time to (wrongly) collect the spoofed result before the legit one
+    // arrives — if it did, the frontend response below would carry `hijacked`.
+    langRuntime:sleep(0.5);
+    http:Response legit = check wfRuntimeIcpClient->post("/commandResult", {
+        runtimeId: WF_TUNNEL_RUNTIME_ID,
+        commandId: commandId,
+        status: "COMPLETED",
+        httpStatus: 200,
+        body: {count: 3}
+    }, legitAuth);
+    test:assertEquals(legit.statusCode, 202);
+
+    http:Response frontendResponse = check wait pendingRequest;
+    test:assertEquals(frontendResponse.statusCode, 200);
+    test:assertEquals(check frontendResponse.getJsonPayload(), <json>{count: 3},
+        "A result posted with a key not bound to the target runtime must be refused");
 }
