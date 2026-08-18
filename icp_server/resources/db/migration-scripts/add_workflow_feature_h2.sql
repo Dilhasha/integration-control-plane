@@ -1,6 +1,8 @@
 -- Migration: workflow feature support (H2)
 -- Adds everything an existing pre-workflow deployment needs for the workflow feature:
---   1. runtimes.callback_url        - workflow management service base URL from the heartbeat
+--   1. runtimes.callback_url        - retained for schema compatibility: heartbeat writes still
+--                                     reference the column, but nothing populates it now that
+--                                     management goes through the command tunnel
 --   2. 'Workflow-Management' domain - widens the permission_domain CHECK constraint
 --   3. workflow_mgt:* permissions   - human-task and workflow-execution permissions
 --   4. role grants                  - Super Admin/Admin/Project Admin: view + manage both;

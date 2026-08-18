@@ -25,7 +25,7 @@ Pick the script matching your database engine:
 
 Each script applies, in order:
 
-1. `runtimes.callback_url` — workflow management service base URL reported via the runtime heartbeat
+1. `runtimes.callback_url` — retained for schema compatibility: heartbeat writes still reference the column, but nothing populates it now that workflow management goes through the command tunnel
 2. The `Workflow-Management` permission domain (widens the domain constraint / ENUM)
 3. The four `workflow_mgt:*` permissions (human tasks + workflow executions)
 4. Role grants — Super Admin / Admin / Project Admin: view + manage both; Developer: manage human tasks, view workflows; Viewer: view human tasks only

@@ -212,8 +212,8 @@ isolated function nowUnixSeconds() returns int {
 
 // Picks the runtime that should execute tunneled workflow commands for a
 // component+environment: the freshest-heartbeat RUNNING runtime that advertised the
-// workflowCommands capability, or () when there is none (the caller then falls back
-// to the legacy callback-URL proxy or reports the feature unavailable).
+// workflowCommands capability, or () when there is none — the caller then answers 503
+// rather than serving anything stale.
 isolated function selectWorkflowCommandTarget(string componentId, string environmentId)
         returns string?|error {
     types:WorkflowMetadataRecord[] metadataRecords =
@@ -231,10 +231,10 @@ isolated function selectWorkflowCommandTarget(string componentId, string environ
     return ();
 }
 
-// Executes one workflow management operation through the tunnel and maps the outcome
-// to the HTTP response the legacy proxy would have relayed: the runtime's result is
-// the same JSON document its management REST API would have returned (re-serialized, so
-// formatting is normalized — the values are not).
+// Executes one workflow management operation through the tunnel and maps the outcome to
+// an HTTP response for the console: the runtime's status, and the same JSON document its
+// management REST API would have returned (re-serialized, so formatting is normalized —
+// the values are not).
 isolated function executeTunneledWorkflowCommand(string runtimeId, string operation,
         map<json> params, string userId, string[] roles) returns http:Response {
     string commandId = "wfc-" + uuid:createType4AsString();
@@ -280,9 +280,10 @@ isolated function executeTunneledWorkflowCommand(string runtimeId, string operat
 
 // ── Request → operation mapping ──────────────────────────────────────────────
 // Maps a /icp/workflow/{componentId}/{environmentId}/{...wfPath} request to the
-// dot-qualified operation vocabulary the runtime's dispatcher executes. Returns ()
-// for paths outside the vocabulary (e.g. the deprecated /retry-tasks aliases), which
-// then take the legacy proxy path when a callback URL exists.
+// dot-qualified operation vocabulary the runtime's dispatcher executes. Returns () for
+// paths outside the vocabulary — including the deprecated /retry-tasks aliases, which
+// used to reach the runtime through the callback-URL proxy. That proxy is gone, so those
+// paths now answer 404 instead.
 
 final string[] & readonly WF_INSTANCE_SUBRESOURCES = ["history", "activity-tree", "execution-graph"];
 final string[] & readonly WF_INSTANCE_ACTIONS = ["suspend", "resume", "terminate", "cancel"];

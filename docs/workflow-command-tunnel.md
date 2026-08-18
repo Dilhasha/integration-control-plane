@@ -56,7 +56,7 @@ Step 5 is the heart of it: the command is not a new connection but the **respons
 
 - A runtime advertises that capability only while a workflow integration is registered *and* its bridge has `enableWorkflowManagement = true`. The integration, not the control plane, decides whether it may be managed.
 - When no runtime qualifies, the request answers **503** rather than serving cached state. Views go dark when an integration is down; they never show stale data.
-- Requests whose path falls outside the operation vocabulary (the deprecated `/retry-tasks` aliases) still take the legacy callback-URL proxy where a callback URL exists.
+- Requests whose path falls outside the operation vocabulary — including the deprecated `/retry-tasks` aliases — answer **404**. They used to reach the runtime through the callback-URL proxy; that proxy is gone, and `runtimes.callback_url` is no longer written (the column stays for schema compatibility).
 
 ---
 
