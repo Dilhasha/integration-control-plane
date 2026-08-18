@@ -67,8 +67,10 @@ type WorkflowTunnelState record {|
     map<types:ControlCommand[]> pendingCommands = {};
     // commandId → arrived result, until the waiter collects it.
     map<types:WorkflowCommandResult> results = {};
-    // commandIds with a live waiter; results for unknown ids are dropped (late arrivals).
-    map<boolean> waiting = {};
+    // commandId → the runtimeId the command was issued to, for as long as a waiter is live.
+    // Results for unknown ids are dropped (late arrivals), and a result from any other
+    // runtime is refused: the id alone must not be enough to answer someone else's command.
+    map<string> waiting = {};
     // runtimeId → unix seconds of the last workflow request for it, which is where the
     // boost ramp is measured from.
     map<int> boostedAt = {};
@@ -85,7 +87,7 @@ isolated function enqueueWorkflowCommand(string runtimeId, types:ControlCommand 
         } else {
             workflowTunnel.pendingCommands[runtimeId] = [command.clone()];
         }
-        workflowTunnel.waiting[command.commandId] = true;
+        workflowTunnel.waiting[command.commandId] = runtimeId;
     }
 }
 
@@ -102,7 +104,16 @@ isolated function takePendingWorkflowCommands(string runtimeId) returns types:Co
 // (the waiter already timed out, or the id was never issued) — those are dropped.
 isolated function completeWorkflowCommand(types:WorkflowCommandResult result) returns boolean {
     lock {
-        if !workflowTunnel.waiting.hasKey(result.commandId) {
+        string? issuedTo = workflowTunnel.waiting[result.commandId];
+        if issuedTo is () {
+            return false;
+        }
+        if issuedTo != result.runtimeId {
+            // Every runtime agent in the organization authenticates the same way, so the
+            // command id alone would let one of them answer a command queued for another —
+            // and that answer is relayed to the console as the operation's result.
+            log:printWarn(string `Refusing a workflow command result from the wrong runtime`,
+                    commandId = result.commandId, issuedTo = issuedTo, reportedBy = result.runtimeId);
             return false;
         }
         workflowTunnel.results[result.commandId] = result.clone();
@@ -222,7 +233,8 @@ isolated function selectWorkflowCommandTarget(string componentId, string environ
 
 // Executes one workflow management operation through the tunnel and maps the outcome
 // to the HTTP response the legacy proxy would have relayed: the runtime's result is
-// byte-identical to its management REST API's response.
+// the same JSON document its management REST API would have returned (re-serialized, so
+// formatting is normalized — the values are not).
 isolated function executeTunneledWorkflowCommand(string runtimeId, string operation,
         map<json> params, string userId, string[] roles) returns http:Response {
     string commandId = "wfc-" + uuid:createType4AsString();
@@ -252,6 +264,13 @@ isolated function executeTunneledWorkflowCommand(string runtimeId, string operat
                 operation = operation, commandId = commandId);
         return workflowErrorResponse(504,
                 "The workflow runtime did not respond in time; please retry");
+    }
+    if result.httpStatus < 100 || result.httpStatus > 599 {
+        // The status is whatever the runtime reported; an out-of-range value would produce a
+        // malformed response to the console rather than a diagnosable failure.
+        log:printWarn(string `Runtime ${runtimeId} reported an invalid HTTP status`,
+                operation = operation, commandId = commandId, httpStatus = result.httpStatus);
+        return workflowErrorResponse(502, "The workflow runtime returned an invalid response");
     }
     http:Response response = new;
     response.statusCode = result.httpStatus;

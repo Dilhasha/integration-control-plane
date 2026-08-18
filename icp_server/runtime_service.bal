@@ -187,7 +187,13 @@ service /icp on runtimeListener {
                 heartbeatResponse.commands = reconcileCommands;
             }
 
-            deliverWorkflowCommands(runtimeId, heartbeatResponse);
+            // Delivery drains the queue, so it must only happen into a response the bridge
+            // will act on: an unacknowledged response is discarded there, and the command
+            // would be lost while its caller is still blocked. Nothing between here and the
+            // return can fail today — this keeps that from becoming a silent dependency.
+            if heartbeatResponse.acknowledged {
+                deliverWorkflowCommands(runtimeId, heartbeatResponse);
+            }
 
             log:printDebug(string `Heartbeat processed for runtime=${runtimeId}, kid=${kid}`);
             return heartbeatResponse;
@@ -256,7 +262,9 @@ service /icp on runtimeListener {
                 }
             }
 
-            deliverWorkflowCommands(runtimeId, heartbeatResponse);
+            if heartbeatResponse.acknowledged {
+                deliverWorkflowCommands(runtimeId, heartbeatResponse);
+            }
 
             log:printDebug(string `Delta heartbeat processed for runtime=${runtimeId}, kid=${kid}`);
             return heartbeatResponse;

@@ -19,6 +19,7 @@ import icp_server.types;
 
 import ballerina/http;
 import ballerina/jwt;
+import ballerina/io;
 import ballerina/lang.runtime as langRuntime;
 import ballerina/test;
 import ballerina/time;
@@ -120,6 +121,41 @@ function testTunnelQueueAndWaiter() returns error? {
 }
 
 @test:Config {groups: ["workflow-tunnel"]}
+function testResultFromAnotherRuntimeIsRefused() {
+    // Every runtime agent in the organization authenticates the same way, so a commandId
+    // alone must not be enough to answer a command queued for a different runtime: that
+    // answer is relayed to the console as the operation's own result.
+    types:ControlCommand command = {
+        commandId: "wfc-unit-crossruntime",
+        runtimeId: "unit-runtime-owner",
+        targetArtifact: {name: "workflow"},
+        action: types:WORKFLOW_MGMT,
+        issuedAt: time:utcNow(),
+        status: types:PENDING,
+        payload: "{}"
+    };
+    enqueueWorkflowCommand("unit-runtime-owner", command);
+
+    test:assertFalse(completeWorkflowCommand({
+        runtimeId: "unit-runtime-intruder", commandId: "wfc-unit-crossruntime",
+        status: "COMPLETED", httpStatus: 200, body: {hijacked: true}
+    }), "A result from a runtime the command was not issued to must be refused");
+
+    test:assertTrue(completeWorkflowCommand({
+        runtimeId: "unit-runtime-owner", commandId: "wfc-unit-crossruntime",
+        status: "COMPLETED", httpStatus: 200, body: {ok: true}
+    }), "The runtime the command was issued to must still be able to answer it");
+
+    types:WorkflowCommandResult? result = awaitWorkflowCommandResult(
+            "wfc-unit-crossruntime", "unit-runtime-owner", 1);
+    if result is () {
+        test:assertFail("The owning runtime's result must reach the waiter");
+    }
+    test:assertEquals(result.body, {ok: true}, "The refused result must not have been stored");
+    _ = takePendingWorkflowCommands("unit-runtime-owner");
+}
+
+@test:Config {groups: ["workflow-tunnel"]}
 function testTunnelWaiterTimeoutCleansQueue() {
     types:ControlCommand command = {
         commandId: "wfc-unit-timeout",
@@ -205,10 +241,28 @@ function issueRuntimeToken(string keyId, string keyMaterial) returns string|erro
     return jwt:issue(issuerConfig);
 }
 
-@test:AfterGroups {value: ["workflow-tunnel"]}
+// alwaysRun: a failure here would otherwise leave WF_TUNNEL_RUNTIME_ID registered, and it
+// advertises workflowCommands for Component 1 / Prod — changing which runtime later tests
+// see selected. The org secret the end-to-end test binds is revoked here for the same
+// reason: every run would otherwise leave another active secret row behind.
+@test:AfterGroups {value: ["workflow-tunnel"], alwaysRun: true}
 function cleanupWorkflowTunnelTests() {
     cleanupRuntime(WF_TUNNEL_RUNTIME_ID);
+    string issuedKeyId;
+    lock {
+        issuedKeyId = tunnelTestKeyId;
+    }
+    if issuedKeyId != "" {
+        error? revoked = storage:revokeOrgSecret(issuedKeyId);
+        if revoked is error {
+            io:println("Failed to revoke the workflow-tunnel test org secret: ", revoked.message());
+        }
+    }
 }
+
+// The key ID the end-to-end test issues, so the teardown can revoke it even if that test
+// fails partway through.
+isolated string tunnelTestKeyId = "";
 
 // Full tunnel round trip: a frontend request for a tunnel-capable runtime is answered
 // by a simulated bridge that receives the WORKFLOW_MGMT command in a (boosted)
@@ -234,6 +288,9 @@ function testWorkflowTunnelEndToEnd() returns error? {
     }
     string keyId = orgSecret.substring(0, dotIdx);
     string keyMaterial = orgSecret.substring(dotIdx + 1);
+    lock {
+        tunnelTestKeyId = keyId;
+    }
     check storage:updateRuntimeKeyId(WF_TUNNEL_RUNTIME_ID, keyId);
     // Bind the secret the way a real first full heartbeat would — the delta-heartbeat
     // handler short-circuits (fullHeartbeatRequired) for unbound keys, before any

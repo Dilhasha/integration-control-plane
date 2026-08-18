@@ -120,6 +120,18 @@ isolated function escapeRoleName(string roleName) returns string {
     return re `,`.replaceAll(roleName, "%2C");
 }
 
+// Whether the request announced a body. `getJsonPayload` fails the same way for a missing
+// body and for malformed content, so the headers are what separate "nothing sent" from
+// "sent something unusable".
+isolated function hasRequestBody(http:Request req) returns boolean {
+    string|error contentLength = req.getHeader("content-length");
+    if contentLength is string {
+        int|error length = int:fromString(contentLength);
+        return length is int && length > 0;
+    }
+    return req.getHeader("transfer-encoding") is string;
+}
+
 isolated function workflowErrorResponse(int statusCode, string message) returns http:Response {
     http:Response res = new;
     res.statusCode = statusCode;
@@ -202,6 +214,14 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
         json|error rawBody = req.getJsonPayload();
         if rawBody is map<json> {
             body = rawBody;
+        } else if rawBody is json || hasRequestBody(req) {
+            // A body was sent and it is not a JSON object — valid JSON of the wrong shape, or
+            // not JSON at all. Substituting `{}` would forward the operation with its
+            // parameters missing (`humanTasks.complete` with no result, `humanTasks.fail`
+            // with no reason) and report the runtime's complaint about a missing parameter
+            // instead of the client's malformed request. A POST with no body at all is
+            // normal — several operations take none — and still goes through.
+            return workflowErrorResponse(400, "Request body must be a JSON object");
         }
     }
     [string, map<json>]? operation = mapWorkflowRequestToOperation(

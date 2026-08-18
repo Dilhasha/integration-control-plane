@@ -17,6 +17,7 @@
 import icp_server.storage;
 import icp_server.types;
 
+import ballerina/io;
 import ballerina/test;
 
 // Workflow metadata ingestion tests: the bi_workflow_metadata rows written off full
@@ -56,10 +57,21 @@ function buildWorkflowMetadataHeartbeat(string runtimeId, string runtimeName,
     return heartbeat;
 }
 
-@test:AfterGroups {value: ["workflow-metadata"]}
+// alwaysRun: a failure here leaves runtime rows behind, and the tunnel and GraphQL tests
+// count runtimes for the same component and environment — so they would fail for a reason
+// that has nothing to do with them.
+@test:AfterGroups {value: ["workflow-metadata"], alwaysRun: true}
 function cleanupWorkflowMetadataTests() {
     cleanupRuntime(WF_META_RUNTIME_ID);
     cleanupRuntime(WF_META_RUNTIME_2_ID);
+    // The promotion test deliberately changes this component's integration type. Restore it
+    // here rather than at the end of a later test, so the fixture is right regardless of
+    // which tests ran, in what order, or whether they passed.
+    error? restored = storage:updateComponent(WF_COMPONENT_2_ID, (), (), (),
+            SUPER_ADMIN_USER_ID, "service");
+    if restored is error {
+        io:println("Failed to restore the workflow-metadata component fixture: ", restored.message());
+    }
 }
 
 // The server advertises the workflowMetadata field so bridges know to attach it, and a
@@ -151,8 +163,7 @@ function testWorkflowMetadataKeepsDeliberateIntegrationType() returns error? {
     test:assertEquals(unchanged.displayType, "ballerinaService",
         "A chosen integration type must survive a workflow-reporting runtime");
 
-    // Leave the fixture as the other tests in this group expect it.
-    check storage:updateComponent(WF_COMPONENT_2_ID, (), (), (), SUPER_ADMIN_USER_ID, "service");
+    // The group teardown restores the fixture, so it is right even if this test fails.
 }
 
 // The definitions resolver prefers stored metadata: no call into the integration, one
