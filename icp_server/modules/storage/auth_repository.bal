@@ -624,10 +624,16 @@ public isolated function getSSOGroupMappingsWithGroupNamesByOrgId(int orgId)
          ORDER BY sgm.created_at DESC`
     );
 
-    check from types:SSOGroupMappingResponse mapping in mappingStream
+    error? streamResult = from types:SSOGroupMappingResponse mapping in mappingStream
         do {
             mappings.push(mapping);
         };
+    if streamResult is sql:Error {
+        return mapSSOSchemaError(streamResult, "list SSO group mappings");
+    }
+    if streamResult is error {
+        return streamResult;
+    }
 
     return mappings;
 }
@@ -644,12 +650,39 @@ public isolated function getSSOGroupMappingsByIssuer(int orgId, string issuer) r
          ORDER BY created_at`
     );
 
-    check from types:SSOGroupMapping mapping in mappingStream
+    error? streamResult = from types:SSOGroupMapping mapping in mappingStream
         do {
             mappings.push(mapping);
         };
+    if streamResult is sql:Error {
+        return mapSSOSchemaError(streamResult, "read SSO group mappings");
+    }
+    if streamResult is error {
+        return streamResult;
+    }
 
     return mappings;
+}
+
+// The SSO group mapping tables ship with a schema migration. A deployment that
+// upgrades the server without running it fails on the first SSO login, because
+// login-time reconciliation reads these tables on every SSO login regardless of
+// whether any mapping exists. Translate the raw "table not found" into something
+// that names the remedy instead of leaking SQL to the operator.
+public const string SSO_SCHEMA_UPDATE_REQUIRED =
+    "This update adds new SSO capabilities that need a one-time update to the ICP database. " +
+    "Update the database and restart ICP to continue using SSO.";
+
+isolated function mapSSOSchemaError(sql:Error err, string operation) returns error {
+    if classifySqlError(err) == MISSING_SCHEMA_OBJECT {
+        log:printError(SSO_SCHEMA_UPDATE_REQUIRED
+                + " The SSO group mapping tables are missing. Apply the migration script for your database "
+                + "('add_sso_group_mapping_tables_<database>.sql', shipped under resources/db/migration-scripts) "
+                + "to the main ICP database, then restart ICP.", 'error = err);
+        return error(SSO_SCHEMA_UPDATE_REQUIRED, err);
+    }
+    log:printError(string `Failed to ${operation}`, 'error = err);
+    return err;
 }
 
 // SSO group mappings are immutable (like group-role mappings): change means delete + create.
@@ -783,10 +816,16 @@ public isolated function reconcileFederatedGroupUserMappings(int orgId, string i
              FROM federated_group_user_mapping
              WHERE org_uuid = ${orgId} AND issuer = ${issuer} AND user_uuid = ${userId}`
         );
-        check from types:FederatedGroupUserMapping mapping in existingStream
+        error? existingResult = from types:FederatedGroupUserMapping mapping in existingStream
             do {
                 existingMappings.push(mapping);
             };
+        // Surfaced first because this is the earliest statement to touch the
+        // migration-provided tables, so a missing migration is reported here.
+        error? existingFailure = existingResult is sql:Error
+            ? mapSSOSchemaError(existingResult, "read federated group memberships")
+            : existingResult;
+        check existingFailure;
 
         foreach types:FederatedGroupMembershipInput desired in desiredMemberships {
             types:FederatedGroupUserMapping? existing = findFederatedMembership(existingMappings, desired);

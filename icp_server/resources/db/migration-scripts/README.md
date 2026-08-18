@@ -230,6 +230,16 @@ context built for authenticated requests — resolves a user's groups through it
 whether SSO is configured. Without the script, those queries reference objects that do not
 exist and authorization fails, so it is not optional for password-only deployments.
 
+If the script has not been run, SSO login fails and the server responds with:
+
+> This update adds new SSO capabilities that need a one-time update to the ICP database.
+> Update the database and restart ICP to continue using SSO.
+
+The accompanying server log names the exact script to apply. This is reported on **every**
+SSO login, not only when SSO group mappings are configured: login-time reconciliation reads
+these tables on each login to work out which memberships should be added or removed, so an
+empty mapping list still requires the tables to exist.
+
 Pick the script matching your database engine:
 
 | Engine | Script |

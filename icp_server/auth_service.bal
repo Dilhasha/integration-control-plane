@@ -369,6 +369,13 @@ service /auth on httpListener {
         if federatedSyncResult is error {
             log:printError("Error synchronizing SSO group memberships", federatedSyncResult,
                     username = userInfo.username);
+            // A pending schema update is an operator problem with a known remedy, so
+            // pass that message through instead of a generic failure. Login-time
+            // reconciliation runs for every SSO login, so a database that has not been
+            // updated breaks SSO entirely — the message has to name the fix.
+            if federatedSyncResult.message() == storage:SSO_SCHEMA_UPDATE_REQUIRED {
+                return utils:createInternalServerError(storage:SSO_SCHEMA_UPDATE_REQUIRED);
+            }
             return utils:createInternalServerError("Error synchronizing SSO group access");
         }
 
@@ -1299,6 +1306,9 @@ service /auth on httpListener {
             storage:getSSOGroupMappingsWithGroupNamesByOrgId(storage:DEFAULT_ORG_ID);
         if mappings is error {
             log:printError("Error fetching SSO group mappings", mappings, orgHandle = orgHandle);
+            if mappings.message() == storage:SSO_SCHEMA_UPDATE_REQUIRED {
+                return utils:createInternalServerError(storage:SSO_SCHEMA_UPDATE_REQUIRED);
+            }
             return utils:createInternalServerError("Failed to fetch SSO group mappings");
         }
 
