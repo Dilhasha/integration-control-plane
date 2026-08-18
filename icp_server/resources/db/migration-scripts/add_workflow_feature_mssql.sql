@@ -7,6 +7,7 @@
 --   4. role grants                  - Super Admin/Admin/Project Admin: view + manage both;
 --                                     Developer: manage human tasks, view workflows;
 --                                     Viewer: view human tasks only
+--   5. bi_workflow_metadata     - workflow metadata + capabilities from the full heartbeat
 -- Idempotent - safe to re-run. Fresh installs get all of this from mssql_init.sql.
 -- Run once against the main ICP DB.
 
@@ -82,4 +83,40 @@ WHERE p.permission_name IN ('workflow_mgt:view_workflows', 'workflow_mgt:manage_
          OR (r.role_name = 'Developer' AND p.permission_name = 'workflow_mgt:view_workflows'))
     AND NOT EXISTS (SELECT 1 FROM role_permission_mapping m
                     WHERE m.role_id = r.role_id AND m.permission_id = p.permission_id);
+GO
+
+-- 5. Workflow metadata published in the full heartbeat
+--    The BI runtime's ICP bridge sends its workflow metadata document (definitions, human
+--    tasks, activities, agents — with JSON schemas) and its advertised capabilities in the
+--    optional workflowMetadata/capabilities heartbeat fields. Heartbeat processing writes
+--    this table unconditionally, so a missing table fails every full heartbeat transaction:
+--    apply this script BEFORE upgrading the ICP server.
+IF OBJECT_ID('bi_workflow_metadata', 'U') IS NULL
+BEGIN
+    CREATE TABLE bi_workflow_metadata (
+        runtime_id CHAR(36) NOT NULL,
+        metadata NVARCHAR (MAX) NOT NULL,
+        capabilities NVARCHAR (512),
+        created_at DATETIME2 NOT NULL DEFAULT GETDATE (),
+        updated_at DATETIME2 NOT NULL DEFAULT GETDATE (),
+        PRIMARY KEY (runtime_id),
+        CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
+    );
+END
+GO
+
+DROP TRIGGER IF EXISTS trg_bi_workflow_metadata_updated_at;
+GO
+
+CREATE TRIGGER trg_bi_workflow_metadata_updated_at
+ON bi_workflow_metadata
+AFTER UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE bi_workflow_metadata
+    SET updated_at = GETDATE()
+    FROM bi_workflow_metadata t
+    INNER JOIN inserted i ON t.runtime_id = i.runtime_id;
+END;
 GO

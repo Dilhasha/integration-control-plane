@@ -2,16 +2,16 @@
 
 This directory contains two kinds of SQL scripts:
 
-1. **In-place v2 schema upgrades** (`add_workflow_feature_<engine>.sql`, `add_openapi_definitions_<engine>.sql`, `add_integration_types_<engine>.sql`, `add_faulty_data_service_state_<engine>.sql`, `add_workflow_metadata_<engine>.sql`) — bring an existing ICP v2 database up to the current schema.
+1. **In-place v2 schema upgrades** (`add_workflow_feature_<engine>.sql`, `add_openapi_definitions_<engine>.sql`, `add_integration_types_<engine>.sql`, `add_faulty_data_service_state_<engine>.sql`) — bring an existing ICP v2 database up to the current schema.
 2. **ICP v1 → v2 user migration** (`v1_to_v2_<engine>.sql`) — migrate user accounts, credentials, and role assignments from ICP v1.
 
 ---
 
 ## Upgrading an existing ICP v2 deployment: workflow feature
 
-Deployments whose database was initialised **before the workflow management feature** (v2.0.0-beta2 and earlier) must run the workflow upgrade script once against the **main ICP DB**. Fresh installs do not need it — the `*_init.sql` scripts already contain everything.
+Deployments whose database was initialised **before the workflow management feature** (v2.0.0-beta2 and earlier) must run the workflow upgrade script once against the **main ICP DB** — **before** deploying this server version. Fresh installs do not need it — the `*_init.sql` scripts already contain everything.
 
-Without it, the new server version starts normally but workflow views fail with `Column "CALLBACK_URL" not found`, and no Workflow-Management permissions appear in Access Control (even for Super Admin).
+Without it, two things break. Workflow views fail with `Column "CALLBACK_URL" not found` and no Workflow-Management permissions appear in Access Control (even for Super Admin). Worse, **every full heartbeat fails** — for MI runtimes as much as BI ones: `upsertWorkflowMetadata` issues `DELETE FROM bi_workflow_metadata` for the reporting runtime before checking whether the heartbeat carries any metadata, so a missing table errors out that statement and aborts the whole heartbeat transaction.
 
 Pick the script matching your database engine:
 
@@ -29,6 +29,7 @@ Each script applies, in order:
 2. The `Workflow-Management` permission domain (widens the domain constraint / ENUM)
 3. The four `workflow_mgt:*` permissions (human tasks + workflow executions)
 4. Role grants — Super Admin / Admin / Project Admin: view + manage both; Developer: manage human tasks, view workflows; Viewer: view human tasks only
+5. `bi_workflow_metadata` — the workflow metadata document and advertised capabilities a BI runtime publishes in its full heartbeat (one row per runtime, replaced on every full heartbeat, removed with the runtime via `ON DELETE CASCADE`)
 
 The scripts are **idempotent** — safe to re-run, including after a partial failure. After running, restart the ICP server (or have users re-login) so sessions pick up the new permissions.
 
@@ -56,33 +57,6 @@ sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_workflow_
 ```
 
 ---
-
-## Upgrading an existing ICP v2 deployment: workflow metadata
-
-Deployments whose database was initialised **before BI runtimes could publish the workflow
-metadata document** (workflow definitions, human tasks, activities, and durable agents with
-their JSON schemas, plus advertised capabilities) must run the workflow metadata upgrade
-script once against the **main ICP DB** — **before** deploying this server version. Fresh
-installs do not need it — the `*_init.sql` scripts already contain everything.
-
-Without it, every full heartbeat fails: `upsertWorkflowMetadata` unconditionally issues
-`DELETE FROM bi_workflow_metadata` for the reporting runtime before checking whether the
-heartbeat carries any metadata, so a missing table errors out that statement and aborts the
-whole heartbeat transaction — for BI and MI runtimes alike.
-
-Pick the script matching your database engine:
-
-| Engine | Script |
-|---|---|
-| H2 | `add_workflow_metadata_h2.sql` |
-| MySQL / MariaDB | `add_workflow_metadata_mysql.sql` |
-| PostgreSQL | `add_workflow_metadata_postgresql.sql` |
-| Microsoft SQL Server | `add_workflow_metadata_mssql.sql` |
-| Oracle (19c+) | `add_workflow_metadata_oracle.sql` |
-
-Each script adds the `bi_workflow_metadata` table (one row per runtime, replaced on every
-full heartbeat, removed with the runtime via `ON DELETE CASCADE`). All scripts are
-idempotent — re-running them is safe.
 
 ## Upgrading an existing ICP v2 deployment: packed OpenAPI definitions
 

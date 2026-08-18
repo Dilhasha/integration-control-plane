@@ -7,6 +7,7 @@
 --   4. role grants                  - Super Admin/Admin/Project Admin: view + manage both;
 --                                     Developer: manage human tasks, view workflows;
 --                                     Viewer: view human tasks only
+--   5. bi_workflow_metadata     - workflow metadata + capabilities from the full heartbeat
 -- Idempotent - safe to re-run. Fresh installs get all of this from oracle_init.sql.
 -- Run once against the main ICP DB (as the ICP schema owner).
 
@@ -90,3 +91,36 @@ WHERE p.permission_name IN ('workflow_mgt:view_workflows', 'workflow_mgt:manage_
                     WHERE m.role_id = r.role_id AND m.permission_id = p.permission_id);
 
 COMMIT;
+
+-- 5. Workflow metadata published in the full heartbeat
+--    The BI runtime's ICP bridge sends its workflow metadata document (definitions, human
+--    tasks, activities, agents — with JSON schemas) and its advertised capabilities in the
+--    optional workflowMetadata/capabilities heartbeat fields. Heartbeat processing writes
+--    this table unconditionally, so a missing table fails every full heartbeat transaction:
+--    apply this script BEFORE upgrading the ICP server.
+DECLARE
+    e_object_exists EXCEPTION;
+    PRAGMA EXCEPTION_INIT(e_object_exists, -955);
+BEGIN
+    EXECUTE IMMEDIATE '
+        CREATE TABLE bi_workflow_metadata (
+          runtime_id   CHAR(36) NOT NULL,
+          metadata     CLOB NOT NULL,
+          capabilities VARCHAR2(512 CHAR),
+          created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+          PRIMARY KEY (runtime_id),
+          CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
+        )';
+EXCEPTION
+    WHEN e_object_exists THEN NULL;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_bi_workflow_metadata_updated
+BEFORE UPDATE ON bi_workflow_metadata
+FOR EACH ROW
+BEGIN
+    :NEW.updated_at := CURRENT_TIMESTAMP;
+END;
+/
