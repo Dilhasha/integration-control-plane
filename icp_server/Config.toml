@@ -155,7 +155,7 @@ frontendJwtHMACSecret = "default-secret-key-at-least-32-characters-long-for-hs25
 # passwordLoginDisabled = false  # Set true to disable local username/password login
 # ssoAdminClaim = "groups"  # Required when passwordLoginDisabled = true
 # ssoAdminValues = ["icp-platform-admins"]  # Required when passwordLoginDisabled = true
-# federatedAccessControlEnabled = false  # Set true to manage group membership from IdP claims (requires passwordLoginDisabled = true)
+# federatedAccessControlEnabled = false  # Set true to manage group membership from IdP claims (requires ssoEnabled = true and passwordLoginDisabled = true)
 
 # Example configuration for Okta
 # ssoIssuer = "https://{your-domain}.okta.com/oauth2/default"

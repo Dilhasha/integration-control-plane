@@ -86,7 +86,7 @@ ssoScopes = ["openid", "email", "profile"]
 | `passwordLoginDisabled` | Disable local username/password login and require SSO | `false` |
 | `ssoAdminClaim` | Claim used to identify SSO super admins when password login is disabled | `groups` |
 | `ssoAdminValues` | Claim values that grant super admin access when password login is disabled | `["icp-platform-admins"]` |
-| `federatedAccessControlEnabled` | Manage group membership from IdP claims via SSO mappings (requires `passwordLoginDisabled`) | `false` |
+| `federatedAccessControlEnabled` | Manage group membership from IdP claims via SSO mappings (requires both `ssoEnabled` and `passwordLoginDisabled` to be `true`) | `false` |
 
 ---
 
