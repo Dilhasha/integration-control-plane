@@ -870,21 +870,24 @@ isolated function upsertWorkflowMetadata(string runtimeId, types:Heartbeat heart
     string[]? capabilities = heartbeat?.capabilities;
     string? capabilitiesValue = capabilities is string[] && capabilities.length() > 0
         ? string:'join(",", ...capabilities) : ();
+    // Runtime state like capabilities: chosen at the worker's startup, reported on every
+    // heartbeat, and what scopes the project's shared Temporal namespace to this integration.
+    string? taskQueue = heartbeat?.workflowTaskQueue;
 
     if dbType == POSTGRESQL {
         _ = check dbClient->execute(`
             INSERT INTO bi_workflow_metadata (
-                runtime_id, metadata, capabilities
+                runtime_id, metadata, capabilities, task_queue
             ) VALUES (
-                ${runtimeId}, ${metadataJson}::jsonb, ${capabilitiesValue}
+                ${runtimeId}, ${metadataJson}::jsonb, ${capabilitiesValue}, ${taskQueue}
             )
         `);
     } else {
         _ = check dbClient->execute(`
             INSERT INTO bi_workflow_metadata (
-                runtime_id, metadata, capabilities
+                runtime_id, metadata, capabilities, task_queue
             ) VALUES (
-                ${runtimeId}, ${metadataJson}, ${capabilitiesValue}
+                ${runtimeId}, ${metadataJson}, ${capabilitiesValue}, ${taskQueue}
             )
         `);
     }

@@ -80,8 +80,19 @@ CREATE TABLE IF NOT EXISTS bi_workflow_metadata (
   runtime_id   CHAR(36) NOT NULL,
   metadata     JSON NOT NULL,
   capabilities VARCHAR(512),
+  task_queue   VARCHAR(255),
   created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (runtime_id),
   CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes(runtime_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A re-run on a database that created bi_workflow_metadata before the task_queue column
+-- picks the column up here; a fresh run already has it from the CREATE above.
+SET @add_task_queue = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE bi_workflow_metadata ADD COLUMN task_queue VARCHAR(255)', 'SELECT 1')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'bi_workflow_metadata' AND column_name = 'task_queue');
+PREPARE add_task_queue_stmt FROM @add_task_queue;
+EXECUTE add_task_queue_stmt;
+DEALLOCATE PREPARE add_task_queue_stmt;

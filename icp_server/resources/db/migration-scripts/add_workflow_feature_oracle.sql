@@ -109,6 +109,7 @@ BEGIN
           runtime_id   CHAR(36) NOT NULL,
           metadata     CLOB NOT NULL,
           capabilities VARCHAR2(512 CHAR),
+          task_queue   VARCHAR2(255 CHAR),
           created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
           updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
           PRIMARY KEY (runtime_id),
@@ -116,6 +117,18 @@ BEGIN
         )';
 EXCEPTION
     WHEN e_object_exists THEN NULL;
+END;
+/
+
+-- A re-run on a database that created bi_workflow_metadata before the task_queue column
+-- picks the column up here; a fresh run already has it from the CREATE above.
+DECLARE
+    e_col_exists EXCEPTION;
+    PRAGMA EXCEPTION_INIT(e_col_exists, -1430);
+BEGIN
+    EXECUTE IMMEDIATE 'ALTER TABLE bi_workflow_metadata ADD (task_queue VARCHAR2(255 CHAR))';
+EXCEPTION
+    WHEN e_col_exists THEN NULL;
 END;
 /
 

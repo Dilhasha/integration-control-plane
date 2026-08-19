@@ -818,6 +818,7 @@ CREATE TABLE bi_workflow_metadata (
   runtime_id   CHAR(36) NOT NULL,
   metadata     CLOB NOT NULL,
   capabilities VARCHAR2(512 CHAR),
+  task_queue VARCHAR2(255 CHAR),
   created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
   updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
   PRIMARY KEY (runtime_id),

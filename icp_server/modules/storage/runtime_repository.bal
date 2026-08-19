@@ -1068,7 +1068,7 @@ public isolated function getOpenApiDefinitionsForRuntime(string runtimeId) retur
 public isolated function getWorkflowMetadataForRuntime(string runtimeId)
         returns types:WorkflowMetadataRecord?|error {
     types:WorkflowMetadataRecord|error metadataRecord = dbClient->queryRow(`
-        SELECT runtime_id, metadata, capabilities
+        SELECT runtime_id, metadata, capabilities, task_queue
         FROM bi_workflow_metadata
         WHERE runtime_id = ${runtimeId}
     `);
@@ -1087,7 +1087,7 @@ public isolated function getWorkflowMetadataForComponentEnv(string componentId, 
         returns types:WorkflowMetadataRecord[]|error {
     types:WorkflowMetadataRecord[] metadataList = [];
     stream<types:WorkflowMetadataRecord, sql:Error?> metadataStream = dbClient->query(`
-        SELECT m.runtime_id, m.metadata, m.capabilities
+        SELECT m.runtime_id, m.metadata, m.capabilities, m.task_queue
         FROM bi_workflow_metadata m
         INNER JOIN runtimes r ON m.runtime_id = r.runtime_id
         WHERE r.component_id = ${componentId} AND r.environment_id = ${environmentId}

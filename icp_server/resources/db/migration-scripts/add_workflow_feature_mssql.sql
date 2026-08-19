@@ -99,6 +99,7 @@ BEGIN
         runtime_id CHAR(36) NOT NULL,
         metadata NVARCHAR (MAX) NOT NULL,
         capabilities NVARCHAR (512),
+        task_queue NVARCHAR (255),
         created_at DATETIME2 NOT NULL DEFAULT GETDATE (),
         updated_at DATETIME2 NOT NULL DEFAULT GETDATE (),
         PRIMARY KEY (runtime_id),
@@ -106,6 +107,13 @@ BEGIN
     );
 END
 GO
+
+-- A re-run on a database that created bi_workflow_metadata before the task_queue column
+-- picks the column up here; a fresh run already has it from the CREATE above.
+IF COL_LENGTH('bi_workflow_metadata', 'task_queue') IS NULL
+    ALTER TABLE bi_workflow_metadata ADD task_queue NVARCHAR (255) NULL;
+GO
+
 
 DROP TRIGGER IF EXISTS trg_bi_workflow_metadata_updated_at;
 GO

@@ -359,6 +359,11 @@ public type Heartbeat record {
     // sent to a runtime that did not advertise it (older bridges fail record binding
     // on unknown control actions).
     string[] capabilities?;
+    // The Temporal task queue the integration's workflow worker serves. Runtime state
+    // like capabilities — chosen at program startup, so it may differ between two
+    // runtimes of one program — not part of the workflow metadata document. It is what
+    // scopes a shared Temporal namespace to one integration.
+    string workflowTaskQueue?;
 };
 
 // One runtime's stored workflow metadata row (bi_workflow_metadata).
@@ -367,6 +372,8 @@ public type WorkflowMetadataRecord record {
     string runtimeId;
     string metadata; // the workflow metadata document as a JSON string
     string? capabilities; // comma-joined capability names, or () when none were advertised
+    @sql:Column {name: "task_queue"}
+    string? taskQueue; // the worker's Temporal task queue, or () from older bridges/modules
 };
 
 // Shape of a single entry in the runtime's GET /workflow/definitions response.

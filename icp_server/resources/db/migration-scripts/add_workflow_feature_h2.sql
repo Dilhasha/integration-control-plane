@@ -77,8 +77,13 @@ CREATE TABLE IF NOT EXISTS bi_workflow_metadata (
     runtime_id CHAR(36) NOT NULL,
     metadata CLOB NOT NULL,
     capabilities VARCHAR(512),
+    task_queue VARCHAR(255),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (runtime_id),
     CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
 );
+
+-- A re-run on a database that created bi_workflow_metadata before the task_queue column
+-- picks the column up here; a fresh run already has it from the CREATE above.
+ALTER TABLE bi_workflow_metadata ADD COLUMN IF NOT EXISTS task_queue VARCHAR(255);
