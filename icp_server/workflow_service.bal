@@ -209,6 +209,14 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
     if tunnelTarget is () {
         return workflowErrorResponse(503, "No running workflow runtime can serve this environment's workflow requests");
     }
+    // The instance graph composes the stored model with the runtime's history, so it is handled
+    // here rather than mapped to a single tunneled operation like every other path.
+    if method == http:GET && wfPath.length() == 3 && wfPath[0] == "workflows"
+            && wfPath[2] == "instance-graph" {
+        return handleInstanceGraphRequest(componentId, environmentId, wfPath[1], tunnelTarget,
+                userContext.userId, escapedRoles);
+    }
+
     map<json> body = {};
     if method == http:POST {
         json|error rawBody = req.getJsonPayload();
