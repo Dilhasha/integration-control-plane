@@ -36,6 +36,11 @@ const queryClient = new QueryClient({
       // Never retry auth failures — the token is gone and navigation to login has already
       // been triggered. Retrying only keeps the UI stuck in a loading state.
       retry: (failureCount, error) => !(error instanceof AuthError) && failureCount < 3,
+      // Don't refetch every time the browser tab/window regains focus. Returning to
+      // the app would otherwise re-run all active queries and flash loading states
+      // (e.g. the logs view spinner). Data still refreshes on mount, on manual
+      // refresh actions, and via configured refetchInterval/invalidation.
+      refetchOnWindowFocus: false,
     },
   },
 });

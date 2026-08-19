@@ -1,0 +1,306 @@
+{
+  "dashboards": [
+    {
+      "_id": "6a86d18cfe2ee823422e1bb2",
+      "name": "Application Metrics",
+      "dashboard_ids": [],
+      "workspace_ids": [["6a86d18cc36c38256f94a30c", "6a86d18dfe2ee823422e1bb6"]],
+      "filters": {
+        "context": [
+          {
+            "id": "runtimeId",
+            "label": "Runtime",
+            "field": "metadata.metric_tags.icp_runtimeid.raw",
+            "op": "contains",
+            "type": "parentOptions",
+            "visibility": "always",
+            "multi": true
+          }
+        ]
+      },
+      "parent": null,
+      "sort_order": 1
+    }
+  ],
+  "workspaces": [
+    {
+      "_id": "6a86d18cc36c38256f94a30c",
+      "type": "events",
+      "name": "Total Request Summary",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "must": [
+              {
+                "terms": {
+                  "metadata.metric_name.raw": ["requests_total"]
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.error.raw": ["true"]
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "wildcard": {
+                      "metadata.metric_tags.entrypoint_function_module.raw": {
+                        "value": "*wso2/icp.runtime.bridge*"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "entTmSrs": {
+            "filter": {
+              "bool": {
+                "must": [
+                  {
+                    "terms": {
+                      "metadata.metric_name.raw": ["requests_total"]
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.error.raw": ["true"]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "wildcard": {
+                          "metadata.metric_tags.entrypoint_function_module.raw": {
+                            "value": "*wso2/icp.runtime.bridge*"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "metadata.metric_tags.entrypoint_function_name.raw": {
+                "terms": {
+                  "field": "metadata.metric_tags.entrypoint_function_name.raw",
+                  "size": "5",
+                  "min_doc_count": 1,
+                  "order": {
+                    "metadata__metric_value|weighted_sum": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "request.time": {
+                    "date_histogram": {
+                      "field": "request.time",
+                      "interval": "1s",
+                      "time_zone": "Asia/Colombo"
+                    },
+                    "aggs": {
+                      "metadata__metric_value|weighted_sum": {
+                        "sum": {
+                          "script": {
+                            "field_script": "[metadata.metric_value]*[weight|1]"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "metadata__metric_value|weighted_sum": {
+                    "sum": {
+                      "script": {
+                        "field_script": "[metadata.metric_value]*[weight|1]"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "track_total_hits": false
+      },
+      "dateRange": {
+        "from": "-15m",
+        "to": "now"
+      },
+      "view": "time",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_include&evtcf[filtersGroups][0][filters][2][value]=wso2%2Ficp.runtime.bridge&evtcf[filtersGroups][0][filters][3][field]=metadata.metric_tags.entrypoint_function_name.raw&evtcf[filtersGroups][0][filters][3][op]=not_contain&evtcf[filtersGroups][0][filters][3][value][0]=interceptResponseError&evt_ts[groups][0][field]=metadata.metric_tags.entrypoint_function_name.raw&evt_ts[groups][0][func]=terms&evt_ts[groups][0][buckets]=5&evt_ts[groups][0][by]=metric&evt_ts[metrics][0][id]=dde52dcf&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=weighted_sum&evt_ts[interval]=1s&evt_ts[logScale]=true&evt_ts[stacked]=true",
+      "viewerFilters": [],
+      "analyticType": "entTmSrs",
+      "chartType": "line",
+      "settings": {
+        "groups": [
+          {
+            "field": "metadata.metric_tags.entrypoint_function_name.raw",
+            "func": "terms",
+            "buckets": "5",
+            "by": "metric"
+          }
+        ],
+        "metrics": [
+          {
+            "id": "dde52dcf",
+            "field": "metadata.metric_value",
+            "func": "weighted_sum"
+          }
+        ],
+        "interval": "1s",
+        "logScale": "true",
+        "stacked": "true"
+      }
+    },
+    {
+      "_id": "6a86d18dfe2ee823422e1bb6",
+      "type": "events",
+      "name": "Total Request Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "must": [
+              {
+                "terms": {
+                  "metadata.metric_name.raw": ["requests_total"]
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.error.raw": ["true"]
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "wildcard": {
+                      "metadata.metric_tags.entrypoint_function_module.raw": {
+                        "value": "*wso2/icp.runtime.bridge*"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "entTmSrs": {
+            "filter": {
+              "bool": {
+                "must": [
+                  {
+                    "terms": {
+                      "metadata.metric_name.raw": ["requests_total"]
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.error.raw": ["true"]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "wildcard": {
+                          "metadata.metric_tags.entrypoint_function_module.raw": {
+                            "value": "*wso2/icp.runtime.bridge*"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "request.time": {
+                "date_histogram": {
+                  "field": "request.time",
+                  "interval": "1s",
+                  "time_zone": "Asia/Colombo"
+                },
+                "aggs": {
+                  "metadata__metric_value|weighted_avg": {
+                    "weighted_avg": {
+                      "value": {
+                        "field": "metadata.metric_value"
+                      },
+                      "weight": {
+                        "field": "weight",
+                        "missing": 1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "track_total_hits": false
+      },
+      "dateRange": {
+        "from": "-1h",
+        "to": "now"
+      },
+      "view": "time",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_include&evtcf[filtersGroups][0][filters][2][value]=wso2%2Ficp.runtime.bridge&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=weighted_avg&evt_ts[interval]=1s",
+      "viewerFilters": [],
+      "analyticType": "entTmSrs",
+      "chartType": "line",
+      "settings": {
+        "metrics": [
+          {
+            "field": "metadata.metric_value",
+            "func": "weighted_avg"
+          }
+        ],
+        "interval": "1s"
+      }
+    }
+  ]
+}

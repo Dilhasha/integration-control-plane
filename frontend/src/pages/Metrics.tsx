@@ -20,6 +20,7 @@ import { useCallback, useState, type JSX } from 'react';
 import { hasComponent, type ProjectScope, type ComponentScope } from '../nav';
 import { useProjectByHandler, useComponentByHandler } from '../api/queries';
 import { useObservabilityMetricsConfig } from '../api/metrics';
+import { isMoesifEnabled } from '../config/api';
 import MetricsOpenSearch from './MetricsOpenSearch';
 import MetricsMoesif from './MetricsMoesif';
 
@@ -43,6 +44,11 @@ type MetricsBackend = 'opensearch' | 'moesif';
  * Moesif backend is only exposed when the component's technology is BI or MI; at
  * project scope the toggle stays available and the Moesif page filters its
  * integration picker to BI/MI integrations.
+ *
+ * The whole Moesif backend is gated behind the runtime `moesifEnabled` flag
+ * (VITE_MOESIF_ENABLED in config.json). When it is off, this page always renders
+ * the OpenSearch metrics view with no backend toggle, so there is no sign of
+ * Moesif anywhere in the metrics UI.
  */
 export default function Metrics(scope: ProjectScope | ComponentScope): JSX.Element {
   // Null until the user explicitly picks a backend, so the default can follow
@@ -68,16 +74,20 @@ export default function Metrics(scope: ProjectScope | ComponentScope): JSX.Eleme
   const { data: observabilityConfig } = useObservabilityMetricsConfig();
   const opensearchConfigured = (observabilityConfig?.configured ?? true) && !opensearchUnavailable;
 
+  // Global kill switch for the Moesif backend. When disabled, OpenSearch is the
+  // only provider and no Moesif UI/queries are surfaced.
+  const moesifEnabled = isMoesifEnabled();
+
   // When OpenSearch isn't configured, default to Moesif so its setup
-  // instructions surface on the landing page.
-  const defaultBackend: MetricsBackend = opensearchConfigured ? 'opensearch' : 'moesif';
+  // instructions surface on the landing page — but only when Moesif is enabled.
+  const defaultBackend: MetricsBackend = opensearchConfigured || !moesifEnabled ? 'opensearch' : 'moesif';
   const backend = selectedBackend ?? defaultBackend;
 
   // While the component query is still resolving we don't yet know its
   // technology, so keep the backend selector mounted to avoid it disappearing
   // during loading.
   const componentResolving = isComponent && componentLoading;
-  const moesifAllowed = isComponent ? component?.componentType === 'BI' || component?.componentType === 'MI' : true;
+  const moesifAllowed = moesifEnabled && (isComponent ? component?.componentType === 'BI' || component?.componentType === 'MI' : true);
 
   // Derive the effective backend, falling back to OpenSearch whenever Moesif is
   // unavailable (e.g. an unsupported component technology) so no corrective
@@ -103,7 +113,7 @@ export default function Metrics(scope: ProjectScope | ComponentScope): JSX.Eleme
   );
 
   const backendSelector =
-    moesifAllowed || componentResolving ? (
+    moesifAllowed || (componentResolving && moesifEnabled) ? (
       <ToggleButtonGroup
         value={effectiveBackend}
         exclusive

@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { gql } from './graphql';
 
 export interface GqlPageInfo {
@@ -320,6 +320,37 @@ export function useComponentRuntimes(envId: string, projectId: string, component
     queryFn: () => gql<{ runtimes: { items: GqlRuntime[]; pageInfo: GqlPageInfo } }>(COMPONENT_RUNTIMES_QUERY, { environmentId: envId, projectId, componentId }).then((d) => d.runtimes.items),
     enabled: enabled && !!envId && !!projectId && !!componentId,
   });
+}
+
+// Determines, for a given integration (project + component), which of the
+// supplied environments have at least one registered runtime. The `runtimes`
+// query is environment-scoped, so this runs one query per environment (via
+// `useQueries`) and reuses the same cache entries as `useComponentRuntimes`.
+// Returns the set of environment ids that have runtimes plus a combined loading
+// flag. Used to hide environments where the integration has no runtime deployed
+// (e.g. Moesif metrics/logs should only offer environments the integration is
+// actually running in).
+export function useComponentRuntimesByEnvironments(projectId: string, componentId: string, environmentIds: string[], enabled = true) {
+  const results = useQueries({
+    queries: environmentIds.map((envId) => ({
+      queryKey: ['componentRuntimes', envId, projectId, componentId],
+      queryFn: () => gql<{ runtimes: { items: GqlRuntime[]; pageInfo: GqlPageInfo } }>(COMPONENT_RUNTIMES_QUERY, { environmentId: envId, projectId, componentId }).then((d) => d.runtimes.items),
+      enabled: enabled && !!envId && !!projectId && !!componentId,
+    })),
+  });
+
+  const envsWithRuntimes = new Set<string>();
+  environmentIds.forEach((envId, index) => {
+    const items = results[index]?.data;
+    if (items && items.length > 0) {
+      envsWithRuntimes.add(envId);
+    }
+  });
+
+  return {
+    envsWithRuntimes,
+    isLoading: results.some((result) => result.isLoading),
+  };
 }
 
 const PROJECT_RUNTIMES_QUERY = `

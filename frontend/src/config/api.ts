@@ -33,6 +33,7 @@ interface RuntimeConfig {
   VITE_SSO_ISSUER?: string;
   VITE_PASSWORD_LOGIN_DISABLED?: boolean;
   VITE_FEDERATED_ACCESS_CONTROL_ENABLED?: boolean;
+  VITE_MOESIF_ENABLED?: boolean;
   VITE_ICP_VERSION?: string;
 }
 
@@ -47,6 +48,7 @@ export interface ApiConfig {
   ssoIssuer: string;
   passwordLoginDisabled: boolean;
   federatedAccessControlEnabled: boolean;
+  moesifEnabled: boolean;
   version: string;
 }
 
@@ -69,6 +71,7 @@ const DEFAULT_CONFIG: ApiConfig = {
   ssoIssuer: '',
   passwordLoginDisabled: false,
   federatedAccessControlEnabled: false,
+  moesifEnabled: true,
   version: '',
 };
 
@@ -96,6 +99,7 @@ export async function loadConfig(): Promise<void> {
       ssoIssuer: config.VITE_SSO_ISSUER || DEFAULT_CONFIG.ssoIssuer,
       passwordLoginDisabled: config.VITE_PASSWORD_LOGIN_DISABLED ?? DEFAULT_CONFIG.passwordLoginDisabled,
       federatedAccessControlEnabled: config.VITE_FEDERATED_ACCESS_CONTROL_ENABLED ?? DEFAULT_CONFIG.federatedAccessControlEnabled,
+      moesifEnabled: config.VITE_MOESIF_ENABLED ?? DEFAULT_CONFIG.moesifEnabled,
       version: config.VITE_ICP_VERSION || DEFAULT_CONFIG.version,
     };
 
@@ -133,6 +137,7 @@ export const forceChangePasswordApiUrl = (): string => `${window.API_CONFIG.auth
 export const isSsoEnabled = (): boolean => window.API_CONFIG.ssoEnabled;
 export const isPasswordLoginDisabled = (): boolean => window.API_CONFIG.passwordLoginDisabled;
 export const isFederatedAccessControlEnabled = (): boolean => window.API_CONFIG.federatedAccessControlEnabled;
+export const isMoesifEnabled = (): boolean => window.API_CONFIG.moesifEnabled;
 export const getIcpVersion = (): string => window.API_CONFIG.version;
 
 /**

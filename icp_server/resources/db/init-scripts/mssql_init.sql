@@ -192,29 +192,33 @@ BEGIN
 END;
 GO
 
--- Moesif metrics configuration for a component (kept separate from components to
--- isolate provider secrets and avoid sparse columns on the core table).
-CREATE TABLE component_moesif_config (
-    component_id CHAR(36) PRIMARY KEY,
+-- Per-environment Moesif configuration (kept separate from components to isolate
+-- provider secrets and avoid sparse columns on the core tables). One row per
+-- environment — the Management API key + canvas org/app ids are shared by all
+-- integrations in that environment (both metrics and logs).
+CREATE TABLE environment_moesif_config (
+    environment_id CHAR(36) NOT NULL,
     dashboards_created BIT NOT NULL DEFAULT 0,
-    workspace_id NVARCHAR (512) NULL,
+    logs_configured BIT NOT NULL DEFAULT 0,
+    canvas_org_id NVARCHAR (512) NULL,
+    canvas_app_id NVARCHAR (512) NULL,
     management_key NVARCHAR (4000) NULL,
     created_at DATETIME2 NOT NULL DEFAULT GETDATE (),
     updated_at DATETIME2 NOT NULL DEFAULT GETDATE (),
-    CONSTRAINT fk_moesif_config_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE
+    CONSTRAINT pk_moesif_config PRIMARY KEY (environment_id)
 );
 GO
 
 CREATE TRIGGER trg_moesif_config_updated_at
-ON component_moesif_config
+ON environment_moesif_config
 AFTER UPDATE
 AS
 BEGIN
     SET NOCOUNT ON;
-    UPDATE component_moesif_config
+    UPDATE environment_moesif_config
     SET updated_at = GETDATE()
-    FROM component_moesif_config m
-    INNER JOIN inserted i ON m.component_id = i.component_id;
+    FROM environment_moesif_config m
+    INNER JOIN inserted i ON m.environment_id = i.environment_id;
 END;
 GO
 
@@ -258,6 +262,12 @@ BEGIN
     FROM environments e
     INNER JOIN inserted i ON e.environment_id = i.environment_id;
 END;
+GO
+
+-- Tie the Moesif config to its environment now that both tables exist, so a
+-- config row is removed automatically when its environment is deleted.
+ALTER TABLE environment_moesif_config
+ADD CONSTRAINT fk_moesif_config_environment FOREIGN KEY (environment_id) REFERENCES environments (environment_id) ON DELETE CASCADE;
 GO
 
 -- ============================================================================

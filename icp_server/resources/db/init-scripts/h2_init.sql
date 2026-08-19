@@ -121,18 +121,22 @@ CREATE TABLE components (
 
 CREATE INDEX idx_components_project_id ON components (project_id);
 
--- Per-integration Moesif metrics configuration (optional feature). Kept in a
+-- Per-environment Moesif configuration (optional feature). Kept in a
 -- separate table so the credential (management_key) and provider-specific
--- settings do not widen the core components table. One row per configured
--- component; removed automatically when the component is deleted.
-CREATE TABLE component_moesif_config (
-    component_id CHAR(36) PRIMARY KEY,
+-- settings do not widen the core tables. One row per environment — a Moesif
+-- application maps to a specific ICP environment and its Management API key +
+-- canvas org/app ids are shared by all integrations in that environment (both
+-- metrics and logs). Removed automatically when the environment is deleted.
+CREATE TABLE environment_moesif_config (
+    environment_id CHAR(36) NOT NULL,
     dashboards_created BOOLEAN NOT NULL DEFAULT FALSE,
-    workspace_id VARCHAR(512),
+    logs_configured BOOLEAN NOT NULL DEFAULT FALSE,
+    canvas_org_id VARCHAR(512),
+    canvas_app_id VARCHAR(512),
     management_key VARCHAR(4096),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_moesif_config_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE
+    CONSTRAINT pk_moesif_config PRIMARY KEY (environment_id)
 );
 
 CREATE TABLE environments (
@@ -155,6 +159,11 @@ CREATE TABLE environments (
     CONSTRAINT fk_environments_created_by FOREIGN KEY (created_by) REFERENCES users (user_id) ON DELETE SET NULL,
     CONSTRAINT fk_environments_updated_by FOREIGN KEY (updated_by) REFERENCES users (user_id) ON DELETE SET NULL
 );
+
+-- Tie the Moesif config to its environment now that both tables exist, so a
+-- config row is removed automatically when its environment is deleted.
+ALTER TABLE environment_moesif_config
+    ADD CONSTRAINT fk_moesif_config_environment FOREIGN KEY (environment_id) REFERENCES environments (environment_id) ON DELETE CASCADE;
 
 -- ============================================================================
 -- RBAC V2 - GROUP-BASED AUTHORIZATION

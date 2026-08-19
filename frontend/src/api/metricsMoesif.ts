@@ -18,49 +18,62 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { gql } from './graphql';
 
-// ── Moesif metrics configuration (per project + integration) ──
+// ── Moesif metrics configuration (per environment) ──
 
-// Whether an integration (project + component combo) has had its Moesif metrics
-// workspace/dashboard created/linked in Moesif. This single flag drives the UI
-// (setup flow vs. embedded dashboard).
+// Whether the environment has had its Moesif metrics workspace/dashboard
+// created/linked in Moesif. The Management API key + canvas org/app ids are
+// stored once per environment and shared by all integrations in it, so this flag
+// is environment-wide. It drives the UI (setup flow vs. embedded dashboard):
+// once any integration in the environment links the key, all integrations in
+// that environment skip the setup flow and render the dashboard.
 export interface MoesifMetricsConfigStatus {
   dashboardsCreated: boolean;
 }
 
 const MOESIF_METRICS_CONFIG_QUERY = `
-  query MoesifMetricsConfig($componentId: String!) {
-    moesifMetricsConfig(componentId: $componentId) {
+  query MoesifMetricsConfig($componentId: String!, $environmentId: String!) {
+    moesifMetricsConfig(componentId: $componentId, environmentId: $environmentId) {
       dashboardsCreated
     }
   }`;
 
-// Reads whether the given integration has its Moesif metrics dashboard linked.
-export function useMoesifMetricsConfig(componentId: string | undefined) {
+// Reads whether the environment has its Moesif metrics dashboard linked. A Moesif
+// application maps to a specific environment, so the config is keyed by
+// environment and shared by all integrations in it. The componentId is still
+// passed so the backend can enforce integration-level permissions.
+export function useMoesifMetricsConfig(componentId: string | undefined, environmentId: string | undefined) {
   return useQuery<MoesifMetricsConfigStatus>({
-    queryKey: ['moesif-metrics-config', componentId],
-    queryFn: () => gql<{ moesifMetricsConfig: MoesifMetricsConfigStatus }>(MOESIF_METRICS_CONFIG_QUERY, { componentId }).then((d) => d.moesifMetricsConfig),
-    enabled: !!componentId,
+    queryKey: ['moesif-metrics-config', componentId, environmentId],
+    queryFn: () => gql<{ moesifMetricsConfig: MoesifMetricsConfigStatus }>(MOESIF_METRICS_CONFIG_QUERY, { componentId, environmentId }).then((d) => d.moesifMetricsConfig),
+    enabled: !!componentId && !!environmentId,
     staleTime: 0,
   });
 }
 
 const CREATE_MOESIF_DASHBOARDS_MUTATION = `
-  mutation CreateMoesifDashboards($componentId: String!, $managementApiKey: String!, $moesifAppId: String!) {
-    createMoesifDashboards(componentId: $componentId, managementApiKey: $managementApiKey, moesifAppId: $moesifAppId) {
+  mutation CreateMoesifDashboards($componentId: String!, $environmentId: String!, $managementApiKey: String!) {
+    createMoesifDashboards(componentId: $componentId, environmentId: $environmentId, managementApiKey: $managementApiKey) {
       dashboardsCreated
     }
   }`;
 
-// Requests the backend to create the Moesif metrics workspace + dashboard using
-// the supplied Management API token and Moesif Application ID. On success the
-// integration's `dashboardsCreated` flag is persisted.
+// Links the integration to its Moesif metrics canvas using the supplied Moesif
+// Management API Key. The Management API Key is a Moesif-issued JWT scoped to an
+// organization + application, so the backend derives both the Organization ID
+// (`org` claim) and the Collector Application ID (`app` claim) from it rather
+// than having them entered separately. The canvas auth token is no longer
+// supplied here: the backend mints a short-lived, restricted token from this key
+// on demand when the embed is rendered. On success the integration's
+// `dashboardsCreated` flag (and the canvas org/app ids + Management API Key) are
+// persisted so the embed can render the metrics canvas.
 export function useCreateMoesifDashboards() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { componentId: string; managementApiKey: string; moesifAppId: string }) => gql<{ createMoesifDashboards: MoesifMetricsConfigStatus }>(CREATE_MOESIF_DASHBOARDS_MUTATION, input).then((d) => d.createMoesifDashboards),
+    mutationFn: (input: { componentId: string; environmentId: string; managementApiKey: string }) =>
+      gql<{ createMoesifDashboards: MoesifMetricsConfigStatus }>(CREATE_MOESIF_DASHBOARDS_MUTATION, input).then((d) => d.createMoesifDashboards),
     onSuccess: (_data, variables) => {
-      qc.invalidateQueries({ queryKey: ['moesif-metrics-config', variables.componentId] });
-      qc.invalidateQueries({ queryKey: ['moesif-dashboard-embed', variables.componentId] });
+      qc.invalidateQueries({ queryKey: ['moesif-metrics-config', variables.componentId, variables.environmentId] });
+      qc.invalidateQueries({ queryKey: ['moesif-dashboard-embed', variables.componentId, variables.environmentId] });
     },
   });
 }
@@ -86,36 +99,37 @@ export function useMoesifApplications() {
   });
 }
 
-// ── Moesif dashboard embed (short-lived workspace access token + iframe src) ──
+// ── Moesif canvas embed (canvas iframe src + postMessage auth token) ──
 
-// A short-lived descriptor used to embed the Moesif metrics dashboard in an
-// iframe. `embedUrl` is the fully-formed iframe src; the underlying access token
-// is valid for ~1 hour, so the query is refetched before it expires.
+// A descriptor used to embed the Moesif metrics canvas in an iframe. `embedUrl`
+// is the fully-formed canvas iframe src (…/wrap/app/<org>-<app>/canvas#auth=post)
+// and `token` is the short-lived, restricted auth token the backend mints from
+// the stored Management API Key and delivers to the canvas over the postMessage
+// handshake (SET_TOKEN).
 export interface MoesifDashboardEmbed {
-  workspaceId: string;
-  accessToken: string;
   embedUrl: string;
+  token: string;
 }
 
 const MOESIF_DASHBOARD_EMBED_QUERY = `
-  query MoesifDashboardEmbed($componentId: String!) {
-    moesifDashboardEmbed(componentId: $componentId) {
-      workspaceId, accessToken, embedUrl
+  query MoesifDashboardEmbed($componentId: String!, $environmentId: String!) {
+    moesifDashboardEmbed(componentId: $componentId, environmentId: $environmentId) {
+      embedUrl, token
     }
   }`;
 
-// Access token TTL is 1 hour on the backend; refetch a few minutes early so the
-// embedded iframe never loads with an expired token.
+// The embed URL + token are stable per integration, but keep the periodic
+// refetch so a re-link (org/app/token change) is picked up without a full reload.
 const MOESIF_EMBED_REFETCH_MS = 55 * 60 * 1000; // 55 minutes
 
-// Mints a short-lived Moesif workspace access token (via the backend) and
-// returns the embed URL for the integration's metrics dashboard. Only enabled
-// once the dashboards have been created for the integration.
-export function useMoesifDashboardEmbed(componentId: string | undefined, enabled: boolean) {
+// Returns the Moesif canvas embed URL + auth token (via the backend) for the
+// integration's metrics canvas. Only enabled once the dashboards have been linked
+// for the integration.
+export function useMoesifDashboardEmbed(componentId: string | undefined, environmentId: string | undefined, enabled: boolean) {
   return useQuery<MoesifDashboardEmbed>({
-    queryKey: ['moesif-dashboard-embed', componentId],
-    queryFn: () => gql<{ moesifDashboardEmbed: MoesifDashboardEmbed }>(MOESIF_DASHBOARD_EMBED_QUERY, { componentId }).then((d) => d.moesifDashboardEmbed),
-    enabled: !!componentId && enabled,
+    queryKey: ['moesif-dashboard-embed', componentId, environmentId],
+    queryFn: () => gql<{ moesifDashboardEmbed: MoesifDashboardEmbed }>(MOESIF_DASHBOARD_EMBED_QUERY, { componentId, environmentId }).then((d) => d.moesifDashboardEmbed),
+    enabled: !!componentId && !!environmentId && enabled,
     staleTime: MOESIF_EMBED_REFETCH_MS,
     refetchInterval: MOESIF_EMBED_REFETCH_MS,
     refetchIntervalInBackground: false,

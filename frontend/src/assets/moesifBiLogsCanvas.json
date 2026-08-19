@@ -1,0 +1,95 @@
+{
+  "dashboards": [
+    {
+      "_id": "6a96134bd5804668ebd643ca",
+      "name": "Application Logs",
+      "dashboard_ids": [],
+      "workspace_ids": [
+        [
+          "6a96136a0867306eb913c351"
+        ]
+      ],
+      "parent": null,
+      "sort_order": 1
+    }
+  ],
+  "workspaces": [
+    {
+      "_id": "6a96136a0867306eb913c351",
+      "type": "events",
+      "name": "All logs",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "terms": {
+            "event_type.raw": [
+              "log"
+            ]
+          }
+        },
+        "size": 50,
+        "_source": [
+          "id",
+          "_id",
+          "org_id",
+          "app_id",
+          "user_id",
+          "user.created",
+          "company_id",
+          "company.created",
+          "anonymous_id",
+          "identified_user_id",
+          "event_type",
+          "action_name",
+          "weight",
+          "direction",
+          "duration_ms",
+          "request.time",
+          "request.uri",
+          "request.route",
+          "request.verb",
+          "request.ip_address",
+          "request.user_agent.name",
+          "response.status",
+          "response.time",
+          "insights.anomaly",
+          "insights.event_anomaly",
+          "request.graphql.operation_name",
+          "request.graphql.definitions",
+          "jsonrpc.request.method",
+          "jsonrpc.request.params.call__method",
+          "jsonrpc.response.error",
+          "vtype_ids",
+          "blocked_by",
+          "span.id",
+          "span.status",
+          "span.parent_id",
+          "trace_id",
+          "log.severity",
+          "resource"
+        ],
+        "sort": [
+          {
+            "request.time": {
+              "order": "desc",
+              "unmapped_type": "long"
+            }
+          }
+        ]
+      },
+      "dateRange": {
+        "from": "-7d",
+        "to": "now"
+      },
+      "view": "events",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=event_type.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=log",
+      "viewerFilters": [],
+      "analyticType": "evt_log",
+      "chartType": "log",
+      "settings": {
+        "shownFields": []
+      }
+    }
+  ]
+}

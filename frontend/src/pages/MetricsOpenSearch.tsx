@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState, type JSX } from 'react';
 import { useProjectByHandler, useComponentByHandler, useComponents, useEnvironments, useProjectRuntimes } from '../api/queries';
 import { useMetrics, type MetricEntry, type MetricsRequest } from '../api/metrics';
 import { useMoesifMetricsConfig } from '../api/metricsMoesif';
+import { isMoesifEnabled } from '../config/api';
 import EmptyListing from '../components/EmptyListing';
 import NotFound from '../components/NotFound';
 import { resourceUrl, broaden, hasComponent, type ProjectScope, type ComponentScope } from '../nav';
@@ -392,9 +393,13 @@ export default function MetricsOpenSearch({ scope, backendSelector, opensearchCo
   // integration at project scope ('all' resolves to none). The toggle only
   // appears when OpenSearch is configured AND this integration's Moesif
   // dashboard is linked, so a single-backend setup shows no toggle.
+  // The backend toggle only exists when the Moesif backend is enabled globally.
+  // When it is disabled we skip the Moesif config query entirely so no Moesif
+  // request is made and no toggle is offered.
+  const moesifEnabled = isMoesifEnabled();
   const toggleTargetComponentId = isComponent ? componentId : integrationFilter !== 'all' ? integrationFilter : '';
-  const { data: moesifConfig } = useMoesifMetricsConfig(toggleTargetComponentId || undefined);
-  const showBackendToggle = !!opensearchConfigured && !!moesifConfig?.dashboardsCreated;
+  const { data: moesifConfig } = useMoesifMetricsConfig(moesifEnabled ? toggleTargetComponentId || undefined : undefined, moesifEnabled ? effectiveEnvId || undefined : undefined);
+  const showBackendToggle = moesifEnabled && !!opensearchConfigured && !!moesifConfig?.dashboardsCreated;
 
   // Fetch all runtimes for the project to build runtimeId → integration name map
   const { data: projectRuntimes = [] } = useProjectRuntimes(effectiveEnvId, projectId);

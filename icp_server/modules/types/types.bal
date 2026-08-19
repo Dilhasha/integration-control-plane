@@ -2741,14 +2741,24 @@ public type MoesifMetricsConfigStatus record {|
     boolean dashboardsCreated;
 |};
 
-// A short-lived descriptor the UI uses to embed a Moesif metrics dashboard in an
-// iframe. `workspaceId` identifies the embedded workspace, `accessToken` is the
-// minted workspace access token (valid for ~1 hour), and `embedUrl` is the
-// fully-formed iframe src (`.../ws/{workspaceId}?embed=true#{accessToken}`).
+// Reports whether an integration (project + component combo) has had its Moesif
+// application logs dashboard/canvas linked. `logsConfigured` is true once the
+// logs canvas has been configured for the integration; this single flag drives
+// the UI (setup vs. embedded logs canvas). Logs reuse the shared metrics canvas
+// org/app/token credentials.
+public type MoesifLogsConfigStatus record {|
+    boolean logsConfigured;
+|};
+
+// A descriptor the UI uses to embed a Moesif metrics canvas in an iframe.
+// `embedUrl` is the canvas iframe src (`.../wrap/app/{orgId}-{appId}/canvas#auth=post`)
+// and `token` is the auth token the UI delivers to the canvas over postMessage
+// (SET_TOKEN). The token is supplied by the user during setup and stored against
+// the integration. The canvas layout itself is posted separately as the
+// CANVAS_INIT template by the frontend.
 public type MoesifDashboardEmbed record {|
-    string workspaceId;
-    string accessToken;
     string embedUrl;
+    string token;
 |};
 
 // A Moesif application the supplied Management API key can access.

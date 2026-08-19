@@ -108,16 +108,20 @@ CREATE TABLE components (
     INDEX idx_project_id (project_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
--- Moesif metrics configuration for a component (kept separate from components to
--- isolate provider secrets and avoid sparse columns on the core table).
-CREATE TABLE component_moesif_config (
-    component_id CHAR(36) PRIMARY KEY,
+-- Per-environment Moesif configuration (kept separate from components to isolate
+-- provider secrets and avoid sparse columns on the core tables). One row per
+-- environment — the Management API key + canvas org/app ids are shared by all
+-- integrations in that environment (both metrics and logs).
+CREATE TABLE environment_moesif_config (
+    environment_id CHAR(36) NOT NULL,
     dashboards_created BOOLEAN NOT NULL DEFAULT FALSE,
-    workspace_id VARCHAR(512) NULL,
+    logs_configured BOOLEAN NOT NULL DEFAULT FALSE,
+    canvas_org_id VARCHAR(512) NULL,
+    canvas_app_id VARCHAR(512) NULL,
     management_key VARCHAR(4096) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT fk_moesif_config_component FOREIGN KEY (component_id) REFERENCES components (component_id) ON DELETE CASCADE
+    CONSTRAINT pk_moesif_config PRIMARY KEY (environment_id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 CREATE TABLE environments (
@@ -140,6 +144,11 @@ CREATE TABLE environments (
     CONSTRAINT fk_environments_created_by FOREIGN KEY (created_by) REFERENCES users (user_id) ON DELETE SET NULL,
     CONSTRAINT fk_environments_updated_by FOREIGN KEY (updated_by) REFERENCES users (user_id) ON DELETE SET NULL
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- Tie the Moesif config to its environment now that both tables exist, so a
+-- config row is removed automatically when its environment is deleted.
+ALTER TABLE environment_moesif_config
+    ADD CONSTRAINT fk_moesif_config_environment FOREIGN KEY (environment_id) REFERENCES environments (environment_id) ON DELETE CASCADE;
 
 -- ============================================================================
 -- ============================================================================
