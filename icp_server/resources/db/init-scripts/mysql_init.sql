@@ -532,6 +532,7 @@ CREATE TABLE runtimes (
     runtime_hostname VARCHAR(255) NULL,
     runtime_port VARCHAR(10) NULL,
     callback_url VARCHAR(500) NULL,
+    wf_boosted_until BIGINT,
     try_it_host VARCHAR(255) NULL,
     platform_name VARCHAR(50) NOT NULL DEFAULT 'ballerina',
     platform_version VARCHAR(50) NULL,
@@ -654,6 +655,52 @@ CREATE TABLE bi_workflow_metadata (
   updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (runtime_id),
   CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes(runtime_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ============================================================================
+-- WORKFLOW COMMAND TUNNEL (stateless, shared across ICP nodes)
+-- ============================================================================
+-- expires_at/issued_at/deadline are epoch SECONDS: every read, claim and sweep
+-- compares them, and epoch integers compare identically on all five engines while
+-- timestamp arithmetic does not (storage/database_dialect.bal shows the variance).
+-- The read cache carries two blobs on purpose: `request` is what to execute (written at
+-- creation, read by whichever heartbeat claims it) and `payload` is the result. One blob
+-- cannot be both, since the claim needs the request before any result exists.
+-- Neither table has a runtimes/users foreign key on purpose: a K8S deployment
+-- DELETEs runtime rows when they go offline, and ON DELETE CASCADE would discard the
+-- record of a mutation whose outcome nobody has established yet.
+
+CREATE TABLE wf_read_cache (
+    cache_key CHAR(64) NOT NULL,
+    scope_key VARCHAR(200) NOT NULL,
+    request     LONGTEXT NOT NULL,
+    fetch_id VARCHAR(36),
+    status VARCHAR(16) NOT NULL,
+    expires_at BIGINT NOT NULL,
+    claimed_at  BIGINT,
+    payload LONGTEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (cache_key),
+    KEY idx_wfrc_claim (status, scope_key, expires_at),
+    KEY idx_wfrc_expiry (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE wf_operation_outbox (
+    operation_id VARCHAR(100) NOT NULL,
+    runtime_id CHAR(36) NOT NULL,
+    scope_key VARCHAR(200) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    issued_at BIGINT NOT NULL,
+    deadline BIGINT NOT NULL,
+    delivered_at BIGINT,
+    completed_at BIGINT,
+    payload LONGTEXT NOT NULL,
+    result LONGTEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (operation_id),
+    KEY idx_wfoo_delivery (runtime_id, status, issued_at),
+    KEY idx_wfoo_cleanup (status, completed_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)

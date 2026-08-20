@@ -946,6 +946,7 @@ CREATE TABLE runtimes (
     runtime_hostname NVARCHAR (255) NULL,
     runtime_port NVARCHAR (10) NULL,
     callback_url NVARCHAR (500) NULL,
+    wf_boosted_until BIGINT,
     try_it_host NVARCHAR (255) NULL,
     platform_name NVARCHAR (50) NOT NULL DEFAULT 'ballerina',
     platform_version NVARCHAR (50) NULL,
@@ -1173,6 +1174,60 @@ BEGIN
     FROM bi_workflow_metadata t
     INNER JOIN inserted i ON t.runtime_id = i.runtime_id;
 END;
+GO
+
+
+-- ============================================================================
+-- WORKFLOW COMMAND TUNNEL (stateless, shared across ICP nodes)
+-- ============================================================================
+-- expires_at/issued_at/deadline are epoch SECONDS: every read, claim and sweep
+-- compares them, and epoch integers compare identically on all five engines while
+-- timestamp arithmetic does not (storage/database_dialect.bal shows the variance).
+-- The read cache carries two blobs on purpose: `request` is what to execute (written at
+-- creation, read by whichever heartbeat claims it) and `payload` is the result. One blob
+-- cannot be both, since the claim needs the request before any result exists.
+-- Neither table has a runtimes/users foreign key on purpose: a K8S deployment
+-- DELETEs runtime rows when they go offline, and ON DELETE CASCADE would discard the
+-- record of a mutation whose outcome nobody has established yet.
+
+CREATE TABLE wf_read_cache (
+    cache_key CHAR(64) NOT NULL,
+    scope_key NVARCHAR(200) NOT NULL,
+    request     NVARCHAR(MAX) NOT NULL,
+    fetch_id VARCHAR(36),
+    status VARCHAR(16) NOT NULL,
+    expires_at BIGINT NOT NULL,
+    claimed_at  BIGINT,
+    payload NVARCHAR(MAX),
+    created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (cache_key)
+);
+GO
+
+CREATE INDEX idx_wfrc_claim ON wf_read_cache (status, scope_key, expires_at);
+GO
+CREATE INDEX idx_wfrc_expiry ON wf_read_cache (expires_at);
+GO
+
+CREATE TABLE wf_operation_outbox (
+    operation_id VARCHAR(100) NOT NULL,
+    runtime_id CHAR(36) NOT NULL,
+    scope_key NVARCHAR(200) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    issued_at BIGINT NOT NULL,
+    deadline BIGINT NOT NULL,
+    delivered_at BIGINT,
+    completed_at BIGINT,
+    payload NVARCHAR(MAX) NOT NULL,
+    result NVARCHAR(MAX),
+    created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (operation_id)
+);
+GO
+
+CREATE INDEX idx_wfoo_delivery ON wf_operation_outbox (runtime_id, status, issued_at);
+GO
+CREATE INDEX idx_wfoo_cleanup ON wf_operation_outbox (status, completed_at);
 GO
 
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)

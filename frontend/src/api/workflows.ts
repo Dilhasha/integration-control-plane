@@ -125,37 +125,75 @@ export interface ExecutionGraph {
 
 // ── Low-level request helper (mirrors logs.ts: timeout + error extraction) ──
 
-async function wfRequest<T>(componentId: string, environmentId: string, subpath: string, init: RequestInit = {}): Promise<T> {
+// The workflow API is asynchronous end to end: the ICP holds no request open. A read may
+// answer 202 {status: "FETCHING"} while a runtime materializes it (the ICP coalesces
+// identical requests, so polling is cheap); a mutation always answers 202 {operationId} and
+// its outcome — including "someone else got there first" — arrives on the operation poll.
+// This helper absorbs that contract so every hook keeps its synchronous shape.
+const WF_ASYNC_DEADLINE_MS = 75_000;
+const WF_POLL_FALLBACK_MS = 750;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function wfFetchOnce(url: string, init: RequestInit): Promise<{ status: number; body: unknown }> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000);
   try {
-    const res = await authenticatedFetch(workflowApiUrl(componentId, environmentId, subpath), {
-      ...init,
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    if (!res.ok) {
-      const text = await res.text();
-      let message = text;
-      try {
-        const json = JSON.parse(text);
-        message = json?.error?.message || json?.message || text;
-      } catch {
-        // keep raw text
-      }
-      const error = new Error(message || `Request failed (${res.status})`);
-      (error as Error & { status?: number }).status = res.status;
-      throw error;
-    }
-    // Some endpoints (204) have no body.
+    const res = await authenticatedFetch(url, { ...init, signal: controller.signal });
     const text = await res.text();
-    return (text ? JSON.parse(text) : {}) as T;
+    let body: unknown = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = { message: text };
+      }
+    }
+    return { status: res.status, body };
   } catch (error) {
-    clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('Workflow service is unavailable. Request timed out.');
     }
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function wfRequest<T>(componentId: string, environmentId: string, subpath: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  let request = init;
+  if (method !== 'GET') {
+    // The key makes a browser-level retry or a double submit collapse onto one operation
+    // server-side, instead of acting twice.
+    request = { ...init, headers: { ...(init.headers ?? {}), 'x-idempotency-key': crypto.randomUUID() } };
+  }
+  const deadline = Date.now() + WF_ASYNC_DEADLINE_MS;
+  let url = workflowApiUrl(componentId, environmentId, subpath);
+  for (;;) {
+    const { status, body } = await wfFetchOnce(url, request);
+    if (status === 202) {
+      const accepted = (body ?? {}) as { operationId?: string; retryAfterMs?: number };
+      if (accepted.operationId) {
+        // A queued mutation: from here on, poll its outcome. Never re-send the POST — the
+        // operation row is the request now.
+        url = workflowApiUrl(componentId, environmentId, `operations/${encodeURIComponent(accepted.operationId)}`);
+        request = {};
+      }
+      if (Date.now() > deadline) {
+        throw new Error('The workflow service is still preparing this data. Try again shortly.');
+      }
+      await sleep(accepted.retryAfterMs ?? WF_POLL_FALLBACK_MS);
+      continue;
+    }
+    if (status < 200 || status >= 300) {
+      const b = body as { error?: { message?: string }; message?: string } | undefined;
+      const message = b?.error?.message || b?.message || `Request failed (${status})`;
+      const error = new Error(message);
+      (error as Error & { status?: number }).status = status;
+      throw error;
+    }
+    return body as T;
   }
 }
 

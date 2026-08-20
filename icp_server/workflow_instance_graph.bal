@@ -69,36 +69,36 @@ final string[] & readonly NON_STEP_ACTIVITIES = ["workflow:getInfo", "workflow:p
 // + componentId - the component whose metadata holds the model
 // + environmentId - its environment
 // + workflowId - the instance to describe
-// + tunnelTarget - the runtime serving this environment's workflow commands
-// + userId - the calling console user, for the tunnel's identity
-// + roles - their roles, for the runtime's own gating
-// + return - the composed instance graph, or the runtime's own failure relayed unchanged
-isolated function handleInstanceGraphRequest(string componentId, string environmentId, string workflowId,
-        string tunnelTarget, string userId, string[] roles) returns http:Response {
+// + roles - their roles, which gate the runtime's own answer and key the cached one
+// + return - the composed instance graph, `202` while either half is still being fetched, or
+//            the runtime's own failure relayed unchanged
+isolated function handleInstanceGraphRequest(string componentId, string environmentId,
+        string workflowId, string[] roles, boolean forceRefresh = false) returns http:Response {
 
-    // The instance says which workflow type it is; the tree says what ran. Two tunneled calls
-    // because neither answer carries the other — the runtime could return the type with the tree
-    // and save a round trip, which is a module-side improvement rather than a correctness issue.
-    http:Response infoResponse = executeTunneledWorkflowCommand(tunnelTarget, "instances.get",
-            {workflowId: workflowId}, userId, roles);
-    if infoResponse.statusCode != 200 {
-        return infoResponse;
-    }
-    map<json>? info = jsonObjectOf(infoResponse);
-    if info is () {
-        return workflowErrorResponse(502, "The workflow runtime returned an unreadable instance");
+    // The instance says which workflow type it is; the tree says what ran. Neither answer
+    // carries the other, so this composes two reads — and because each is cached in its own
+    // right, the composition is stateless: every poll either finds both halves ready and
+    // composes them, or reports that they are still being fetched. Nothing is remembered
+    // between polls, so any ICP node can answer any of them.
+    WorkflowReadOutcome|error infoOutcome = ensureWorkflowRead(componentId, environmentId,
+            "instances.get", {workflowId: workflowId}, roles, forceRefresh);
+    http:Response|map<json> info = instanceGraphHalf(infoOutcome, "instance");
+    if info is http:Response {
+        return info;
     }
     string workflowType = stringField(info, "workflowType") ?: "";
     if workflowType == "" {
         return workflowErrorResponse(502, "The workflow runtime did not report the instance's type");
     }
 
-    http:Response treeResponse = executeTunneledWorkflowCommand(tunnelTarget, "instances.activityTree",
-            {workflowId: workflowId}, userId, roles);
-    if treeResponse.statusCode != 200 {
-        return treeResponse;
+    WorkflowReadOutcome|error treeOutcome = ensureWorkflowRead(componentId, environmentId,
+            "instances.activityTree", {workflowId: workflowId}, roles, forceRefresh);
+    http:Response|map<json> treeBody = instanceGraphHalf(treeOutcome, "activity tree");
+    if treeBody is http:Response {
+        return treeBody;
     }
-    map<json>? tree = jsonObjectOf(treeResponse);
+    map<json>? tree = treeBody;
+
     json[] executedNodes = tree is map<json> && tree["nodes"] is json[] ? <json[]>tree["nodes"] : [];
 
     [json, string]?|error model = workflowGraphFromStoredMetadata(componentId, environmentId, workflowType);
@@ -115,6 +115,43 @@ isolated function handleInstanceGraphRequest(string componentId, string environm
     }
     return instanceGraphResponse(workflowType, info, model[0], model[1], executedNodes,
             graphNodesOf(model[0]));
+}
+
+
+// One half of the composed graph: the body when it is ready, or the response to return
+// instead — `202` while it is still being fetched, the runtime's own error when it failed.
+// A stale half is used as it is: the whole point of serving stale data is that a view keeps
+// working while it refreshes, and the composition inherits that.
+isolated function instanceGraphHalf(WorkflowReadOutcome|error outcome, string what)
+        returns http:Response|map<json> {
+    if outcome is error {
+        log:printError("Failed to read a workflow instance graph half", 'error = outcome,
+                half = what);
+        return workflowErrorResponse(500, "Failed to read the " + what);
+    }
+    match outcome.state {
+        "NO_RUNTIME" => {
+            return workflowErrorResponse(503,
+                    "No running workflow runtime can serve this environment's workflow requests");
+        }
+        "PENDING" => {
+            http:Response accepted = new;
+            accepted.statusCode = 202;
+            accepted.setJsonPayload({status: "FETCHING", retryAfterMs: 750});
+            return accepted;
+        }
+    }
+    json body = outcome.body;
+    if body !is map<json> {
+        return workflowErrorResponse(502, "The workflow runtime returned an unreadable " + what);
+    }
+    if outcome.state == "FAILED" {
+        http:Response failed = new;
+        failed.statusCode = outcome.httpStatus;
+        failed.setJsonPayload(body);
+        return failed;
+    }
+    return body;
 }
 
 // Builds the response: the model as published, plus one entry per step that ran.

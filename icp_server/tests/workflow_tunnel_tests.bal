@@ -1,505 +1,313 @@
-// Copyright (c) 2026, WSO2 LLC. (http://www.wso2.com).
+// Copyright (c) 2026, WSO2 LLC. (http://www.wso2.com) All Rights Reserved.
 //
 // WSO2 LLC. licenses this file to you under the Apache License,
 // Version 2.0 (the "License"); you may not use this file except
 // in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+//  http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing,
 // software distributed under the License is distributed on an
 // "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied. See the License for the
+// KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
 
 import icp_server.storage;
 import icp_server.types;
 
-import ballerina/http;
-import ballerina/jwt;
-import ballerina/io;
-import ballerina/lang.runtime as langRuntime;
 import ballerina/test;
-import ballerina/time;
 
-// Workflow command tunnel tests: the request→operation mapping, the queue/waiter
-// correlation, boost tracking, and one full end-to-end round trip over real HTTP —
-// frontend request → command in a heartbeat response → simulated bridge posts the
-// result → frontend response carries the runtime's byte-identical body.
+// The stateless tunnel, tested against the database it actually uses. These replace the
+// unit tests of the in-memory queue that this design removed: the behaviour that matters
+// now is what two ICP nodes see in shared tables, and that cannot be tested in memory.
 //
-// Uses Component 1 / Prod so the proxy tests (Component 1 / Dev, callback-URL path)
-// and the metadata tests (Component 2 / Prod) stay undisturbed.
+// The seeded sample-integration runtime supplies a real scope, since delivery resolves a
+// runtime's component and environment from the runtimes table.
 
-const string WF_TUNNEL_RUNTIME_ID = "aa000002-test-test-test-000000000005";
+const string WF_TUNNEL_RUNTIME_ID = "880e8400-e29b-41d4-a716-446655440001";
+const string WF_TUNNEL_COMPONENT_ID = "640e8400-e29b-41d4-a716-446655440001";
+const string WF_TUNNEL_ENVIRONMENT_ID = "750e8400-e29b-41d4-a716-446655440001";
+final string WF_TUNNEL_SCOPE = WF_TUNNEL_COMPONENT_ID + ":" + WF_TUNNEL_ENVIRONMENT_ID;
 
-// ── Request → operation mapping ────────────────────────────────────────────────
+isolated function tunnelRequest(string operation) returns string =>
+    {operation: operation, params: {}, identity: {userId: "alice", roles: ["APPROVER"]}}
+        .toJsonString();
 
-@test:Config {groups: ["workflow-tunnel"]}
-function testTunnelOperationMapping() {
-    // Reads
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["definitions"], {}, {}),
-        <[string, map<json>]>["definitions.list", {}]);
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["workflows"], {status: "RUNNING", 'limit: 20}, {}),
-        <[string, map<json>]>["instances.list", {status: "RUNNING", 'limit: 20}]);
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["workflows", "wf-1"], {}, {}),
-        <[string, map<json>]>["instances.get", {workflowId: "wf-1"}]);
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["workflows", "wf-1", "history"], {}, {}),
-        <[string, map<json>]>["instances.history", {workflowId: "wf-1"}]);
-    // A third segment that is not a known subresource is an exact run ID.
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["workflows", "wf-1", "run-9"], {}, {}),
-        <[string, map<json>]>["instances.get", {workflowId: "wf-1", runId: "run-9"}]);
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["workflows", "wf-1", "run-9", "execution-graph"], {}, {}),
-        <[string, map<json>]>["instances.executionGraph", {workflowId: "wf-1", runId: "run-9"}]);
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["human-tasks", "pending-count"], {}, {}),
-        <[string, map<json>]>["humanTasks.pendingCount", {}]);
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["human-tasks", "task-1"], {}, {}),
-        <[string, map<json>]>["humanTasks.get", {taskId: "task-1"}]);
+// ── Coalescing ───────────────────────────────────────────────────────────────
 
-    // Mutations
-    [string, map<json>]? startOp = mapWorkflowRequestToOperation("POST", ["workflows"], {},
-        {workflowType: "expenseApproval", input: {amount: 5}});
-    if startOp is () {
-        test:assertFail("POST workflows must map to instances.start");
-    }
-    test:assertEquals(startOp[0], "instances.start");
-    test:assertTrue(startOp[1]["workflowId"] is string,
-        "The ICP must fill workflowId so a retried start is idempotent");
-    test:assertEquals(mapWorkflowRequestToOperation("POST", ["workflows", "wf-1", "terminate"], {}, {reason: "ops"}),
-        <[string, map<json>]>["instances.terminate", {workflowId: "wf-1", reason: "ops"}]);
-    test:assertEquals(mapWorkflowRequestToOperation("POST", ["human-tasks", "task-1", "complete"], {},
-        {result: {approved: true}}),
-        <[string, map<json>]>["humanTasks.complete", {taskId: "task-1", result: {approved: true}}]);
-    test:assertEquals(mapWorkflowRequestToOperation("POST",
-        ["review-activities", "task-2", "proceed-with-input"], {}, {input: {amount: 9}}),
-        <[string, map<json>]>["reviewActivities.decide",
-            {taskId: "task-2", action: "proceed-with-input", input: {amount: 9}}]);
+@test:Config {groups: ["workflow_tunnel"]}
+function testConcurrentReadsCoalesceOntoOneFetch() returns error? {
+    string cacheKey = "coalesce-" + storage:wfNowEpoch().toString();
+    int expiresAt = storage:wfNowEpoch() + 60;
 
-    // Outside the vocabulary → (): the caller answers 404. The legacy callback-URL
-    // proxy these paths used to fall back to is gone.
-    test:assertEquals(mapWorkflowRequestToOperation("GET", ["retry-tasks"], {}, {}), ());
-    test:assertEquals(mapWorkflowRequestToOperation("POST", ["workflows", "wf-1", "wake"], {}, {}), ());
-}
+    boolean first = check storage:startWorkflowCacheFetch(cacheKey, WF_TUNNEL_SCOPE,
+            tunnelRequest("humanTasks.list"), "fetch-1", expiresAt);
+    test:assertTrue(first, "The first request must own the fetch");
 
-// ── Queue / waiter / boost ─────────────────────────────────────────────────────
+    // A second request for the same key - from this node or any other - must not issue a
+    // second command. The primary key is what makes that true, with no lock and no
+    // read-then-write window.
+    boolean second = check storage:startWorkflowCacheFetch(cacheKey, WF_TUNNEL_SCOPE,
+            tunnelRequest("humanTasks.list"), "fetch-2", expiresAt);
+    test:assertFalse(second, "A concurrent identical request must attach to the running fetch");
 
-@test:Config {groups: ["workflow-tunnel"]}
-function testTunnelQueueAndWaiter() returns error? {
-    types:ControlCommand command = {
-        commandId: "wfc-unit-1",
-        runtimeId: "unit-runtime",
-        targetArtifact: {name: "workflow"},
-        action: types:WORKFLOW_MGMT,
-        issuedAt: time:utcNow(),
-        status: types:PENDING,
-        payload: "{}"
-    };
-    enqueueWorkflowCommand("unit-runtime", command);
-
-    // Delivery drains the queue exactly once.
-    types:ControlCommand[] delivered = takeWorkflowDelivery("unit-runtime")[0];
-    test:assertEquals(delivered.length(), 1);
-    test:assertEquals(delivered[0].commandId, "wfc-unit-1");
-    test:assertEquals(takeWorkflowDelivery("unit-runtime")[0].length(), 0);
-
-    // A result for a waited command is accepted and unblocks the waiter.
-    test:assertTrue(completeWorkflowCommand({
-        runtimeId: "unit-runtime", commandId: "wfc-unit-1",
-        status: "COMPLETED", httpStatus: 200, body: {ok: true}
-    }));
-    types:WorkflowCommandResult? result = awaitWorkflowCommandResult("wfc-unit-1", "unit-runtime", 1);
-    if result is () {
-        test:assertFail("The waiter must receive the completed result");
-    }
-    test:assertEquals(result.httpStatus, 200);
-
-    // A result for an unknown (or already collected) commandId is dropped.
-    test:assertFalse(completeWorkflowCommand({
-        runtimeId: "unit-runtime", commandId: "wfc-unit-1",
-        status: "COMPLETED", httpStatus: 200, body: {}
-    }));
-}
-
-@test:Config {groups: ["workflow-tunnel"]}
-function testResultFromAnotherRuntimeIsRefused() {
-    // Every runtime agent in the organization authenticates the same way, so a commandId
-    // alone must not be enough to answer a command queued for a different runtime: that
-    // answer is relayed to the console as the operation's own result.
-    types:ControlCommand command = {
-        commandId: "wfc-unit-crossruntime",
-        runtimeId: "unit-runtime-owner",
-        targetArtifact: {name: "workflow"},
-        action: types:WORKFLOW_MGMT,
-        issuedAt: time:utcNow(),
-        status: types:PENDING,
-        payload: "{}"
-    };
-    enqueueWorkflowCommand("unit-runtime-owner", command);
-
-    test:assertFalse(completeWorkflowCommand({
-        runtimeId: "unit-runtime-intruder", commandId: "wfc-unit-crossruntime",
-        status: "COMPLETED", httpStatus: 200, body: {hijacked: true}
-    }), "A result from a runtime the command was not issued to must be refused");
-
-    test:assertTrue(completeWorkflowCommand({
-        runtimeId: "unit-runtime-owner", commandId: "wfc-unit-crossruntime",
-        status: "COMPLETED", httpStatus: 200, body: {ok: true}
-    }), "The runtime the command was issued to must still be able to answer it");
-
-    types:WorkflowCommandResult? result = awaitWorkflowCommandResult(
-            "wfc-unit-crossruntime", "unit-runtime-owner", 1);
-    if result is () {
-        test:assertFail("The owning runtime's result must reach the waiter");
-    }
-    test:assertEquals(result.body, {ok: true}, "The refused result must not have been stored");
-    _ = takeWorkflowDelivery("unit-runtime-owner");
-}
-
-@test:Config {groups: ["workflow-tunnel"]}
-function testTunnelWaiterTimeoutCleansQueue() {
-    types:ControlCommand command = {
-        commandId: "wfc-unit-timeout",
-        runtimeId: "unit-runtime-2",
-        targetArtifact: {name: "workflow"},
-        action: types:WORKFLOW_MGMT,
-        issuedAt: time:utcNow(),
-        status: types:PENDING,
-        payload: "{}"
-    };
-    enqueueWorkflowCommand("unit-runtime-2", command);
-
-    types:WorkflowCommandResult? result = awaitWorkflowCommandResult("wfc-unit-timeout", "unit-runtime-2", 0.3);
-    test:assertTrue(result is (), "An unanswered command must time out");
-    test:assertEquals(takeWorkflowDelivery("unit-runtime-2")[0].length(), 0,
-        "A timed-out command must be removed from its runtime's queue");
-    test:assertFalse(completeWorkflowCommand({
-        runtimeId: "unit-runtime-2", commandId: "wfc-unit-timeout",
-        status: "COMPLETED", httpStatus: 200, body: {}
-    }), "A result arriving after the timeout must be dropped");
-}
-
-@test:Config {groups: ["workflow-tunnel"]}
-function testTunnelBoostWindow() {
-    test:assertTrue(takeWorkflowDelivery("unit-runtime-3")[1] is (), "Unboosted runtimes get no hint");
-    boostWorkflowRuntime("unit-runtime-3");
-    test:assertEquals(takeWorkflowDelivery("unit-runtime-3")[1], 1);
-}
-
-// The cadence must decay as the runtime goes idle: a runtime that served one workflow
-// request must not be asked for a heartbeat every second from then on. Idle time is set
-// directly rather than waited out, so the whole ramp is checked without sleeping.
-@test:Config {groups: ["workflow-tunnel"]}
-function testTunnelBoostRampDecaysToTheRuntimeInterval() {
-    string runtimeId = "unit-runtime-ramp";
-    [int, int?][] expected = [
-        [0, 1],     // just requested — fastest cadence
-        [4, 1],     // still inside the first step
-        [5, 2],     // first step over
-        [9, 2],
-        [10, 5],
-        [19, 5],
-        [20, 10],
-        [29, 10],
-        [30, ()],   // ramp exhausted — back to the runtime's own interval
-        [120, ()]   // and it stays there
-    ];
-    foreach [int, int?] [idleSeconds, cadence] in expected {
-        lock {
-            workflowTunnel.boostedAt[runtimeId] = nowUnixSeconds() - idleSeconds;
-        }
-        test:assertEquals(takeWorkflowDelivery(runtimeId)[1], cadence,
-                string `A runtime idle for ${idleSeconds}s must be asked for cadence ${cadence.toString()}`);
-    }
-
-    // A new request restarts the ramp, so an active user keeps the fastest cadence.
-    boostWorkflowRuntime(runtimeId);
-    test:assertEquals(takeWorkflowDelivery(runtimeId)[1], 1, "A workflow request must restart the ramp");
-}
-
-@test:Config {groups: ["workflow-tunnel"]}
-function testBoostSweepDropsRuntimesThatNeverHeartbeatAgain() {
-    // A boosted runtime that goes offline never reaches the ramp-exhausted removal in
-    // takeWorkflowDelivery (that runs on its own heartbeats), so the next boost of any
-    // runtime sweeps entries whose ramp has run out — otherwise they would accumulate
-    // for the life of the process, one per churned runtime.
-    lock {
-        workflowTunnel.boostedAt["unit-runtime-gone"] = nowUnixSeconds() - 3600;
-    }
-    boostWorkflowRuntime("unit-runtime-sweeper");
-    lock {
-        test:assertFalse(workflowTunnel.boostedAt.hasKey("unit-runtime-gone"),
-            "A stale boost entry must be swept when another runtime is boosted");
-        _ = workflowTunnel.boostedAt.removeIfHasKey("unit-runtime-sweeper");
+    types:WorkflowCacheRow? row = check storage:getWorkflowCacheRow(cacheKey);
+    test:assertTrue(row is types:WorkflowCacheRow, "The row must exist");
+    if row is types:WorkflowCacheRow {
+        test:assertEquals(row.fetchId, "fetch-1", "The first attempt must still own the fetch");
+        test:assertEquals(row.status, types:WF_CACHE_FETCHING);
     }
 }
 
-// ── End-to-end round trip over real HTTP ──────────────────────────────────────
+// ── Fencing ──────────────────────────────────────────────────────────────────
 
-final http:Client wfRuntimeIcpClient = check new ("https://localhost:9445/icp",
-    secureSocket = {
-        cert: {
-            path: truststorePath,
-            password: truststorePassword
-        }
-    }
-);
+@test:Config {groups: ["workflow_tunnel"]}
+function testResultFromASupersededAttemptIsDiscarded() returns error? {
+    string cacheKey = "fence-" + storage:wfNowEpoch().toString();
+    int now = storage:wfNowEpoch();
+    _ = check storage:startWorkflowCacheFetch(cacheKey, WF_TUNNEL_SCOPE,
+            tunnelRequest("instances.list"), "attempt-old", now + 60);
 
-// Mints a runtime JWT the way the ICP bridge does: HS256 over the org-secret key
-// material, keyId in the header, runtime_agent scope.
-function issueRuntimeToken(string keyId, string keyMaterial) returns string|error {
-    jwt:IssuerConfig issuerConfig = {
-        issuer: jwtIssuer,
-        audience: jwtAudience,
-        expTime: 600,
-        keyId: keyId,
-        customClaims: {"scope": "runtime_agent"},
-        signatureConfig: {algorithm: jwt:HS256, config: keyMaterial}
-    };
-    return jwt:issue(issuerConfig);
-}
+    // The attempt that is current wins.
+    boolean stored = check storage:completeWorkflowCacheFetch(cacheKey, "attempt-old",
+            "{\"body\":\"first\"}", now + 60);
+    test:assertTrue(stored, "The current attempt's result must be stored");
 
-// alwaysRun: a failure here would otherwise leave WF_TUNNEL_RUNTIME_ID registered, and it
-// advertises workflowCommands for Component 1 / Prod — changing which runtime later tests
-// see selected. The org secrets the tunnel tests create are revoked here for the same
-// reason: every run would otherwise leave more active secret rows behind.
-@test:AfterGroups {value: ["workflow-tunnel"], alwaysRun: true}
-function cleanupWorkflowTunnelTests() {
-    cleanupRuntime(WF_TUNNEL_RUNTIME_ID);
-    string issuedKeyId;
-    lock {
-        issuedKeyId = tunnelTestKeyId;
-    }
-    revokeTestOrgSecret(issuedKeyId);
-    string foreignKeyId;
-    lock {
-        foreignKeyId = tunnelForeignKeyId;
-    }
-    revokeTestOrgSecret(foreignKeyId);
-}
+    // A late answer from an attempt the row no longer holds describes a world that has
+    // moved on. Storing it is how a completed task reappears and sticks for a whole TTL.
+    boolean late = check storage:completeWorkflowCacheFetch(cacheKey, "attempt-old",
+            "{\"body\":\"stale\"}", now + 60);
+    test:assertFalse(late, "A result whose attempt is no longer current must be discarded");
 
-function revokeTestOrgSecret(string keyId) {
-    if keyId == "" {
-        return;
-    }
-    error? revoked = storage:revokeOrgSecret(keyId);
-    if revoked is error {
-        io:println("Failed to revoke a workflow-tunnel test org secret: ", revoked.message());
+    types:WorkflowCacheRow? row = check storage:getWorkflowCacheRow(cacheKey);
+    if row is types:WorkflowCacheRow {
+        test:assertEquals(row.payload, "{\"body\":\"first\"}",
+            "The stored payload must not be overwritten by a superseded attempt");
+        test:assertEquals(row.fetchId, (), "A completed fetch must leave no attempt in flight");
     }
 }
 
-// The keys the tunnel tests issue, so the teardown can revoke them even if a test fails
-// partway through. The key material is kept so the foreign-key test can authenticate the
-// way the end-to-end test's simulated bridge does.
-isolated string tunnelTestKeyId = "";
-isolated string tunnelTestKeyMaterial = "";
-isolated string tunnelForeignKeyId = "";
+@test:Config {groups: ["workflow_tunnel"]}
+function testFailedRefreshKeepsTheLastGoodPayload() returns error? {
+    string cacheKey = "failkeep-" + storage:wfNowEpoch().toString();
+    int now = storage:wfNowEpoch();
+    _ = check storage:startWorkflowCacheFetch(cacheKey, WF_TUNNEL_SCOPE,
+            tunnelRequest("instances.list"), "attempt-1", now + 60);
+    _ = check storage:completeWorkflowCacheFetch(cacheKey, "attempt-1", "{\"body\":\"good\"}",
+            now + 60);
 
-// Full tunnel round trip: a frontend request for a tunnel-capable runtime is answered
-// by a simulated bridge that receives the WORKFLOW_MGMT command in a (boosted)
-// heartbeat response and posts its result to /icp/commandResult.
-@test:Config {groups: ["workflow-tunnel"]}
-function testWorkflowTunnelEndToEnd() returns error? {
-    cleanupRuntime(WF_TUNNEL_RUNTIME_ID);
+    boolean claimed = check storage:claimWorkflowCacheRefresh(cacheKey, "attempt-2",
+            tunnelRequest("instances.list"), now + 60);
+    test:assertTrue(claimed, "A row with nothing in flight must be claimable for refresh");
 
-    // A RUNNING runtime on Component 1 / Prod that published metadata and the
-    // workflowCommands capability (making it the tunnel target for that scope).
-    types:Heartbeat heartbeat = buildWorkflowHeartbeat(WF_TUNNEL_RUNTIME_ID, "wf-tunnel-test-runtime",
-            COMPONENT_1_ID, WF_PROD_ENV_ID);
-    heartbeat.workflowMetadata = WF_META_DOCUMENT.clone();
-    heartbeat.capabilities = ["workflowCommands"];
-    types:HeartbeatResponse registered = check storage:processHeartbeat(heartbeat, preResolved = true);
-    test:assertTrue(registered.acknowledged);
-
-    // Bind an org secret so the simulated bridge can authenticate like a real one.
-    string orgSecret = check storage:createOrgSecret(WF_PROD_ENV_ID, WF_ADMIN_USER_ID);
-    int? dotIdx = orgSecret.indexOf(".");
-    if dotIdx is () {
-        return error("createOrgSecret returned an unexpected secret format");
+    _ = check storage:failWorkflowCacheFetch(cacheKey, "attempt-2", "{\"error\":\"boom\"}",
+            now + 15);
+    types:WorkflowCacheRow? row = check storage:getWorkflowCacheRow(cacheKey);
+    if row is types:WorkflowCacheRow {
+        test:assertEquals(row.payload, "{\"body\":\"good\"}",
+            "A failed refresh must keep serving the last good answer");
+        test:assertEquals(row.status, types:WF_CACHE_READY);
     }
-    string keyId = orgSecret.substring(0, dotIdx);
-    string keyMaterial = orgSecret.substring(dotIdx + 1);
-    lock {
-        tunnelTestKeyId = keyId;
-    }
-    lock {
-        tunnelTestKeyMaterial = keyMaterial;
-    }
-    check storage:updateRuntimeKeyId(WF_TUNNEL_RUNTIME_ID, keyId);
-    // Bind the secret the way a real first full heartbeat would — the delta-heartbeat
-    // handler short-circuits (fullHeartbeatRequired) for unbound keys, before any
-    // command delivery.
-    check storage:bindOrgSecret(keyId, PROJECT_1_ID, COMPONENT_1_ID,
-            "wf-tunnel-project", "wf-tunnel-component", "BI");
-    string runtimeToken = check issueRuntimeToken(keyId, keyMaterial);
-    string adminToken = check generateV2Token(WF_ADMIN_USER_ID, "admin", []);
+}
 
-    // Fire the frontend request; it blocks server-side until the bridge answers.
-    future<http:Response|error> pendingRequest = start wfProxyGet(
-            string `/${COMPONENT_1_ID}/${WF_PROD_ENV_ID}/human-tasks/pending-count`, adminToken);
+@test:Config {groups: ["workflow_tunnel"]}
+function testOnlyOneRefreshRunsAtATime() returns error? {
+    string cacheKey = "onerefresh-" + storage:wfNowEpoch().toString();
+    int now = storage:wfNowEpoch();
+    _ = check storage:startWorkflowCacheFetch(cacheKey, WF_TUNNEL_SCOPE,
+            tunnelRequest("workItems.list"), "attempt-1", now + 60);
+    _ = check storage:completeWorkflowCacheFetch(cacheKey, "attempt-1", "{\"body\":\"x\"}", now);
 
-    // Simulated bridge: poll delta heartbeats until the command arrives, then post
-    // the result the runtime's management API would have produced.
-    types:DeltaHeartbeat deltaHeartbeat = {
+    test:assertTrue(check storage:claimWorkflowCacheRefresh(cacheKey, "refresh-1",
+            tunnelRequest("workItems.list"), now + 60));
+    test:assertFalse(check storage:claimWorkflowCacheRefresh(cacheKey, "refresh-2",
+            tunnelRequest("workItems.list"), now + 60),
+        "A second reader must not start a competing refresh");
+}
+
+// ── Invalidation ─────────────────────────────────────────────────────────────
+
+@test:Config {groups: ["workflow_tunnel"]}
+function testMutationStalesLiveEntriesAndSparesTerminalOnes() returns error? {
+    int now = storage:wfNowEpoch();
+    string liveKey = "live-" + now.toString();
+    string terminalKey = "terminal-" + now.toString();
+
+    _ = check storage:startWorkflowCacheFetch(liveKey, WF_TUNNEL_SCOPE,
+            tunnelRequest("humanTasks.list"), "live-attempt", now + 60);
+    _ = check storage:completeWorkflowCacheFetch(liveKey, "live-attempt", "{\"body\":1}", now + 60);
+
+    // A closed instance's views cannot be falsified by anything, so they carry a long TTL
+    // and must survive invalidation - that is what keeps finished work readable while the
+    // runtime is down.
+    _ = check storage:startWorkflowCacheFetch(terminalKey, WF_TUNNEL_SCOPE,
+            tunnelRequest("instances.get"), "terminal-attempt", now + 60);
+    _ = check storage:completeWorkflowCacheFetch(terminalKey, "terminal-attempt",
+            "{\"body\":2}", now + 86400);
+
+    int marked = check storage:staleWorkflowCacheScope(WF_TUNNEL_SCOPE, 3600);
+    test:assertTrue(marked >= 1, "The live entry must be marked stale");
+
+    types:WorkflowCacheRow? live = check storage:getWorkflowCacheRow(liveKey);
+    types:WorkflowCacheRow? terminal = check storage:getWorkflowCacheRow(terminalKey);
+    if live is types:WorkflowCacheRow {
+        test:assertTrue(live.expiresAt <= now + 1, "The live entry must now be stale");
+        test:assertEquals(live.payload, "{\"body\":1}",
+            "Invalidation must mark, not delete: a stale entry is still served while it refreshes");
+    }
+    if terminal is types:WorkflowCacheRow {
+        test:assertTrue(terminal.expiresAt > now + 3600,
+            "A terminal entry must not be invalidated by a mutation");
+    }
+}
+
+// ── Delivery bounds ──────────────────────────────────────────────────────────
+
+@test:Config {groups: ["workflow_tunnel"]}
+function testReadClaimIsBoundedAndNotReofferedImmediately() returns error? {
+    int now = storage:wfNowEpoch();
+    string scope = "claimscope-" + now.toString();
+    foreach int i in 0 ..< 5 {
+        _ = check storage:startWorkflowCacheFetch(string `claim-${now}-${i}`, scope,
+                tunnelRequest("humanTasks.list"), string `attempt-${i}`, now + 60);
+    }
+
+    types:WorkflowPendingRead[] firstBatch = check storage:claimWorkflowCacheReads(scope, 2);
+    test:assertEquals(firstBatch.length(), 2,
+        "A heartbeat must never carry more than the cap, whatever the backlog");
+
+    // Already-claimed reads are not offered again on the next heartbeat a second later;
+    // without that a boosted runtime would be sent the same in-flight read every second.
+    types:WorkflowPendingRead[] secondBatch = check storage:claimWorkflowCacheReads(scope, 5);
+    test:assertEquals(secondBatch.length(), 3,
+        "Only unclaimed reads may be delivered again this soon");
+}
+
+// ── Mutations ────────────────────────────────────────────────────────────────
+
+@test:Config {groups: ["workflow_tunnel"]}
+function testIdempotencyKeyPreventsADuplicateOperation() returns error? {
+    int now = storage:wfNowEpoch();
+    types:WorkflowOutboxRow operation = {
+        operationId: "wfo-idem-" + now.toString(),
         runtimeId: WF_TUNNEL_RUNTIME_ID,
-        runtimeHash: "wf-test-hash-" + WF_TUNNEL_RUNTIME_ID,
-        timestamp: time:utcNow()
+        scopeKey: WF_TUNNEL_SCOPE,
+        status: types:WF_OP_PENDING,
+        issuedAt: now,
+        deadline: now + 1800,
+        payload: tunnelRequest("humanTasks.complete")
     };
-    map<string> runtimeAuth = {"Authorization": "Bearer " + runtimeToken};
-    boolean answered = false;
-    boolean sawBoostHint = false;
-    foreach int attempt in 0 ..< 60 {
-        json deltaResponse = check wfRuntimeIcpClient->post("/deltaHeartbeat", deltaHeartbeat, runtimeAuth);
-        json|error hint = deltaResponse.nextHeartbeatInSeconds;
-        if hint is int && hint == 1 {
-            sawBoostHint = true;
-        }
-        json|error commandsJson = deltaResponse.commands;
-        if commandsJson is json[] {
-            foreach json commandJson in commandsJson {
-                json|error action = commandJson.action;
-                if action is string && action == "WORKFLOW_MGMT" {
-                    json|error payloadText = commandJson.payload;
-                    if payloadText !is string {
-                        return error("WORKFLOW_MGMT command without a payload");
-                    }
-                    json payload = check payloadText.fromJsonString();
-                    test:assertEquals(check payload.operation, "humanTasks.pendingCount");
-                    test:assertEquals(check payload.identity.userId, WF_ADMIN_USER_ID);
-                    string commandId = check payload.commandId;
-                    http:Response accepted = check wfRuntimeIcpClient->post("/commandResult", {
-                        runtimeId: WF_TUNNEL_RUNTIME_ID,
-                        commandId: commandId,
-                        status: "COMPLETED",
-                        httpStatus: 200,
-                        body: {count: 7}
-                    }, runtimeAuth);
-                    test:assertEquals(accepted.statusCode, 202);
-                    answered = true;
-                }
-            }
-        }
-        if answered {
-            break;
-        }
-        langRuntime:sleep(0.2);
-    }
-    if !answered {
-        // Surface what the frontend request actually got — the command never reaching
-        // the bridge usually means the request took another path (403/503/proxy).
-        http:Response|error early = wait pendingRequest;
-        if early is http:Response {
-            json|error earlyBody = early.getJsonPayload();
-            test:assertFail(string `The simulated bridge never received the tunneled command; ` +
-                    string `the frontend request returned ${early.statusCode}: ` +
-                    (earlyBody is json ? earlyBody.toJsonString() : "<no body>"));
-        }
-        test:assertFail("The simulated bridge never received the tunneled command; " +
-                "the frontend request failed: " + early.message());
-    }
-    test:assertTrue(sawBoostHint, "Heartbeat responses must carry the boost hint while a workflow request is active");
-
-    http:Response frontendResponse = check wait pendingRequest;
-    test:assertEquals(frontendResponse.statusCode, 200);
-    test:assertEquals(check frontendResponse.getJsonPayload(), <json>{count: 7},
-        "The frontend response must carry the runtime's result body byte-identically");
+    test:assertTrue(check storage:enqueueWorkflowOperation(operation),
+        "The first submission must be queued");
+    test:assertFalse(check storage:enqueueWorkflowOperation(operation),
+        "A resubmitted click must not become a second operation");
 }
 
-// A result posted with a valid org key that is NOT the key the target runtime
-// authenticates with must be refused: the kid only proves org membership, so without
-// this binding any authenticated runtime that learned a commandId could answer a
-// command queued for another runtime, and its body would reach the console as the
-// operation's own result. Reuses the runtime, binding, and key the end-to-end test
-// set up (cleaned up in the group teardown, not per test).
-@test:Config {groups: ["workflow-tunnel"], dependsOn: [testWorkflowTunnelEndToEnd]}
-function testResultPostedWithForeignKeyIsRefused() returns error? {
-    string legitKeyId;
-    lock {
-        legitKeyId = tunnelTestKeyId;
-    }
-    string legitKeyMaterial;
-    lock {
-        legitKeyMaterial = tunnelTestKeyMaterial;
-    }
-
-    // A second, unrelated org secret: authenticates fine, but is not the key
-    // WF_TUNNEL_RUNTIME_ID heartbeats with.
-    string foreignSecret = check storage:createOrgSecret(WF_PROD_ENV_ID, WF_ADMIN_USER_ID);
-    int? foreignDotIdx = foreignSecret.indexOf(".");
-    if foreignDotIdx is () {
-        return error("createOrgSecret returned an unexpected secret format");
-    }
-    string foreignKeyId = foreignSecret.substring(0, foreignDotIdx);
-    string foreignKeyMaterial = foreignSecret.substring(foreignDotIdx + 1);
-    lock {
-        tunnelForeignKeyId = foreignKeyId;
-    }
-    string foreignToken = check issueRuntimeToken(foreignKeyId, foreignKeyMaterial);
-    string legitToken = check issueRuntimeToken(legitKeyId, legitKeyMaterial);
-    string adminToken = check generateV2Token(WF_ADMIN_USER_ID, "admin", []);
-
-    future<http:Response|error> pendingRequest = start wfProxyGet(
-            string `/${COMPONENT_1_ID}/${WF_PROD_ENV_ID}/human-tasks/pending-count`, adminToken);
-
-    // Simulated bridge: catch the command with the runtime's own key, as usual.
-    types:DeltaHeartbeat deltaHeartbeat = {
+@test:Config {groups: ["workflow_tunnel"]}
+function testOutcomeIsRecordedExactlyOnce() returns error? {
+    int now = storage:wfNowEpoch();
+    string operationId = "wfo-once-" + now.toString();
+    _ = check storage:enqueueWorkflowOperation({
+        operationId: operationId,
         runtimeId: WF_TUNNEL_RUNTIME_ID,
-        runtimeHash: "wf-test-hash-" + WF_TUNNEL_RUNTIME_ID,
-        timestamp: time:utcNow()
-    };
-    map<string> legitAuth = {"Authorization": "Bearer " + legitToken};
-    map<string> foreignAuth = {"Authorization": "Bearer " + foreignToken};
-    string? commandId = ();
-    foreach int attempt in 0 ..< 60 {
-        json deltaResponse = check wfRuntimeIcpClient->post("/deltaHeartbeat", deltaHeartbeat, legitAuth);
-        json|error commandsJson = deltaResponse.commands;
-        if commandsJson is json[] {
-            foreach json commandJson in commandsJson {
-                json|error action = commandJson.action;
-                if action is string && action == "WORKFLOW_MGMT" {
-                    json|error payloadText = commandJson.payload;
-                    if payloadText !is string {
-                        return error("WORKFLOW_MGMT command without a payload");
-                    }
-                    json payload = check payloadText.fromJsonString();
-                    commandId = check payload.commandId;
-                }
-            }
+        scopeKey: WF_TUNNEL_SCOPE,
+        status: types:WF_OP_PENDING,
+        issuedAt: now,
+        deadline: now + 1800,
+        payload: tunnelRequest("instances.terminate")
+    });
+
+    types:WorkflowOutboxRow[] claimed =
+        check storage:claimWorkflowOperations(WF_TUNNEL_RUNTIME_ID, 10);
+    test:assertTrue(claimed.length() >= 1, "The queued mutation must be claimable");
+
+    // Whichever node wins this write is the node that raises the notification or writes the
+    // audit record, so a redelivered result cannot double-report an outcome.
+    test:assertTrue(check storage:completeWorkflowOperation(operationId, types:WF_OP_COMPLETED,
+            "{\"httpStatus\":200}"), "The first result must be recorded");
+    test:assertFalse(check storage:completeWorkflowOperation(operationId, types:WF_OP_COMPLETED,
+            "{\"httpStatus\":200}"), "A duplicate result must record nothing");
+
+    types:WorkflowOutboxRow? stored = check storage:getWorkflowOperation(operationId);
+    if stored is types:WorkflowOutboxRow {
+        test:assertEquals(stored.status, types:WF_OP_COMPLETED);
+    }
+}
+
+@test:Config {groups: ["workflow_tunnel"]}
+function testMutationClaimIsAddressedAndBounded() returns error? {
+    int now = storage:wfNowEpoch();
+    // Addressed to a runtime that is not the seeded one: claiming for that runtime must
+    // return nothing. The bridge's replay cache is per process, so a mutation reaching a
+    // second runtime of the same integration would execute twice.
+    _ = check storage:enqueueWorkflowOperation({
+        operationId: "wfo-addressed-" + now.toString(),
+        runtimeId: "990e8400-e29b-41d4-a716-4466554400ff",
+        scopeKey: WF_TUNNEL_SCOPE,
+        status: types:WF_OP_PENDING,
+        issuedAt: now,
+        deadline: now + 1800,
+        payload: tunnelRequest("humanTasks.fail")
+    });
+    types:WorkflowOutboxRow[] claimed =
+        check storage:claimWorkflowOperations(WF_TUNNEL_RUNTIME_ID, 10);
+    foreach types:WorkflowOutboxRow operation in claimed {
+        test:assertEquals(operation.runtimeId, WF_TUNNEL_RUNTIME_ID,
+            "A mutation must only ever be claimed by the runtime it was addressed to");
+    }
+}
+
+@test:Config {groups: ["workflow_tunnel"]}
+function testDeadlineExpiresAnUnconfirmedMutation() returns error? {
+    int now = storage:wfNowEpoch();
+    string operationId = "wfo-expire-" + now.toString();
+    _ = check storage:enqueueWorkflowOperation({
+        operationId: operationId,
+        runtimeId: WF_TUNNEL_RUNTIME_ID,
+        scopeKey: WF_TUNNEL_SCOPE,
+        status: types:WF_OP_PENDING,
+        issuedAt: now - 3600,
+        deadline: now - 60,
+        payload: tunnelRequest("instances.suspend")
+    });
+
+    // A past deadline must also make the row undeliverable, not merely sweepable: this is
+    // what stops a backlog being handed to a runtime that comes back after an outage.
+    types:WorkflowOutboxRow[] claimed =
+        check storage:claimWorkflowOperations(WF_TUNNEL_RUNTIME_ID, 10);
+    foreach types:WorkflowOutboxRow operation in claimed {
+        test:assertNotEquals(operation.operationId, operationId,
+            "An expired mutation must never be delivered");
+    }
+
+    types:WorkflowOutboxRow[] expired = check storage:sweepWorkflowTunnel(2100, 300);
+    // The sweeper must name what it expired: an unconfirmed mutation nobody can name is one
+    // nobody can be told about.
+    boolean named = false;
+    foreach types:WorkflowOutboxRow row in expired {
+        if row.operationId == operationId {
+            named = true;
         }
-        if commandId is string {
-            break;
-        }
-        langRuntime:sleep(0.2);
     }
-    if commandId !is string {
-        return error("The simulated bridge never received the tunneled command");
+    test:assertTrue(named, "The sweeper must report the operation it expired");
+    types:WorkflowOutboxRow? swept = check storage:getWorkflowOperation(operationId);
+    if swept is types:WorkflowOutboxRow {
+        test:assertEquals(swept.status, types:WF_OP_EXPIRED,
+            "An unconfirmed mutation must end EXPIRED so it can be surfaced, not dropped");
     }
+}
 
-    // The spoof: an authenticated post claiming the target runtime, under the foreign
-    // key. Transport-wise still 202 — the drop is server-side, like other late results.
-    http:Response spoofed = check wfRuntimeIcpClient->post("/commandResult", {
-        runtimeId: WF_TUNNEL_RUNTIME_ID,
-        commandId: commandId,
-        status: "COMPLETED",
-        httpStatus: 200,
-        body: {hijacked: true}
-    }, foreignAuth);
-    test:assertEquals(spoofed.statusCode, 202);
+// ── Boost ────────────────────────────────────────────────────────────────────
 
-    // Give the waiter time to (wrongly) collect the spoofed result before the legit one
-    // arrives — if it did, the frontend response below would carry `hijacked`.
-    langRuntime:sleep(0.5);
-    http:Response legit = check wfRuntimeIcpClient->post("/commandResult", {
-        runtimeId: WF_TUNNEL_RUNTIME_ID,
-        commandId: commandId,
-        status: "COMPLETED",
-        httpStatus: 200,
-        body: {count: 3}
-    }, legitAuth);
-    test:assertEquals(legit.statusCode, 202);
-
-    http:Response frontendResponse = check wait pendingRequest;
-    test:assertEquals(frontendResponse.statusCode, 200);
-    test:assertEquals(check frontendResponse.getJsonPayload(), <json>{count: 3},
-        "A result posted with a key not bound to the target runtime must be refused");
+@test:Config {groups: ["workflow_tunnel"]}
+function testBoostWindowIsSharedThroughTheDatabase() returns error? {
+    int until = storage:wfNowEpoch() + 30;
+    check storage:boostWorkflowScope(WF_TUNNEL_COMPONENT_ID, WF_TUNNEL_ENVIRONMENT_ID, until);
+    // Any node answering this runtime's heartbeat reads the same window, which is the point:
+    // an in-memory window would boost only the node that served the user's request.
+    int remaining = check storage:workflowBoostRemaining(WF_TUNNEL_RUNTIME_ID);
+    test:assertTrue(remaining > 0 && remaining <= 30,
+        "The boost window must be visible to every node, got: " + remaining.toString());
 }

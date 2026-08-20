@@ -2738,3 +2738,86 @@ public type MoesifApplication record {|
     string id;
     string name;
 |};
+
+// ============================================================================
+// STATELESS WORKFLOW TUNNEL
+// ============================================================================
+// Rows of wf_read_cache and wf_operation_outbox. Both tables are shared by every ICP
+// node: the node that accepts a user's request is usually not the node that delivers it
+// to a runtime, so nothing about a request may live in memory.
+//
+// All the time fields are epoch SECONDS rather than timestamps. Every read, claim and
+// sweep compares them, and integers compare identically on all five supported engines
+// while timestamp arithmetic does not (see storage/database_dialect.bal).
+
+// Lifecycle of a cached read. A stale READY row is still served while its refresh runs,
+// so "expired" is not the same as "unusable".
+public const string WF_CACHE_FETCHING = "FETCHING";
+public const string WF_CACHE_READY = "READY";
+public const string WF_CACHE_FAILED = "FAILED";
+
+// Lifecycle of a user-initiated mutation. EXPIRED is the state that matters: it means
+// the ICP never learned the outcome, which is what has to reach the user as a
+// notification rather than being dropped.
+public const string WF_OP_PENDING = "PENDING";
+public const string WF_OP_DELIVERED = "DELIVERED";
+public const string WF_OP_COMPLETED = "COMPLETED";
+public const string WF_OP_FAILED = "FAILED";
+public const string WF_OP_EXPIRED = "EXPIRED";
+
+// One row of wf_read_cache.
+//
+// `request` is what to execute and is written when the row is created; `payload` is the
+// result and arrives later. One blob cannot be both — the heartbeat that claims the row
+// needs the request before any result exists.
+//
+// `fetchId` is non-nil exactly while a command for this row is in flight, and it is that
+// command's id. It fences a late result: a result carrying a fetch id the row no longer
+// holds belongs to a superseded or invalidated attempt and is discarded.
+public type WorkflowCacheRow record {
+    @sql:Column {name: "cache_key"}
+    string cacheKey;
+    @sql:Column {name: "scope_key"}
+    string scopeKey;
+    string request;
+    @sql:Column {name: "fetch_id"}
+    string? fetchId = ();
+    string status;
+    @sql:Column {name: "expires_at"}
+    int expiresAt;
+    @sql:Column {name: "claimed_at"}
+    int? claimedAt = ();
+    string? payload = ();
+};
+
+// A read a heartbeat should ask its runtime to execute. `fetchId` is the command id.
+public type WorkflowPendingRead record {
+    @sql:Column {name: "cache_key"}
+    string cacheKey;
+    @sql:Column {name: "fetch_id"}
+    string fetchId;
+    string request;
+};
+
+// One row of wf_operation_outbox.
+//
+// `operationId` is the caller's idempotency key as well as the command id, so a repeated
+// submission collides on the primary key instead of becoming a second operation.
+public type WorkflowOutboxRow record {
+    @sql:Column {name: "operation_id"}
+    string operationId;
+    @sql:Column {name: "runtime_id"}
+    string runtimeId;
+    @sql:Column {name: "scope_key"}
+    string scopeKey;
+    string status;
+    @sql:Column {name: "issued_at"}
+    int issuedAt;
+    int deadline;
+    @sql:Column {name: "delivered_at"}
+    int? deliveredAt = ();
+    @sql:Column {name: "completed_at"}
+    int? completedAt = ();
+    string payload;
+    string? result = ();
+};

@@ -17,7 +17,6 @@
  */
 
 import { Box, CircularProgress, FormControlLabel, Switch, Typography } from '@wso2/oxygen-ui';
-import type { SxProps } from '@mui/system';
 
 interface SyncSwitchProps {
   label: string;
@@ -28,7 +27,11 @@ interface SyncSwitchProps {
   disabled?: boolean;
   name?: string;
   labelPlacement?: 'top' | 'start' | 'end' | 'bottom';
-  sx?: SxProps;
+  // `object`, as everywhere else in this codebase: importing MUI's SxProps pulled in
+  // @mui/system, which is a transitive dependency of oxygen-ui rather than one this app
+  // declares — so it resolved locally through a hoisted node_modules and failed in the
+  // container's pnpm layout, breaking the image build.
+  sx?: object;
 }
 
 const THUMB_SIZE = 16; // MUI small switch thumb size
@@ -53,7 +56,7 @@ export default function SyncSwitch({ label, checked, inSync, onChange, onClick, 
         </Typography>
       }
       labelPlacement={labelPlacement}
-      sx={{ m: 0, gap: 1, ...sx } as SxProps}
+      sx={{ m: 0, gap: 1, ...sx }}
     />
   );
 }

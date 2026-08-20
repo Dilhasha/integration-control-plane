@@ -42,6 +42,11 @@ configurable string truststorePassword = "wso2carbon";
 configurable int schedulerIntervalSeconds = 60;
 configurable int refreshTokenCleanupIntervalSeconds = 86400; // 24 hours (in seconds)
 
+// How often the workflow tunnel is swept: unconfirmed mutations expired and surfaced, and
+// rows nobody can still be served deleted. Five minutes is well inside the 30-minute
+// mutation deadline, so an expiry is noticed promptly without polling the tables hard.
+configurable int workflowSweepIntervalSeconds = 300;
+
 // Runtime auth configuration (runtime and server communication)
 configurable string jwtIssuer = "icp-runtime-jwt-issuer";
 configurable string|string[] jwtAudience = "icp-server";

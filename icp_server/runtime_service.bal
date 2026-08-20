@@ -311,7 +311,7 @@ service /icp on runtimeListener {
                     commandId = result.commandId, runtimeId = result.runtimeId, kid = kid);
             return <http:Accepted>{body: {accepted: true}};
         }
-        boolean delivered = completeWorkflowCommand(result);
+        boolean delivered = recordWorkflowCommandResult(result);
         if !delivered {
             log:printDebug(string `Dropped late/unknown workflow command result: ${result.commandId}`);
         }

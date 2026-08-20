@@ -17,6 +17,7 @@
 import ballerina/io;
 import ballerina/lang.runtime;
 import ballerina/log;
+import ballerina/sql;
 import ballerina/time;
 
 // ── Audit action constants ─────────────────────────────────────────────────
@@ -245,4 +246,30 @@ isolated function buildTimestamp() returns string {
     int secondInt = <int>second;
     string secondStr = secondInt < 10 ? "0" + secondInt.toString() : secondInt.toString();
     return string `${c.year}-${month}-${day}T${hour}:${minute}:${secondStr}Z`;
+}
+
+# Raises a system event: something the operator needs to see and acknowledge.
+#
+# Distinct from an audit record, which states that something *happened*. A system event
+# states that something needs attention and stays unresolved until a person clears it
+# (`resolved`/`resolved_by` on the row), which is what makes it usable for an outcome the
+# ICP could not establish — a mutation delivered to an integration that never confirmed it.
+#
+# + eventType - Short machine-readable kind, e.g. `workflow_operation_unconfirmed`
+# + severity - INFO | WARN | ERROR | CRITICAL
+# + message - What a person should read
+# + eventSource - The runtime or component it concerns, when there is one
+# + metadata - Structured detail as a JSON string
+public isolated function raiseSystemEvent(string eventType, string severity, string message,
+        string? eventSource = (), string? metadata = ()) {
+    sql:ExecutionResult|sql:Error result = dbClient->execute(`
+        INSERT INTO system_events (event_type, severity, source, message, metadata)
+        VALUES (${eventType}, ${severity}, ${eventSource}, ${message}, ${metadata})
+    `);
+    if result is sql:Error {
+        // Never propagated: an event nobody can store is still worth having in the log, and
+        // failing the caller would turn a reporting problem into a functional one.
+        log:printError("Failed to raise a system event", result, eventType = eventType,
+                eventMessage = message);
+    }
 }
