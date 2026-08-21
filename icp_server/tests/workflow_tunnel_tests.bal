@@ -327,7 +327,7 @@ function testUnansweredFetchIsAbandonedRatherThanReoffered() returns error? {
     types:CachePendingFetch[] offered = check storage:claimCacheFetches(scope, 10);
     test:assertEquals(offered.length(), 0, "An expired fetch must not be offered again");
 
-    int abandoned = check storage:abandonExpiredCacheFetches("{\"response\":{\"httpStatus\":504}}", 15);
+    int abandoned = check storage:abandonExpiredCacheFetches(15);
     test:assertTrue(abandoned >= 1, "The expired fetch must be abandoned");
 
     // And the caller polling it gets an answer instead of an eternal "still fetching".
@@ -335,6 +335,12 @@ function testUnansweredFetchIsAbandonedRatherThanReoffered() returns error? {
     if row is types:CacheEntry {
         test:assertEquals(row.token, (), "An abandoned fetch must leave nothing in flight");
         test:assertEquals(row.status, types:CACHE_FAILED);
+        // The request survives the failure, because a retry has to ask the same question
+        // again. Overwriting it with a failure notice made the row unrecoverable: the view
+        // answered 504 for as long as the row lived, with nothing left to re-ask.
+        string? data = row.data;
+        test:assertTrue(data is string && data.includes("instances.list"),
+                "An abandoned fetch must keep the request a retry needs");
     }
 }
 

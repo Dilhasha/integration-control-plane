@@ -223,6 +223,27 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
     types:CacheEntry? row = check storage:getCacheEntry(cacheKey);
     if row is types:CacheEntry {
         string? payload = row.data;
+        // A failure that has outlived its expiry is a retry, not an answer.
+        //
+        // Stale-while-revalidate is right for data: an old list still tells the user
+        // something true. It is wrong for a failure. Serving one keeps reporting an error the
+        // system has already moved past — a single wedged pool, whose sweeper wrote "no
+        // runtime answered in time", left that view answering 504 for every later request
+        // while the integration was healthy the whole while. Reporting PENDING instead puts
+        // the console back on "Fetching…" and lets the refresh below answer it. A failure
+        // that has NOT yet expired is still served, so a caller learns promptly that a read
+        // failed rather than watching a spinner.
+        if row.status == types:CACHE_FAILED && row.expiresAt <= now {
+            if row.token is () {
+                error? started = startWorkflowReadRefresh(cacheKey, operation, params, roles,
+                        componentId, environmentId, now);
+                if started is error {
+                    log:printWarn("Failed to retry a failed workflow read", started,
+                            cacheKey = cacheKey);
+                }
+            }
+            return {state: "PENDING"};
+        }
         if payload is string {
             WorkflowReadOutcome outcome = check readOutcomeFromPayload(payload, row, now);
             if row.expiresAt <= now && row.token is () {
@@ -850,15 +871,10 @@ public isolated function sweepWorkflowTunnelState() {
     // Fetches nobody answered are given up on first. Left alone they keep their token, so
     // every heartbeat re-offers them and every poll on them reads as "still fetching" — a
     // question nobody could answer, asked dozens of times, and a caller never told.
-    map<json> abandoned = {
-        response: {
-            httpStatus: 504,
-            body: {"error": {"message": "No workflow runtime answered this request in time"}},
-            fetchedAt: nowUnixSeconds()
-        }
-    };
-    int|error given_up = storage:abandonExpiredCacheFetches(abandoned.toJsonString(),
-            WF_FAILED_READ_TTL_SECONDS);
+    //
+    // The row keeps its data: that is where the request lives, and a retry needs it to build
+    // a command. `status` carries the failure on its own.
+    int|error given_up = storage:abandonExpiredCacheFetches(WF_FAILED_READ_TTL_SECONDS);
     if given_up is error {
         log:printError("Failed to abandon expired cache fetches", given_up);
     } else if given_up > 0 {

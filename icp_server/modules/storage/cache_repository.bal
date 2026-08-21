@@ -305,14 +305,24 @@ public isolated function claimCacheFetches(string owner, int count)
 # + failureData - What to record as the entry's answer, as JSON
 # + retryAfterSeconds - How long before the entry may be fetched again
 # + return - How many fetches were abandoned, or an error
-public isolated function abandonExpiredCacheFetches(string failureData, int retryAfterSeconds)
+# Gives up on fetches nobody answered before their deadline.
+#
+# `data` is deliberately left alone. It holds the REQUEST that a retry needs in order to
+# build a command again, and an entry that has been answered before holds the last good
+# answer beside it — both worth more than a failure notice. `status` already says the fetch
+# failed, so writing a failure document over the request would trade a recoverable row for
+# an unrecoverable one: the retry would have nothing to ask. (It did exactly that once —
+# a wedged connection pool expired a fetch, and that view answered 504 from then on.)
+#
+# + retryAfterSeconds - How long the failed state stands before a read retries it
+# + return - How many fetches were given up on
+public isolated function abandonExpiredCacheFetches(int retryAfterSeconds)
         returns int|error {
     int now = cacheNowEpoch();
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
         UPDATE cache_entry
         SET status = CASE WHEN status = ${types:CACHE_FETCHING}
                           THEN ${types:CACHE_FAILED} ELSE status END,
-            data = CASE WHEN status = ${types:CACHE_FETCHING} THEN ${failureData} ELSE data END,
             token = NULL, claimed_at = NULL, expires_at = ${now + retryAfterSeconds}
         WHERE token IS NOT NULL AND expires_at <= ${now}
     `);
