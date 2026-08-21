@@ -1179,57 +1179,72 @@ GO
 
 
 -- ============================================================================
--- WORKFLOW COMMAND TUNNEL (stateless, shared across ICP nodes)
+-- REQUEST CACHE (derived state, shared across ICP nodes)
 -- ============================================================================
--- expires_at/issued_at/deadline are epoch SECONDS: every read, claim and sweep
--- compares them, and epoch integers compare identically on all five engines while
--- timestamp arithmetic does not (storage/database_dialect.bal shows the variance).
--- The read cache carries two blobs on purpose: `request` is what to execute (written at
--- creation, read by whichever heartbeat claims it) and `payload` is the result. One blob
--- cannot be both, since the claim needs the request before any result exists.
--- Neither table has a runtimes/users foreign key on purpose: a K8S deployment
--- DELETEs runtime rows when they go offline, and ON DELETE CASCADE would discard the
--- record of a mutation whose outcome nobody has established yet.
+-- Two generic tables: one caching the answers to read requests, one queueing the
+-- operations that change something. Neither knows what a workflow is — `kind` says what a
+-- row is about and `data` carries the rest, so a second feature needing the same shape adds
+-- a kind rather than a table.
+--
+-- The `cache_` prefix is the contract: this is DERIVED state. An upgrade may drop and
+-- recreate these tables, and nothing in them needs migrating — losing a row costs one
+-- refetch, or one caller being told their operation was never confirmed.
+--
+-- What earns a column is what a WHERE clause needs; everything else lives in `data`. The ICP
+-- supports five database engines, and portable JSON predicates across them do not exist:
+--   cache_key   the request's identity, COMPUTED - sha256(kind|owner|request|identity), so
+--               the parts that make a request unique never become columns
+--   owner       the scope a row belongs to; what a delivery claim filters on
+--   token       the in-flight attempt, which fences a late answer from a superseded one
+--   expires_at  epoch SECONDS, not a timestamp: every read, claim and sweep compares it, and
+--               integers compare identically on all five engines while timestamp arithmetic
+--               needs four different implementations (see storage/database_dialect.bal)
+--
+-- Neither table has a foreign key, deliberately: a K8S deployment DELETEs runtime rows when
+-- they go offline, and ON DELETE CASCADE would discard the record of an operation whose
+-- outcome nobody has established - which is the one thing here worth keeping.
 
-CREATE TABLE wf_read_cache (
-    cache_key CHAR(64) NOT NULL,
-    scope_key NVARCHAR(200) NOT NULL,
-    request     NVARCHAR(MAX) NOT NULL,
-    fetch_id VARCHAR(36),
-    status VARCHAR(16) NOT NULL,
+CREATE TABLE cache_entry (
+    cache_key NVARCHAR(64) NOT NULL,
+    kind NVARCHAR(64) NOT NULL,
+    owner NVARCHAR(200) NOT NULL,
+    token NVARCHAR(36),
+    status NVARCHAR(16) NOT NULL,
     expires_at BIGINT NOT NULL,
-    claimed_at  BIGINT,
-    payload NVARCHAR(MAX),
+    claimed_at BIGINT,
+    data NVARCHAR(MAX),
     created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
     PRIMARY KEY (cache_key)
 );
 GO
 
-CREATE INDEX idx_wfrc_claim ON wf_read_cache (status, scope_key, expires_at);
+CREATE INDEX idx_cache_entry_claim ON cache_entry (owner, token, claimed_at);
 GO
-CREATE INDEX idx_wfrc_expiry ON wf_read_cache (expires_at);
+CREATE INDEX idx_cache_entry_expiry ON cache_entry (expires_at);
 GO
 
-CREATE TABLE wf_operation_outbox (
-    operation_id VARCHAR(100) NOT NULL,
-    runtime_id CHAR(36) NOT NULL,
-    scope_key NVARCHAR(200) NOT NULL,
-    status VARCHAR(16) NOT NULL,
+CREATE TABLE cache_operation_outbox (
+    operation_id NVARCHAR(100) NOT NULL,
+    target NVARCHAR(36) NOT NULL,
+    owner NVARCHAR(200) NOT NULL,
+    kind NVARCHAR(64) NOT NULL,
+    status NVARCHAR(16) NOT NULL,
     issued_at BIGINT NOT NULL,
     deadline BIGINT NOT NULL,
     delivered_at BIGINT,
     completed_at BIGINT,
-    payload NVARCHAR(MAX) NOT NULL,
+    data NVARCHAR(MAX) NOT NULL,
     result NVARCHAR(MAX),
     created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
     PRIMARY KEY (operation_id)
 );
 GO
 
-CREATE INDEX idx_wfoo_delivery ON wf_operation_outbox (runtime_id, status, issued_at);
+CREATE INDEX idx_cache_outbox_delivery ON cache_operation_outbox (target, status, issued_at);
 GO
-CREATE INDEX idx_wfoo_cleanup ON wf_operation_outbox (status, completed_at);
+CREATE INDEX idx_cache_outbox_cleanup ON cache_operation_outbox (status, completed_at);
 GO
+
 
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_service_listener_bindings (

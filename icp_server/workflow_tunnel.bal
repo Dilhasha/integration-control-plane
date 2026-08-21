@@ -82,6 +82,11 @@ const string WORKFLOW_COMMANDS_CAPABILITY = "workflowCommands";
 
 // Ids are prefixed by kind so a result can be routed back to the table that is waiting for
 // it without querying both.
+// What a cache row is about. The tables are generic; these two strings are the whole of the
+// workflow-ness in them, so another feature adds a kind rather than a table.
+const string CACHE_KIND_WORKFLOW_READ = "workflow.read";
+const string CACHE_KIND_WORKFLOW_OPERATION = "workflow.operation";
+
 const string WF_READ_COMMAND_PREFIX = "wfr-";
 const string WF_OPERATION_COMMAND_PREFIX = "wfo-";
 
@@ -173,15 +178,15 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
         // into the stale-serve path below: the current answer still comes back immediately,
         // marked stale, while the forced refresh runs. Coalescing makes this safe to expose —
         // twenty people pressing Refresh together still produce one fetch.
-        check storage:expireWorkflowCacheEntry(cacheKey);
+        check storage:expireCacheEntry(cacheKey);
     }
 
-    types:WorkflowCacheRow? row = check storage:getWorkflowCacheRow(cacheKey);
-    if row is types:WorkflowCacheRow {
-        string? payload = row.payload;
+    types:CacheEntry? row = check storage:getCacheEntry(cacheKey);
+    if row is types:CacheEntry {
+        string? payload = row.data;
         if payload is string {
             WorkflowReadOutcome outcome = check readOutcomeFromPayload(payload, row, now);
-            if row.expiresAt <= now && row.fetchId is () {
+            if row.expiresAt <= now && row.token is () {
                 // Stale and nothing refreshing it: start one behind the answer we are about
                 // to serve. A failure here is not the caller's problem — they still get data.
                 error? started = startWorkflowReadRefresh(cacheKey, operation, params, roles,
@@ -193,7 +198,7 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
             }
             return outcome;
         }
-        if row.fetchId is string {
+        if row.token is string {
             return {state: "PENDING"};
         }
         // A row with neither payload nor fetch in flight was abandoned: retry it.
@@ -203,19 +208,19 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
     if target is () {
         return {state: "NO_RUNTIME"};
     }
-    check storage:boostWorkflowScope(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
+    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
 
     string request = workflowRequestDocument(operation, params, roles);
-    boolean owns = check storage:startWorkflowCacheFetch(cacheKey, scopeKey, request,
-            newFetchId(), now + WF_READ_FETCH_DEADLINE_SECONDS);
+    boolean owns = check storage:startCacheFetch(cacheKey, CACHE_KIND_WORKFLOW_READ, scopeKey,
+            request, newFetchId(), now + WF_READ_FETCH_DEADLINE_SECONDS);
     if !owns {
         // Another request — on this node or another — is already fetching this exact answer.
         // Both callers poll the one row instead of issuing two commands.
-        types:WorkflowCacheRow? existing = check storage:getWorkflowCacheRow(cacheKey);
-        if existing is types:WorkflowCacheRow {
-            string? payload = existing.payload;
-            if payload is string {
-                return check readOutcomeFromPayload(payload, existing, now);
+        types:CacheEntry? existing = check storage:getCacheEntry(cacheKey);
+        if existing is types:CacheEntry {
+            string? cached = existing.data;
+            if cached is string {
+                return check readOutcomeFromPayload(cached, existing, now);
             }
         }
     }
@@ -230,16 +235,22 @@ isolated function startWorkflowReadRefresh(string cacheKey, string operation, ma
         // Nothing can answer it; keep serving what we have rather than marking it in flight.
         return ();
     }
-    check storage:boostWorkflowScope(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
-    _ = check storage:claimWorkflowCacheRefresh(cacheKey, newFetchId(),
-            workflowRequestDocument(operation, params, roles),
+    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
+    _ = check storage:claimCacheRefresh(cacheKey, newFetchId(),
             now + WF_READ_FETCH_DEADLINE_SECONDS);
     return ();
 }
 
-isolated function readOutcomeFromPayload(string payload, types:WorkflowCacheRow row, int now)
+isolated function readOutcomeFromPayload(string payload, types:CacheEntry row, int now)
         returns WorkflowReadOutcome|error {
-    map<json> envelope = check payload.fromJsonString().ensureType();
+    map<json> document = check payload.fromJsonString().ensureType();
+    // An entry that has only ever been fetched holds `{request}`; one that has been answered
+    // holds `{request, response}`. Without a response there is nothing to serve yet.
+    json responseJson = document["response"] ?: ();
+    if responseJson !is map<json> {
+        return {state: "PENDING"};
+    }
+    map<json> envelope = responseJson;
     int fetchedAt = envelope["fetchedAt"] is int ? <int>envelope["fetchedAt"] : 0;
     int httpStatus = envelope["httpStatus"] is int ? <int>envelope["httpStatus"] : 200;
     boolean serveable = row.expiresAt > now || row.expiresAt > now - WF_STALE_SERVE_SECONDS;
@@ -247,7 +258,7 @@ isolated function readOutcomeFromPayload(string payload, types:WorkflowCacheRow 
         return {state: "PENDING"};
     }
     return {
-        state: row.status == types:WF_CACHE_FAILED ? "FAILED" : "READY",
+        state: row.status == types:CACHE_FAILED ? "FAILED" : "READY",
         body: envelope["body"],
         httpStatus: httpStatus,
         fetchedAt: fetchedAt,
@@ -281,16 +292,17 @@ isolated function enqueueWorkflowMutation(string componentId, string environment
         return ();
     }
     int now = nowUnixSeconds();
-    check storage:boostWorkflowScope(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
+    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
     string operationId = WF_OPERATION_COMMAND_PREFIX + idempotencyKey;
-    boolean created = check storage:enqueueWorkflowOperation({
+    boolean created = check storage:enqueueCacheOperation({
         operationId: operationId,
-        runtimeId: target,
-        scopeKey: workflowScopeKey(componentId, environmentId),
-        status: types:WF_OP_PENDING,
+        target: target,
+        kind: CACHE_KIND_WORKFLOW_OPERATION,
+        owner: workflowScopeKey(componentId, environmentId),
+        status: types:CACHE_OP_PENDING,
         issuedAt: now,
         deadline: now + WF_OPERATION_DEADLINE_SECONDS,
-        payload: workflowRequestDocument(operation, params, roles, userId)
+        data: workflowRequestDocument(operation, params, roles, userId)
     });
     return [operationId, created];
 }
@@ -396,18 +408,14 @@ final string[] & readonly WF_TERMINAL_STATUSES =
 // The TTL for a fetched read, from the operation it answered and - for a single instance -
 // whether that instance has finished.
 //
-// The operation is taken from the stored request rather than passed down the delivery path,
-// because a result carries only what the bridge sends back. It is a primary-key read.
-isolated function workflowReadTtlSeconds(string cacheKey, json body) returns int {
-    types:WorkflowCacheRow?|error row = storage:getWorkflowCacheRow(cacheKey);
+// The request comes from the caller, which read the entry to preserve it anyway — so this
+// needs no lookup of its own.
+isolated function workflowReadTtlSeconds(json request, json body) returns int {
     string operation = "";
-    if row is types:WorkflowCacheRow {
-        json|error request = row.request.fromJsonString();
-        if request is map<json> {
-            json? operationValue = request["operation"];
-            if operationValue is string {
-                operation = operationValue;
-            }
+    if request is map<json> {
+        json? operationValue = request["operation"];
+        if operationValue is string {
+            operation = operationValue;
         }
     }
     if operation.startsWith("humanTasks.") || operation.startsWith("reviewActivities.")
@@ -483,7 +491,7 @@ isolated function deliverWorkflowCommands(string runtimeId,
     if !heartbeatResponse.acknowledged {
         return;
     }
-    [string, string, int]?|error scope = storage:getWorkflowScopeForRuntime(runtimeId);
+    [string, string, int]?|error scope = storage:getRuntimeCacheOwner(runtimeId);
     if scope is error {
         log:printError("Failed to resolve a runtime's workflow scope", scope,
                 runtimeId = runtimeId);
@@ -497,11 +505,11 @@ isolated function deliverWorkflowCommands(string runtimeId,
     int now = nowUnixSeconds();
 
     // Mutations first: a user waiting on an action outranks a list refresh.
-    types:WorkflowOutboxRow[]|error operations =
-        storage:claimWorkflowOperations(runtimeId, WF_MAX_OPERATIONS_PER_HEARTBEAT);
-    if operations is types:WorkflowOutboxRow[] {
-        foreach types:WorkflowOutboxRow operation in operations {
-            json|error request = operation.payload.fromJsonString();
+    types:CacheOperation[]|error operations =
+        storage:claimCacheOperations(runtimeId, WF_MAX_OPERATIONS_PER_HEARTBEAT);
+    if operations is types:CacheOperation[] {
+        foreach types:CacheOperation operation in operations {
+            json|error request = operation.data.fromJsonString();
             if request is error {
                 log:printError("Skipping a workflow operation with an unreadable payload",
                         request, operationId = operation.operationId);
@@ -521,28 +529,31 @@ isolated function deliverWorkflowCommands(string runtimeId,
                 runtimeId = runtimeId);
     }
 
-    types:WorkflowPendingRead[]|error reads =
-        storage:claimWorkflowCacheReads(scopeKey, WF_MAX_READS_PER_HEARTBEAT);
-    if reads is types:WorkflowPendingRead[] {
-        foreach types:WorkflowPendingRead read in reads {
-            json|error request = read.request.fromJsonString();
-            if request is error {
-                log:printError("Skipping a workflow read with an unreadable request", request,
-                        cacheKey = read.cacheKey);
+    types:CachePendingFetch[]|error fetches =
+        storage:claimCacheFetches(scopeKey, WF_MAX_READS_PER_HEARTBEAT);
+    if fetches is types:CachePendingFetch[] {
+        foreach types:CachePendingFetch fetch in fetches {
+            // `data` is `{request, response?}`; delivery needs the request half.
+            json|error document = fetch.data.fromJsonString();
+            json request = document is map<json> ? (document["request"] ?: document) : ();
+            if document is error || request is () {
+                log:printError("Skipping a cached read with an unreadable request",
+                        document is error ? document : error("no request in the entry"),
+                        cacheKey = fetch.cacheKey);
                 continue;
             }
             types:ControlCommand|error command = workflowCommand(runtimeId,
-                    readCommandId(read.cacheKey, read.fetchId), request,
+                    readCommandId(fetch.cacheKey, fetch.token), request,
                     now + WF_READ_FETCH_DEADLINE_SECONDS);
             if command is error {
                 log:printError("Skipping a malformed workflow read", command,
-                        cacheKey = read.cacheKey);
+                        cacheKey = fetch.cacheKey);
                 continue;
             }
             commands.push(command);
         }
     } else {
-        log:printError("Failed to claim workflow reads for delivery", reads,
+        log:printError("Failed to claim cache fetches for delivery", fetches,
                 scopeKey = scopeKey);
     }
 
@@ -598,17 +609,38 @@ isolated function recordWorkflowCommandResult(types:WorkflowCommandResult result
 
 // A read's answer, cached under the key whose attempt asked for it. The response body is
 // stored whole - it is what the console will be served, unchanged.
+//
+// The entry's `data` carries the request as well as the answer, because one column holds
+// both: the request has to survive so a later refresh knows what to ask again. The row is
+// read here anyway - the TTL depends on which operation answered - so keeping it costs
+// nothing beyond remembering to.
 isolated function recordWorkflowReadResult(string cacheKey, string fetchId,
         types:WorkflowCommandResult result, int now) returns boolean {
+    types:CacheEntry?|error row = storage:getCacheEntry(cacheKey);
+    json request = ();
+    if row is types:CacheEntry {
+        string? stored = row.data;
+        if stored is string {
+            json|error document = stored.fromJsonString();
+            if document is map<json> {
+                // Written by this same shape on the previous pass, or by the fetch that
+                // created the row.
+                request = document["request"] ?: document;
+            }
+        }
+    }
     map<json> envelope = {
-        httpStatus: result.httpStatus,
-        body: result.body,
-        fetchedAt: now,
-        runtimeId: result.runtimeId
+        request: request,
+        response: {
+            httpStatus: result.httpStatus,
+            body: result.body,
+            fetchedAt: now,
+            runtimeId: result.runtimeId
+        }
     };
     if result.httpStatus >= 200 && result.httpStatus < 300 {
-        int ttl = workflowReadTtlSeconds(cacheKey, result.body);
-        boolean|error stored = storage:completeWorkflowCacheFetch(cacheKey, fetchId,
+        int ttl = workflowReadTtlSeconds(request, result.body);
+        boolean|error stored = storage:completeCacheFetch(cacheKey, fetchId,
                 envelope.toJsonString(), now + ttl);
         if stored is error {
             log:printError("Failed to store a workflow read result", stored, cacheKey = cacheKey);
@@ -618,7 +650,7 @@ isolated function recordWorkflowReadResult(string cacheKey, string fetchId,
     }
     // A failed read keeps any payload the row already holds: the last good answer is worth
     // more than a fresh error, and the caller is told the refresh failed either way.
-    boolean|error recorded = storage:failWorkflowCacheFetch(cacheKey, fetchId,
+    boolean|error recorded = storage:failCacheFetch(cacheKey, fetchId,
             envelope.toJsonString(), now + WF_FAILED_READ_TTL_SECONDS);
     if recorded is error {
         log:printError("Failed to record a workflow read failure", recorded, cacheKey = cacheKey);
@@ -638,8 +670,8 @@ isolated function recordWorkflowOperationResult(string operationId,
         body: result.body,
         runtimeId: result.runtimeId
     };
-    boolean|error recorded = storage:completeWorkflowOperation(operationId,
-            succeeded ? types:WF_OP_COMPLETED : types:WF_OP_FAILED, outcome.toJsonString());
+    boolean|error recorded = storage:completeCacheOperation(operationId,
+            succeeded ? types:CACHE_OP_COMPLETED : types:CACHE_OP_FAILED, outcome.toJsonString());
     if recorded is error {
         log:printError("Failed to record a workflow operation outcome", recorded,
                 operationId = operationId);
@@ -671,18 +703,18 @@ const int WF_INVALIDATE_HORIZON_SECONDS = 3600;
 // logged and swallowed: the mutation's outcome is already recorded, and the worst case of a
 // failed invalidation is bounded staleness — exactly what the TTL already promises.
 isolated function invalidateWorkflowScopeCache(string operationId) {
-    types:WorkflowOutboxRow?|error row = storage:getWorkflowOperation(operationId);
-    if row !is types:WorkflowOutboxRow {
+    types:CacheOperation?|error row = storage:getCacheOperation(operationId);
+    if row !is types:CacheOperation {
         if row is error {
             log:printError("Failed to load a completed operation for cache invalidation", row,
                     operationId = operationId);
         }
         return;
     }
-    int|error marked = storage:staleWorkflowCacheScope(row.scopeKey, WF_INVALIDATE_HORIZON_SECONDS);
+    int|error marked = storage:staleCacheOwner(row.owner, WF_INVALIDATE_HORIZON_SECONDS);
     if marked is error {
         log:printError("Failed to invalidate the workflow cache after a mutation", marked,
-                scopeKey = row.scopeKey, operationId = operationId);
+                scopeKey = row.owner, operationId = operationId);
     }
 }
 
@@ -691,12 +723,12 @@ isolated function invalidateWorkflowScopeCache(string operationId) {
 // here, so an outcome is reported exactly once however many nodes saw the result.
 isolated function reportWorkflowOutcome(string operationId, boolean succeeded,
         types:WorkflowCommandResult result) {
-    types:WorkflowOutboxRow?|error row = storage:getWorkflowOperation(operationId);
+    types:CacheOperation?|error row = storage:getCacheOperation(operationId);
     string operation = "";
     string target = "";
     string? actor = ();
-    if row is types:WorkflowOutboxRow {
-        json|error request = row.payload.fromJsonString();
+    if row is types:CacheOperation {
+        json|error request = row.data.fromJsonString();
         if request is map<json> {
             json? operationValue = request["operation"];
             if operationValue is string {
@@ -743,11 +775,11 @@ isolated function reportWorkflowOutcome(string operationId, boolean succeeded,
 # integration and lost its answer, or never have run at all. That is why it becomes an
 # unresolved notification rather than a log line — a person has to look, and the record has
 # to wait for them.
-isolated function reportExpiredWorkflowOperations(types:WorkflowOutboxRow[] expired) {
-    foreach types:WorkflowOutboxRow row in expired {
+isolated function reportExpiredWorkflowOperations(types:CacheOperation[] expired) {
+    foreach types:CacheOperation row in expired {
         string operation = "";
         string? actor = ();
-        json|error request = row.payload.fromJsonString();
+        json|error request = row.data.fromJsonString();
         if request is map<json> {
             json? operationValue = request["operation"];
             if operationValue is string {
@@ -762,12 +794,12 @@ isolated function reportExpiredWorkflowOperations(types:WorkflowOutboxRow[] expi
                 string `A workflow operation was never confirmed by the integration: ` +
                 string `${operation}. It may or may not have been applied - check the ` +
                 string `target's state before retrying.`,
-                eventSource = row.runtimeId,
+                eventSource = row.target,
                 metadata = {
                     operationId: row.operationId,
                     operation: operation,
                     userId: actor,
-                    scopeKey: row.scopeKey,
+                    scopeKey: row.owner,
                     issuedAt: row.issuedAt
                 }.toJsonString());
     }
@@ -776,8 +808,26 @@ isolated function reportExpiredWorkflowOperations(types:WorkflowOutboxRow[] expi
 # Runs one sweep and surfaces whatever it expired. Called on a timer by every node; every
 # statement is idempotent, so two nodes sweeping is harmless and needs no leader election.
 public isolated function sweepWorkflowTunnelState() {
-    types:WorkflowOutboxRow[]|error expired =
-        storage:sweepWorkflowTunnel(WF_STALE_SERVE_SECONDS, WF_COMPLETED_RETENTION_SECONDS);
+    // Fetches nobody answered are given up on first. Left alone they keep their token, so
+    // every heartbeat re-offers them and every poll on them reads as "still fetching" — a
+    // question nobody could answer, asked dozens of times, and a caller never told.
+    map<json> abandoned = {
+        response: {
+            httpStatus: 504,
+            body: {"error": {"message": "No workflow runtime answered this request in time"}},
+            fetchedAt: nowUnixSeconds()
+        }
+    };
+    int|error given_up = storage:abandonExpiredCacheFetches(abandoned.toJsonString(),
+            WF_FAILED_READ_TTL_SECONDS);
+    if given_up is error {
+        log:printError("Failed to abandon expired cache fetches", given_up);
+    } else if given_up > 0 {
+        log:printWarn(string `${given_up} cache fetch(es) went unanswered and were abandoned`);
+    }
+
+    types:CacheOperation[]|error expired =
+        storage:sweepCacheTables(WF_STALE_SERVE_SECONDS, WF_COMPLETED_RETENTION_SECONDS);
     if expired is error {
         log:printError("The workflow tunnel sweep failed", expired);
         return;

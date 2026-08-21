@@ -160,13 +160,21 @@ async function wfFetchOnce(url: string, init: RequestInit): Promise<{ status: nu
   }
 }
 
+// crypto.randomUUID exists only in a secure context — HTTPS, or localhost. A console served
+// over plain HTTP on any other host would throw here and fail every mutation before it was
+// sent, so the key falls back to something unique enough for de-duplicating one submit.
+const newIdempotencyKey = (): string =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `wf-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 async function wfRequest<T>(componentId: string, environmentId: string, subpath: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   let request = init;
   if (method !== 'GET') {
     // The key makes a browser-level retry or a double submit collapse onto one operation
     // server-side, instead of acting twice.
-    request = { ...init, headers: { ...(init.headers ?? {}), 'x-idempotency-key': crypto.randomUUID() } };
+    request = { ...init, headers: { ...(init.headers ?? {}), 'x-idempotency-key': newIdempotencyKey() } };
   }
   const deadline = Date.now() + WF_ASYNC_DEADLINE_MS;
   let url = workflowApiUrl(componentId, environmentId, subpath);

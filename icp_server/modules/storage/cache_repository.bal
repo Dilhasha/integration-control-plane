@@ -19,12 +19,13 @@ import icp_server.types;
 import ballerina/log;
 import ballerina/sql;
 import ballerina/time;
+import ballerina/uuid;
 
 // ============================================================================
-// STATELESS WORKFLOW TUNNEL — STORAGE
+// REQUEST CACHE — STORAGE
 // ============================================================================
-// Every piece of tunnel state lives in wf_read_cache and wf_operation_outbox, shared by
-// all ICP nodes, because the node that takes a user's request is usually not the node
+// Every piece of tunnel state lives in cache_entry and cache_operation_outbox, shared by
+// all ICP nodes, because the node that takes a user's data is usually not the node
 // that receives the runtime's next heartbeat. Nothing here may be cached in a
 // module-level variable: that would reintroduce node affinity, and the symptom (works on
 // one node, intermittently stuck on two) is expensive to diagnose.
@@ -44,86 +45,91 @@ import ballerina/time;
 // A read whose command was claimed but produced no result within this many seconds is
 // offered again. It bounds the loss when a heartbeat response is dropped in transit,
 // without a delivery-acknowledgement round trip.
-const int WF_READ_REDELIVER_AFTER_SECONDS = 20;
+const int CACHE_REDELIVER_AFTER_SECONDS = 20;
 
 # Current epoch seconds, the unit every time column in these two tables uses.
 #
 # + return - Seconds since the Unix epoch
-public isolated function wfNowEpoch() returns int => time:utcNow()[0];
+public isolated function cacheNowEpoch() returns int => time:utcNow()[0];
 
 // ── Read cache ───────────────────────────────────────────────────────────────
 
 # Reads one cache row.
 #
-# + cacheKey - The request's key: scope, operation, params and the caller's role set
+# + cacheKey - The data's key: scope, operation, params and the caller's role set
 # + return - The row, `()` when nothing is cached, or an error
-public isolated function getWorkflowCacheRow(string cacheKey)
-        returns types:WorkflowCacheRow?|error {
-    types:WorkflowCacheRow|sql:Error row = dbClient->queryRow(`
-        SELECT cache_key, scope_key, request, fetch_id, status, expires_at, claimed_at, payload
-        FROM wf_read_cache
+public isolated function getCacheEntry(string cacheKey)
+        returns types:CacheEntry?|error {
+    types:CacheEntry|sql:Error row = dbClient->queryRow(`
+        SELECT cache_key, kind, owner, token, status, expires_at, claimed_at, data
+        FROM cache_entry
         WHERE cache_key = ${cacheKey}
     `);
     if row is sql:NoRowsError {
         return ();
     }
     if row is sql:Error {
-        return error(string `Failed to read the workflow cache`, row);
+        return error(string `Failed to read a cache entry`, row);
     }
     return row;
 }
 
-# Creates a FETCHING row, claiming the right to fetch this request.
+# Creates a FETCHING row, claiming the right to fetch this data.
 #
 # The insert *is* the coalescing mechanism: when several requests for the same key arrive
 # at once — on one node or on several — exactly one insert succeeds and the rest are told
 # to poll instead of issuing their own command.
 #
-# + cacheKey - The request's key
-# + scopeKey - `componentId:environmentId`; the invalidation unit, and never role-scoped,
+# + cacheKey - The data's key
+# + kind - What this entry is about, e.g. `workflow.read` — the only workflow-shaped thing
+#          about it, and it is data
+# + owner - The scope the entry belongs to; the invalidation unit, and never identity-scoped,
 #              since a mutation must invalidate every role set's view
-# + request - What to execute: `{operation, params, identity}` as JSON
-# + fetchId - This attempt's id, which becomes the command id
+# + data - What to execute: `{operation, params, identity}` as JSON
+# + token - This attempt's id, which becomes the command id
 # + expiresAt - Epoch seconds after which an unanswered row is abandoned
 # + return - `true` when this caller owns the fetch, `false` when another already does
-public isolated function startWorkflowCacheFetch(string cacheKey, string scopeKey,
-        string request, string fetchId, int expiresAt) returns boolean|error {
+public isolated function startCacheFetch(string cacheKey, string kind, string owner,
+        string data, string token, int expiresAt) returns boolean|error {
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        INSERT INTO wf_read_cache (cache_key, scope_key, request, fetch_id, status, expires_at)
-        VALUES (${cacheKey}, ${scopeKey}, ${request}, ${fetchId}, ${types:WF_CACHE_FETCHING},
+        INSERT INTO cache_entry (cache_key, kind, owner, data, token, status, expires_at)
+        VALUES (${cacheKey}, ${kind}, ${owner}, ${data}, ${token}, ${types:CACHE_FETCHING},
                 ${expiresAt})
     `);
     if result is sql:Error {
         if classifySqlError(result) == DUPLICATE_KEY {
-            // Another request created the row first. Both callers poll the same row.
+            // Another data created the row first. Both callers poll the same row.
             return false;
         }
-        return error(string `Failed to start a workflow cache fetch`, result);
+        return error(string `Failed to start a cache fetch`, result);
     }
     return true;
 }
 
-# Claims the refresh of a row that is already serving a payload.
+# Claims the refresh of an entry that is already serving an answer.
 #
-# A stale row keeps its payload and its READY status while it refreshes, so the caller
-# still gets data — `fetch_id` alone marks a refresh as in flight. Only the caller that
-# wins this update issues a command.
+# A stale entry keeps its answer and its READY status while it refreshes, so the caller still
+# gets data — `token` alone marks a refresh as in flight. Only the caller that wins this
+# update issues a fetch.
 #
-# + cacheKey - The request's key
-# + fetchId - This attempt's id, which becomes the command id
-# + request - The refreshed request document, in case the earlier one is stale
+# It deliberately does NOT write `data`. The cache key is computed from the request, so a
+# refresh of the same key is a refresh of the same request: rewriting it would replace the
+# answer being served with the question that produced it, which is exactly the payload
+# stale-while-revalidate exists to keep.
+#
+# + cacheKey - The entry's key
+# + token - This attempt's id, which becomes the fetch's command id
 # + expiresAt - New abandonment deadline for the in-flight fetch
 # + return - `true` when this caller owns the refresh, `false` when one is already running
-public isolated function claimWorkflowCacheRefresh(string cacheKey, string fetchId,
-        string request, int expiresAt) returns boolean|error {
+public isolated function claimCacheRefresh(string cacheKey, string token, int expiresAt)
+        returns boolean|error {
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        UPDATE wf_read_cache
-        SET fetch_id = ${fetchId}, request = ${request}, claimed_at = NULL,
-            expires_at = ${expiresAt}
-        WHERE cache_key = ${cacheKey} AND fetch_id IS NULL
+        UPDATE cache_entry
+        SET token = ${token}, claimed_at = NULL, expires_at = ${expiresAt}
+        WHERE cache_key = ${cacheKey} AND token IS NULL
     `);
     if result is sql:Error {
-        return error(string `Failed to claim a workflow cache refresh`, result);
+        return error(string `Failed to claim a cache refresh`, result);
     }
     int? affected = result.affectedRowCount;
     return affected is int && affected > 0;
@@ -131,57 +137,58 @@ public isolated function claimWorkflowCacheRefresh(string cacheKey, string fetch
 
 # Records a fetched result, or discards it.
 #
-# The update is fenced on `fetch_id`: zero rows affected means the attempt was
-# invalidated by a mutation or superseded by a newer attempt, so its payload describes a
+# The update is fenced on `token`: zero rows affected means the attempt was
+# invalidated by a mutation or superseded by a newer attempt, so its data describes a
 # world that no longer exists and must not be stored. This is what stops a late result
 # resurrecting a task somebody has completed.
 #
-# + cacheKey - The request's key
-# + fetchId - The attempt this result belongs to
-# + payload - The response document
+# + cacheKey - The data's key
+# + token - The attempt this result belongs to
+# + data - The response document
 # + expiresAt - Epoch seconds until the entry goes stale
 # + return - `true` when stored, `false` when discarded as superseded, or an error
-public isolated function completeWorkflowCacheFetch(string cacheKey, string fetchId,
-        string payload, int expiresAt) returns boolean|error {
+public isolated function completeCacheFetch(string cacheKey, string token,
+        string data, int expiresAt) returns boolean|error {
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        UPDATE wf_read_cache
-        SET status = ${types:WF_CACHE_READY}, payload = ${payload}, expires_at = ${expiresAt},
-            fetch_id = NULL, claimed_at = NULL
-        WHERE cache_key = ${cacheKey} AND fetch_id = ${fetchId}
+        UPDATE cache_entry
+        SET status = ${types:CACHE_READY}, data = ${data}, expires_at = ${expiresAt},
+            token = NULL, claimed_at = NULL
+        WHERE cache_key = ${cacheKey} AND token = ${token}
     `);
     if result is sql:Error {
-        return error(string `Failed to store a workflow cache result`, result);
+        return error(string `Failed to store a cache result`, result);
     }
     int? affected = result.affectedRowCount;
     boolean stored = affected is int && affected > 0;
     if !stored {
-        log:printDebug("Discarded a superseded workflow cache result", cacheKey = cacheKey,
-                fetchId = fetchId);
+        log:printDebug("Discarded a superseded cache result", cacheKey = cacheKey,
+                token = token);
     }
     return stored;
 }
 
 # Records that a fetch failed. Fenced exactly like a success.
 #
-# A row that already holds a payload keeps it: a failed refresh is a reason to go on
+# A row that already holds a data keeps it: a failed refresh is a reason to go on
 # serving the last good answer, not to throw it away.
 #
-# + cacheKey - The request's key
-# + fetchId - The attempt this failure belongs to
+# + cacheKey - The data's key
+# + token - The attempt this failure belongs to
 # + errorPayload - The failure as a response document
 # + expiresAt - Epoch seconds until the failed entry is retried
 # + return - `true` when recorded, `false` when discarded as superseded, or an error
-public isolated function failWorkflowCacheFetch(string cacheKey, string fetchId,
+public isolated function failCacheFetch(string cacheKey, string token,
         string errorPayload, int expiresAt) returns boolean|error {
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        UPDATE wf_read_cache
-        SET status = CASE WHEN payload IS NULL THEN ${types:WF_CACHE_FAILED} ELSE status END,
-            payload = CASE WHEN payload IS NULL THEN ${errorPayload} ELSE payload END,
-            expires_at = ${expiresAt}, fetch_id = NULL, claimed_at = NULL
-        WHERE cache_key = ${cacheKey} AND fetch_id = ${fetchId}
+        UPDATE cache_entry
+        SET status = CASE WHEN status = ${types:CACHE_FETCHING}
+                          THEN ${types:CACHE_FAILED} ELSE status END,
+            data = CASE WHEN status = ${types:CACHE_FETCHING} THEN ${errorPayload} ELSE data END,
+            expires_at = ${expiresAt}, token = NULL, claimed_at = NULL
+        WHERE cache_key = ${cacheKey} AND token = ${token}
     `);
     if result is sql:Error {
-        return error(string `Failed to record a workflow cache failure`, result);
+        return error(string `Failed to record a cache failure`, result);
     }
     int? affected = result.affectedRowCount;
     return affected is int && affected > 0;
@@ -200,94 +207,123 @@ public isolated function failWorkflowCacheFetch(string cacheKey, string fetchId,
 # Entries whose expiry is far in the future are the immutable ones — a closed instance's
 # history cannot be falsified by anything — so they are left alone.
 #
-# + scopeKey - `componentId:environmentId`
+# + owner - `componentId:environmentId`
 # + liveHorizonSeconds - Only rows expiring within this many seconds are marked; longer
 #                        TTLs identify terminal, immutable data
 # + return - How many entries were marked, or an error
-public isolated function staleWorkflowCacheScope(string scopeKey, int liveHorizonSeconds)
+public isolated function staleCacheOwner(string owner, int liveHorizonSeconds)
         returns int|error {
-    int now = wfNowEpoch();
+    int now = cacheNowEpoch();
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        UPDATE wf_read_cache
+        UPDATE cache_entry
         SET expires_at = ${now}
-        WHERE scope_key = ${scopeKey}
+        WHERE owner = ${owner}
           AND expires_at > ${now}
           AND expires_at < ${now + liveHorizonSeconds}
     `);
     if result is sql:Error {
-        return error(string `Failed to invalidate the workflow cache for a scope`, result);
+        return error(string `Failed to invalidate an owner's cache entries`, result);
     }
     int? affected = result.affectedRowCount;
     return affected is int ? affected : 0;
 }
 
 # Expires one cached read on demand — the `?refresh=true` escape hatch. The entry is not
-# deleted: the stale payload keeps serving (with its age shown) while the refresh the caller
+# deleted: the stale data keeps serving (with its age shown) while the refresh the caller
 # forced runs behind it. A no-op for an entry that is already stale or absent.
 #
 # + cacheKey - The entry to expire
 # + return - An error only when the database itself failed
-public isolated function expireWorkflowCacheEntry(string cacheKey) returns error? {
-    int now = wfNowEpoch();
+public isolated function expireCacheEntry(string cacheKey) returns error? {
+    int now = cacheNowEpoch();
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        UPDATE wf_read_cache
+        UPDATE cache_entry
         SET expires_at = ${now}
         WHERE cache_key = ${cacheKey} AND expires_at > ${now}
     `);
     if result is sql:Error {
-        return error(string `Failed to expire a workflow cache entry`, result);
+        return error(string `Failed to expire a cache entry`, result);
     }
     return ();
 }
 
 # Takes up to `count` reads a runtime should execute, oldest claim first.
 #
-# Rows already claimed are offered again only after `WF_READ_REDELIVER_AFTER_SECONDS`, so
-# a dropped heartbeat response costs one delay rather than a stuck request. Redelivery is
+# Rows already claimed are offered again only after `CACHE_REDELIVER_AFTER_SECONDS`, so
+# a dropped heartbeat response costs one delay rather than a stuck data. Redelivery is
 # safe because the bridge replays a command id it has already executed.
 #
-# + scopeKey - The scope this runtime serves
+# + owner - The scope this runtime serves
 # + count - Hard cap on how many reads one heartbeat may carry
 # + return - The reads to send, or an error
-public isolated function claimWorkflowCacheReads(string scopeKey, int count)
-        returns types:WorkflowPendingRead[]|error {
-    int now = wfNowEpoch();
-    int redeliverBefore = now - WF_READ_REDELIVER_AFTER_SECONDS;
+public isolated function claimCacheFetches(string owner, int count)
+        returns types:CachePendingFetch[]|error {
+    int now = cacheNowEpoch();
+    int redeliverBefore = now - CACHE_REDELIVER_AFTER_SECONDS;
     sql:ParameterizedQuery query = `
-        SELECT cache_key, fetch_id, request
-        FROM wf_read_cache
-        WHERE scope_key = ${scopeKey}
-          AND fetch_id IS NOT NULL
+        SELECT cache_key, token, data
+        FROM cache_entry
+        WHERE owner = ${owner}
+          AND token IS NOT NULL
+          AND expires_at > ${now}
           AND (claimed_at IS NULL OR claimed_at < ${redeliverBefore})
         ORDER BY created_at
     `;
     query = appendLimitClause(query, count);
-    types:WorkflowPendingRead[] reads = [];
+    types:CachePendingFetch[] fetches = [];
     do {
-        stream<types:WorkflowPendingRead, sql:Error?> rows = dbClient->query(query);
-        check from types:WorkflowPendingRead read in rows
+        stream<types:CachePendingFetch, sql:Error?> rows = dbClient->query(query);
+        check from types:CachePendingFetch fetch in rows
             do {
-                reads.push(read);
+                fetches.push(fetch);
             };
     } on fail error e {
-        return error("Failed to claim workflow cache reads", e);
+        return error("Failed to claim cache fetches", e);
     }
-    foreach types:WorkflowPendingRead read in reads {
-        // Best effort: a stamp that does not land means the read is offered once more,
-        // which the bridge absorbs as a replay.
+    foreach types:CachePendingFetch fetch in fetches {
+        // Best effort: a stamp that does not land means the fetch is offered once more,
+        // which the executing side absorbs as a replay.
         sql:ExecutionResult|sql:Error stamp = dbClient->execute(`
-            UPDATE wf_read_cache SET claimed_at = ${now}
-            WHERE cache_key = ${read.cacheKey} AND fetch_id = ${read.fetchId}
+            UPDATE cache_entry SET claimed_at = ${now}
+            WHERE cache_key = ${fetch.cacheKey} AND token = ${fetch.token}
         `);
         if stamp is sql:Error {
-            log:printWarn("Failed to stamp a claimed workflow read", stamp,
-                    cacheKey = read.cacheKey);
+            log:printWarn("Failed to stamp a claimed cache fetch", stamp,
+                    cacheKey = fetch.cacheKey);
         }
     }
-    return reads;
+    return fetches;
 }
 
-// ── Mutation outbox ──────────────────────────────────────────────────────────
+# Gives up on fetches nobody answered before their deadline.
+#
+# Without this an unanswered fetch kept its token and was re-offered on every heartbeat until
+# the sweeper deleted the row - dozens of commands for one question nobody could answer - and
+# the caller polling it never got an answer at all, because a row with a token reads as "still
+# fetching". Failing it turns that into a reply.
+#
+# + failureData - What to record as the entry's answer, as JSON
+# + retryAfterSeconds - How long before the entry may be fetched again
+# + return - How many fetches were abandoned, or an error
+public isolated function abandonExpiredCacheFetches(string failureData, int retryAfterSeconds)
+        returns int|error {
+    int now = cacheNowEpoch();
+    sql:ExecutionResult|sql:Error result = dbClient->execute(`
+        UPDATE cache_entry
+        SET status = CASE WHEN status = ${types:CACHE_FETCHING}
+                          THEN ${types:CACHE_FAILED} ELSE status END,
+            data = CASE WHEN status = ${types:CACHE_FETCHING} THEN ${failureData} ELSE data END,
+            token = NULL, claimed_at = NULL, expires_at = ${now + retryAfterSeconds}
+        WHERE token IS NOT NULL AND expires_at <= ${now}
+    `);
+    if result is sql:Error {
+        return error(string `Failed to abandon expired cache fetches`, result);
+    }
+    int? affected = result.affectedRowCount;
+    return affected is int ? affected : 0;
+}
+
+// ── Operation outbox ──────────────────────────────────────────────────────────
 
 # Queues a mutation for delivery to one runtime.
 #
@@ -296,22 +332,22 @@ public isolated function claimWorkflowCacheReads(string scopeKey, int count)
 # genuinely prevent. Two *different* users acting on the same task are two operations by
 # design: one succeeds and the other must be told it lost.
 #
-# + operation - The row to queue, with its payload and deadline already built
+# + operation - The row to queue, with its data and deadline already built
 # + return - `true` when queued, `false` when this idempotency key already exists
-public isolated function enqueueWorkflowOperation(types:WorkflowOutboxRow operation)
+public isolated function enqueueCacheOperation(types:CacheOperation operation)
         returns boolean|error {
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        INSERT INTO wf_operation_outbox (operation_id, runtime_id, scope_key, status,
-                                         issued_at, deadline, payload)
-        VALUES (${operation.operationId}, ${operation.runtimeId}, ${operation.scopeKey},
-                ${types:WF_OP_PENDING}, ${operation.issuedAt}, ${operation.deadline},
-                ${operation.payload})
+        INSERT INTO cache_operation_outbox (operation_id, target, owner, kind, status,
+                                            issued_at, deadline, data)
+        VALUES (${operation.operationId}, ${operation.target}, ${operation.owner},
+                ${operation.kind}, ${types:CACHE_OP_PENDING}, ${operation.issuedAt},
+                ${operation.deadline}, ${operation.data})
     `);
     if result is sql:Error {
         if classifySqlError(result) == DUPLICATE_KEY {
             return false;
         }
-        return error(string `Failed to queue a workflow operation`, result);
+        return error(string `Failed to queue an operation`, result);
     }
     return true;
 }
@@ -320,19 +356,19 @@ public isolated function enqueueWorkflowOperation(types:WorkflowOutboxRow operat
 #
 # + operationId - The operation's id
 # + return - The row, `()` when unknown, or an error
-public isolated function getWorkflowOperation(string operationId)
-        returns types:WorkflowOutboxRow?|error {
-    types:WorkflowOutboxRow|sql:Error row = dbClient->queryRow(`
-        SELECT operation_id, runtime_id, scope_key, status, issued_at, deadline,
-               delivered_at, completed_at, payload, result
-        FROM wf_operation_outbox
+public isolated function getCacheOperation(string operationId)
+        returns types:CacheOperation?|error {
+    types:CacheOperation|sql:Error row = dbClient->queryRow(`
+        SELECT operation_id, target, owner, kind, status, issued_at, deadline,
+               delivered_at, completed_at, data, result
+        FROM cache_operation_outbox
         WHERE operation_id = ${operationId}
     `);
     if row is sql:NoRowsError {
         return ();
     }
     if row is sql:Error {
-        return error(string `Failed to read a workflow operation`, row);
+        return error(string `Failed to read an operation`, row);
     }
     return row;
 }
@@ -347,37 +383,37 @@ public isolated function getWorkflowOperation(string operationId)
 # + runtimeId - The runtime whose heartbeat is being answered
 # + count - Hard cap on how many mutations one heartbeat may carry
 # + return - The mutations to send, or an error
-public isolated function claimWorkflowOperations(string runtimeId, int count)
-        returns types:WorkflowOutboxRow[]|error {
-    int now = wfNowEpoch();
+public isolated function claimCacheOperations(string runtimeId, int count)
+        returns types:CacheOperation[]|error {
+    int now = cacheNowEpoch();
     sql:ParameterizedQuery query = `
-        SELECT operation_id, runtime_id, scope_key, status, issued_at, deadline,
-               delivered_at, completed_at, payload, result
-        FROM wf_operation_outbox
-        WHERE runtime_id = ${runtimeId}
-          AND status = ${types:WF_OP_PENDING}
+        SELECT operation_id, target, owner, kind, status, issued_at, deadline,
+               delivered_at, completed_at, data, result
+        FROM cache_operation_outbox
+        WHERE target = ${runtimeId}
+          AND status = ${types:CACHE_OP_PENDING}
           AND deadline > ${now}
         ORDER BY issued_at
     `;
     query = appendLimitClause(query, count);
-    types:WorkflowOutboxRow[] operations = [];
+    types:CacheOperation[] operations = [];
     do {
-        stream<types:WorkflowOutboxRow, sql:Error?> rows = dbClient->query(query);
-        check from types:WorkflowOutboxRow operation in rows
+        stream<types:CacheOperation, sql:Error?> rows = dbClient->query(query);
+        check from types:CacheOperation operation in rows
             do {
                 operations.push(operation);
             };
     } on fail error e {
-        return error("Failed to claim workflow operations", e);
+        return error("Failed to claim operations", e);
     }
-    foreach types:WorkflowOutboxRow operation in operations {
+    foreach types:CacheOperation operation in operations {
         sql:ExecutionResult|sql:Error marked = dbClient->execute(`
-            UPDATE wf_operation_outbox
-            SET status = ${types:WF_OP_DELIVERED}, delivered_at = ${now}
-            WHERE operation_id = ${operation.operationId} AND status = ${types:WF_OP_PENDING}
+            UPDATE cache_operation_outbox
+            SET status = ${types:CACHE_OP_DELIVERED}, delivered_at = ${now}
+            WHERE operation_id = ${operation.operationId} AND status = ${types:CACHE_OP_PENDING}
         `);
         if marked is sql:Error {
-            log:printWarn("Failed to mark a workflow operation delivered", marked,
+            log:printWarn("Failed to mark a cached operation delivered", marked,
                     operationId = operation.operationId);
         }
     }
@@ -396,15 +432,15 @@ public isolated function claimWorkflowOperations(string runtimeId, int count)
 # + result - The outcome document, including the error code when it failed
 # + return - `true` when this call recorded the outcome, `false` when it was already
 #            recorded, or an error
-public isolated function completeWorkflowOperation(string operationId, string status,
+public isolated function completeCacheOperation(string operationId, string status,
         string result) returns boolean|error {
     sql:ExecutionResult|sql:Error updated = dbClient->execute(`
-        UPDATE wf_operation_outbox
-        SET status = ${status}, result = ${result}, completed_at = ${wfNowEpoch()}
-        WHERE operation_id = ${operationId} AND status = ${types:WF_OP_DELIVERED}
+        UPDATE cache_operation_outbox
+        SET status = ${status}, result = ${result}, completed_at = ${cacheNowEpoch()}
+        WHERE operation_id = ${operationId} AND status = ${types:CACHE_OP_DELIVERED}
     `);
     if updated is sql:Error {
-        return error(string `Failed to record a workflow operation outcome`, updated);
+        return error(string `Failed to record an operation outcome`, updated);
     }
     int? affected = updated.affectedRowCount;
     return affected is int && affected > 0;
@@ -423,65 +459,63 @@ public isolated function completeWorkflowOperation(string operationId, string st
 # + staleRetentionSeconds - How long past expiry a cache row stays servable
 # + completedRetentionSeconds - How long a recorded outcome stays readable by the console
 # + return - The operations this pass expired, so the caller can surface each one, or an error
-public isolated function sweepWorkflowTunnel(int staleRetentionSeconds,
-        int completedRetentionSeconds) returns types:WorkflowOutboxRow[]|error {
-    int now = wfNowEpoch();
+public isolated function sweepCacheTables(int staleRetentionSeconds,
+        int completedRetentionSeconds) returns types:CacheOperation[]|error {
+    int now = cacheNowEpoch();
 
-    // Read the rows about to expire before expiring them: a caller that cannot name the
-    // operations it lost cannot tell anyone about them, and an unconfirmed mutation that
-    // nobody hears about is exactly the silent loss this design exists to prevent.
-    types:WorkflowOutboxRow[] expiring = [];
-    do {
-        stream<types:WorkflowOutboxRow, sql:Error?> rows = dbClient->query(`
-            SELECT operation_id, runtime_id, scope_key, status, issued_at, deadline,
-                   delivered_at, completed_at, payload, result
-            FROM wf_operation_outbox
-            WHERE deadline < ${now}
-              AND status IN (${types:WF_OP_PENDING}, ${types:WF_OP_DELIVERED})
-        `);
-        check from types:WorkflowOutboxRow row in rows
-            do {
-                expiring.push(row);
-            };
-    } on fail error e {
-        return error("Failed to read expiring workflow operations", e);
-    }
-
-    // 1. A mutation past its deadline was never confirmed. It becomes EXPIRED so the
-    //    caller can raise the notification that says so — the outcome nobody established
-    //    is exactly what must not be dropped silently.
+    // Expire FIRST, stamping this sweep's own id, then read back only what this call
+    // transitioned. Reading first and expiring second let two nodes see the same rows before
+    // either UPDATE ran, so both returned them and both raised a notification for one
+    // operation — the exactly-once discipline that completeCacheOperation establishes for
+    // outcomes, undone by the sweep that reports them. Publish what you transitioned.
+    string sweepId = uuid:createType4AsString();
     sql:ExecutionResult|sql:Error expired = dbClient->execute(`
-        UPDATE wf_operation_outbox
-        SET status = ${types:WF_OP_EXPIRED}, completed_at = ${now}
+        UPDATE cache_operation_outbox
+        SET status = ${types:CACHE_OP_EXPIRED}, completed_at = ${now}, result = ${sweepId}
         WHERE deadline < ${now}
-          AND status IN (${types:WF_OP_PENDING}, ${types:WF_OP_DELIVERED})
+          AND status IN (${types:CACHE_OP_PENDING}, ${types:CACHE_OP_DELIVERED})
     `);
     if expired is sql:Error {
-        return error(string `Failed to expire unconfirmed workflow operations`, expired);
+        return error(string `Failed to expire unconfirmed operations`, expired);
     }
     int? expiredCount = expired.affectedRowCount;
+    types:CacheOperation[] expiring = [];
     if expiredCount is int && expiredCount > 0 {
-        log:printWarn(string `${expiredCount} workflow operation(s) expired unconfirmed`);
+        log:printWarn(string `${expiredCount} operation(s) expired unconfirmed`);
+        do {
+            stream<types:CacheOperation, sql:Error?> rows = dbClient->query(`
+                SELECT operation_id, target, owner, kind, status, issued_at, deadline,
+                       delivered_at, completed_at, data, result
+                FROM cache_operation_outbox
+                WHERE status = ${types:CACHE_OP_EXPIRED} AND result = ${sweepId}
+            `);
+            check from types:CacheOperation row in rows
+                do {
+                    expiring.push(row);
+                };
+        } on fail error e {
+            return error("Failed to read the operations this sweep expired", e);
+        }
     }
 
     // 2. Cache rows past the window in which they would still have been served.
     sql:ExecutionResult|sql:Error dropped = dbClient->execute(`
-        DELETE FROM wf_read_cache WHERE expires_at < ${now - staleRetentionSeconds}
+        DELETE FROM cache_entry WHERE expires_at < ${now - staleRetentionSeconds}
     `);
     if dropped is sql:Error {
-        return error(string `Failed to sweep the workflow cache`, dropped);
+        return error(string `Failed to sweep the cache`, dropped);
     }
 
     // 3. Mutations whose outcome is recorded elsewhere (audit log for a success, an
     //    unresolved system event for a failure), and which the console has had time to
     //    read. FAILED and EXPIRED rows stay until their notification is resolved.
     sql:ExecutionResult|sql:Error finished = dbClient->execute(`
-        DELETE FROM wf_operation_outbox
-        WHERE status = ${types:WF_OP_COMPLETED}
+        DELETE FROM cache_operation_outbox
+        WHERE status = ${types:CACHE_OP_COMPLETED}
           AND completed_at < ${now - completedRetentionSeconds}
     `);
     if finished is sql:Error {
-        return error(string `Failed to sweep completed workflow operations`, finished);
+        return error(string `Failed to sweep completed operations`, finished);
     }
     return expiring;
 }
@@ -490,7 +524,7 @@ public isolated function sweepWorkflowTunnel(int staleRetentionSeconds,
 // A runtime whose scope somebody is actively working in is asked to heartbeat faster, so
 // queued reads and mutations are picked up in about a second rather than on its normal
 // interval. The window lives on the runtime row rather than in memory for the same reason
-// everything else here does: the node that serves the user's request is usually not the
+// everything else here does: the node that serves the user's data is usually not the
 // node that answers the heartbeat, so an in-memory window would boost the wrong half of
 // the time.
 
@@ -500,7 +534,7 @@ public isolated function sweepWorkflowTunnel(int staleRetentionSeconds,
 # + environmentId - The environment
 # + until - Epoch seconds up to which fast heartbeats are wanted
 # + return - An error if the update failed
-public isolated function boostWorkflowScope(string componentId, string environmentId, int until)
+public isolated function boostCacheOwner(string componentId, string environmentId, int until)
         returns error? {
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
         UPDATE runtimes
@@ -509,7 +543,7 @@ public isolated function boostWorkflowScope(string componentId, string environme
           AND (wf_boosted_until IS NULL OR wf_boosted_until < ${until})
     `);
     if result is sql:Error {
-        return error(string `Failed to boost the workflow scope`, result);
+        return error(string `Failed to boost an owner`, result);
     }
     return ();
 }
@@ -518,7 +552,7 @@ public isolated function boostWorkflowScope(string componentId, string environme
 #
 # + runtimeId - The runtime being answered
 # + return - Seconds of boost remaining (0 when not boosted), or an error
-public isolated function workflowBoostRemaining(string runtimeId) returns int|error {
+public isolated function cacheBoostRemaining(string runtimeId) returns int|error {
     record {|int? wf_boosted_until;|}|sql:Error row = dbClient->queryRow(`
         SELECT wf_boosted_until FROM runtimes WHERE runtime_id = ${runtimeId}
     `);
@@ -526,13 +560,13 @@ public isolated function workflowBoostRemaining(string runtimeId) returns int|er
         return 0;
     }
     if row is sql:Error {
-        return error(string `Failed to read the workflow boost window`, row);
+        return error(string `Failed to read a boost window`, row);
     }
     int? until = row.wf_boosted_until;
     if until is () {
         return 0;
     }
-    int remaining = until - wfNowEpoch();
+    int remaining = until - cacheNowEpoch();
     return remaining > 0 ? remaining : 0;
 }
 
@@ -550,7 +584,7 @@ public isolated function workflowBoostRemaining(string runtimeId) returns int|er
 # + runtimeId - The runtime being answered
 # + return - `[componentId, environmentId, boostSecondsRemaining]`, `()` when the runtime is
 #            unknown or has no component, or an error
-public isolated function getWorkflowScopeForRuntime(string runtimeId)
+public isolated function getRuntimeCacheOwner(string runtimeId)
         returns [string, string, int]?|error {
     record {|string? component_id; string environment_id; int? wf_boosted_until;|}|sql:Error row =
         dbClient->queryRow(`
@@ -561,13 +595,13 @@ public isolated function getWorkflowScopeForRuntime(string runtimeId)
         return ();
     }
     if row is sql:Error {
-        return error(string `Failed to read a runtime's workflow scope`, row);
+        return error(string `Failed to read a runtime's cache owner`, row);
     }
     string? componentId = row.component_id;
     if componentId is () {
         return ();
     }
     int? until = row.wf_boosted_until;
-    int remaining = until is int ? until - wfNowEpoch() : 0;
+    int remaining = until is int ? until - cacheNowEpoch() : 0;
     return [componentId, row.environment_id, remaining > 0 ? remaining : 0];
 }

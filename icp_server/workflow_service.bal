@@ -232,24 +232,24 @@ isolated function acceptWorkflowMutation(http:Request req, string componentId,
 # else acted first. `EXPIRED` is deliberately distinct from `FAILED`: the ICP never learned
 # the outcome, so the caller is told to check the target's state rather than to retry.
 isolated function serveWorkflowOperationStatus(string operationId) returns http:Response {
-    types:WorkflowOutboxRow?|error row = storage:getWorkflowOperation(operationId);
+    types:CacheOperation?|error row = storage:getCacheOperation(operationId);
     if row is error {
         return workflowErrorResponse(500, "Failed to read the operation: " + row.message());
     }
     if row is () {
         return workflowErrorResponse(404, "Unknown operation: " + operationId);
     }
-    if row.status == types:WF_OP_PENDING || row.status == types:WF_OP_DELIVERED {
+    if row.status == types:CACHE_OP_PENDING || row.status == types:CACHE_OP_DELIVERED {
         http:Response pending = new;
         pending.statusCode = 202;
         pending.setJsonPayload({status: row.status, operationId: operationId, retryAfterMs: 750});
         return pending;
     }
-    if row.status == types:WF_OP_EXPIRED {
+    if row.status == types:CACHE_OP_EXPIRED {
         http:Response expired = new;
         expired.statusCode = 504;
         expired.setJsonPayload({
-            status: types:WF_OP_EXPIRED,
+            status: types:CACHE_OP_EXPIRED,
             operationId: operationId,
             "error": {
                 "message": "The integration did not confirm this operation. Check the target's " +
