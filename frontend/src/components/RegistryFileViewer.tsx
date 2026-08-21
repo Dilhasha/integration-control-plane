@@ -72,13 +72,12 @@ export function RegistryFileViewer({ runtimeId, filePath, item, onClose }: Regis
     }, 100);
   };
 
-  const getLanguage = (mediaType: string): string => {
+  const getLanguage = (mediaType: string): 'text' | 'xml' | 'json' | 'yaml' | 'javascript' => {
     if (mediaType.includes('xml')) return 'xml';
     if (mediaType.includes('json')) return 'json';
     if (mediaType.includes('javascript')) return 'javascript';
-    if (mediaType.includes('python')) return 'python';
-    if (mediaType.includes('java')) return 'java';
     if (mediaType.includes('yaml') || mediaType.includes('yml')) return 'yaml';
+    // Languages the viewer has no highlighter for (python, java, ...) render as plain text.
     return 'text';
   };
 
