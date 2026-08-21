@@ -240,8 +240,12 @@ function WorkflowsAdmin({
   const [integration, setIntegration] = useState<WorkflowTarget | null>(null);
 
   const multi = scope.targets.length > 1;
-  // Narrowing by integration is just a task-queue filter on the same gateway request.
-  const taskQueue = integration?.handler ?? scope.taskQueue;
+  // Narrowing by integration WOULD be a task-queue filter on the same gateway request, if the
+  // browser knew the queue. It does not: `handler` is the integration's name, not the queue its
+  // runtime works (see the note in pages/Workflows.tsx), and sending it filtered every result
+  // away — an empty list presented as an answer. Sending nothing shows more than was asked for,
+  // which is the safer way for this to be wrong until /task-queues resolves the real value.
+  const taskQueue = scope.taskQueue;
   const definitions = useWorkflowDefinitionsAcross(scope.targets, scope.environmentId);
 
   const filters = {
@@ -548,7 +552,8 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
   const timeFilter = useTimeRangeFilter();
 
   const multi = scope.targets.length > 1;
-  const taskQueue = integration?.handler ?? scope.taskQueue;
+  // Same as above: the handler is not the runtime's task queue, so it is not a filter.
+  const taskQueue = scope.taskQueue;
   const definitions = useWorkflowDefinitionsAcross(scope.targets, scope.environmentId);
   const {
     data: result,
