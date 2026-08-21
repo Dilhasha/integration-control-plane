@@ -213,7 +213,7 @@ async function wfFetchable<T>(componentId: string, environmentId: string, subpat
 }
 
 /** Comes back at the interval the server asked for while a read is still being prepared. */
-export const fetchableRefetch = <T,>(data: Fetchable<T> | undefined): number | false =>
+const fetchableRefetch = <T,>(data: Fetchable<T> | undefined): number | false =>
   data?.state === 'fetching' ? data.retryAfterMs : false;
 
 /** Applies a projection to a ready value, so a hook can unwrap an envelope or default a

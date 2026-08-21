@@ -369,11 +369,6 @@ isolated function unmatchedEntry(map<json> node, string reason) returns map<json
     };
 }
 
-isolated function jsonObjectOf(http:Response response) returns map<json>? {
-    json|error payload = response.getJsonPayload();
-    return payload is map<json> ? payload : ();
-}
-
 isolated function stringField(map<json> value, string key) returns string? {
     json raw = value[key];
     return raw is string ? raw : ();
