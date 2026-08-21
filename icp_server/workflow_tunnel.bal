@@ -116,8 +116,21 @@ isolated function boostCadence(int boostRemainingSeconds) returns int? {
 // component+environment: the freshest-heartbeat RUNNING runtime that advertised the
 // workflowCommands capability, or () when there is none — the caller then answers 503
 // rather than serving anything stale.
+# The runtime a command will be delivered to, and the Temporal task queue that runtime works.
+#
+# The task queue travels with the target because Temporal's visibility API is scoped to a
+# NAMESPACE, not to a task queue: a listing asked of this component's runtime returns every
+# instance in the namespace, including those of every other integration deployed beside it.
+# The queue is what narrows a listing back to the component the caller actually asked about.
+type WorkflowCommandTarget record {|
+    string runtimeId;
+    // Absent when the runtime published no queue — an older bridge or module. A listing then
+    // stays namespace-wide, which is the previous behaviour rather than a new failure.
+    string? taskQueue;
+|};
+
 isolated function selectWorkflowCommandTarget(string componentId, string environmentId)
-        returns string?|error {
+        returns WorkflowCommandTarget?|error {
     types:WorkflowMetadataRecord[] metadataRecords =
         check storage:getWorkflowMetadataForComponentEnv(componentId, environmentId);
     foreach types:WorkflowMetadataRecord metadataRecord in metadataRecords {
@@ -125,12 +138,38 @@ isolated function selectWorkflowCommandTarget(string componentId, string environ
         if capabilities is string {
             foreach string capability in re `,`.split(capabilities) {
                 if capability.trim() == WORKFLOW_COMMANDS_CAPABILITY {
-                    return metadataRecord.runtimeId;
+                    return {runtimeId: metadataRecord.runtimeId, taskQueue: metadataRecord.taskQueue};
                 }
             }
         }
     }
     return ();
+}
+
+# The operations whose results are namespace-wide unless a task queue narrows them. Every
+# other operation addresses one instance or task by id, where the id is already the scope.
+final string[] & readonly WF_TASK_QUEUE_SCOPED_OPERATIONS = [
+    "instances.list",
+    "humanTasks.list",
+    "humanTasks.pendingCount",
+    "reviewActivities.list"
+];
+
+# Narrows a listing to the target runtime's task queue, unless the caller named one.
+#
+# A caller-supplied value always wins: the console filters by queue itself when it offers a
+# queue selector, and silently replacing that would ignore what the user picked.
+isolated function withTaskQueueScope(string operation, map<json> params, string? taskQueue)
+        returns map<json> {
+    if taskQueue is () || WF_TASK_QUEUE_SCOPED_OPERATIONS.indexOf(operation) is () {
+        return params;
+    }
+    if params["taskQueue"] is string {
+        return params;
+    }
+    map<json> scoped = params.clone();
+    scoped["taskQueue"] = taskQueue;
+    return scoped;
 }
 
 // ── Serving reads ────────────────────────────────────────────────────────────
@@ -204,7 +243,7 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
         // A row with neither payload nor fetch in flight was abandoned: retry it.
     }
 
-    string? target = check selectWorkflowCommandTarget(componentId, environmentId);
+    WorkflowCommandTarget? target = check selectWorkflowCommandTarget(componentId, environmentId);
     if target is () {
         return {state: "NO_RUNTIME"};
     }
@@ -230,7 +269,7 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
 // Starts a refresh of a stale entry, if this caller wins the claim.
 isolated function startWorkflowReadRefresh(string cacheKey, string operation, map<json> params,
         string[] roles, string componentId, string environmentId, int now) returns error? {
-    string? target = check selectWorkflowCommandTarget(componentId, environmentId);
+    WorkflowCommandTarget? target = check selectWorkflowCommandTarget(componentId, environmentId);
     if target is () {
         // Nothing can answer it; keep serving what we have rather than marking it in flight.
         return ();
@@ -287,7 +326,7 @@ isolated function readOutcomeFromPayload(string payload, types:CacheEntry row, i
 isolated function enqueueWorkflowMutation(string componentId, string environmentId,
         string operation, map<json> params, string userId, string[] roles,
         string idempotencyKey) returns [string, boolean]?|error {
-    string? target = check selectWorkflowCommandTarget(componentId, environmentId);
+    WorkflowCommandTarget? target = check selectWorkflowCommandTarget(componentId, environmentId);
     if target is () {
         return ();
     }
@@ -296,7 +335,7 @@ isolated function enqueueWorkflowMutation(string componentId, string environment
     string operationId = WF_OPERATION_COMMAND_PREFIX + idempotencyKey;
     boolean created = check storage:enqueueCacheOperation({
         operationId: operationId,
-        target: target,
+        target: target.runtimeId,
         kind: CACHE_KIND_WORKFLOW_OPERATION,
         owner: workflowScopeKey(componentId, environmentId),
         status: types:CACHE_OP_PENDING,

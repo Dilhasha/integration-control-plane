@@ -352,7 +352,7 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
     // 4. Map the request to a management operation and tunnel it to the leader
     //    runtime — a RUNNING runtime of this component+environment that advertised
     //    the workflowCommands capability.
-    string?|error tunnelTarget = selectWorkflowCommandTarget(componentId, environmentId);
+    WorkflowCommandTarget?|error tunnelTarget = selectWorkflowCommandTarget(componentId, environmentId);
     if tunnelTarget is error {
         return workflowErrorResponse(500, "Failed to resolve workflow runtime: " + tunnelTarget.message());
     }
@@ -394,15 +394,23 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
         return workflowErrorResponse(404, "Unknown workflow operation: " + string:'join("/", ...wfPath));
     }
 
+    // Narrow listings to this component's task queue. Temporal's visibility API is scoped to
+    // a namespace, so a listing asked of this component's runtime otherwise answers with
+    // every instance in the namespace — every other integration deployed beside it included,
+    // which is both wrong and a disclosure. Applied here rather than at delivery so the
+    // filter is part of the question: the cache key covers it, and the request stored for the
+    // heartbeat to deliver is exactly what was asked.
+    map<json> operationParams = withTaskQueueScope(operation[0], operation[1], tunnelTarget.taskQueue);
+
     // Nothing is held open from here on. A read is answered from the cache, or accepted with
     // 202 while a runtime materializes it; a mutation is queued and answered with the id the
     // console polls. Whichever ICP node receives the runtime's next heartbeat delivers the
     // work — usually not this one.
     if method == http:GET {
-        return serveWorkflowRead(componentId, environmentId, operation[0], operation[1],
+        return serveWorkflowRead(componentId, environmentId, operation[0], operationParams,
                 escapedRoles, forceRefresh);
     }
-    return acceptWorkflowMutation(req, componentId, environmentId, operation[0], operation[1],
+    return acceptWorkflowMutation(req, componentId, environmentId, operation[0], operationParams,
             userContext.userId, escapedRoles);
 }
 
