@@ -483,7 +483,7 @@ isolated function deliverWorkflowCommands(string runtimeId,
     if !heartbeatResponse.acknowledged {
         return;
     }
-    [string, string]?|error scope = storage:getWorkflowScopeForRuntime(runtimeId);
+    [string, string, int]?|error scope = storage:getWorkflowScopeForRuntime(runtimeId);
     if scope is error {
         log:printError("Failed to resolve a runtime's workflow scope", scope,
                 runtimeId = runtimeId);
@@ -558,12 +558,10 @@ isolated function deliverWorkflowCommands(string runtimeId,
         log:printDebug(string `Delivering ${commands.length()} workflow command(s) to runtime ${runtimeId}`);
     }
 
-    int|error boostRemaining = storage:workflowBoostRemaining(runtimeId);
-    if boostRemaining is int {
-        int? cadence = boostCadence(boostRemaining);
-        if cadence is int {
-            heartbeatResponse.nextHeartbeatInSeconds = cadence;
-        }
+    // The boost window came back with the scope, so no second query is needed here.
+    int? cadence = boostCadence(scope[2]);
+    if cadence is int {
+        heartbeatResponse.nextHeartbeatInSeconds = cadence;
     }
 }
 

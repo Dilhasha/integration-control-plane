@@ -536,18 +536,26 @@ public isolated function workflowBoostRemaining(string runtimeId) returns int|er
     return remaining > 0 ? remaining : 0;
 }
 
-# The scope a runtime serves: its component and environment.
+# The scope a runtime serves and how much boost it has left, in ONE query.
+#
+# Folded together deliberately. Every heartbeat of every runtime runs this, and the pool is
+# small (`maxOpenConnections` defaults to 10 per node): two queries where one will do is a
+# steady multiplier on a resource whose exhaustion does not degrade gracefully - a
+# transaction holding a connection while its flow waits for a second one deadlocks the pool
+# rather than slowing down.
 #
 # A dedicated query rather than `getRuntimeById`, because the mapped `Runtime` record does
 # not carry these columns and the delivery path needs nothing else.
 #
 # + runtimeId - The runtime being answered
-# + return - `[componentId, environmentId]`, `()` when the runtime is unknown or has no
-#            component, or an error
+# + return - `[componentId, environmentId, boostSecondsRemaining]`, `()` when the runtime is
+#            unknown or has no component, or an error
 public isolated function getWorkflowScopeForRuntime(string runtimeId)
-        returns [string, string]?|error {
-    record {|string? component_id; string environment_id;|}|sql:Error row = dbClient->queryRow(`
-        SELECT component_id, environment_id FROM runtimes WHERE runtime_id = ${runtimeId}
+        returns [string, string, int]?|error {
+    record {|string? component_id; string environment_id; int? wf_boosted_until;|}|sql:Error row =
+        dbClient->queryRow(`
+        SELECT component_id, environment_id, wf_boosted_until
+        FROM runtimes WHERE runtime_id = ${runtimeId}
     `);
     if row is sql:NoRowsError {
         return ();
@@ -559,5 +567,7 @@ public isolated function getWorkflowScopeForRuntime(string runtimeId)
     if componentId is () {
         return ();
     }
-    return [componentId, row.environment_id];
+    int? until = row.wf_boosted_until;
+    int remaining = until is int ? until - wfNowEpoch() : 0;
+    return [componentId, row.environment_id, remaining > 0 ? remaining : 0];
 }
