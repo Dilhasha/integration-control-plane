@@ -25,7 +25,7 @@ import { DetailRow, StatusChip, SubmitError, WorkflowIdLink, type WorkflowScope 
 import { ReviewActivities, StatusFilter } from './AdminPortal';
 import Authorized from '../Authorized';
 import { Permissions } from '../../constants/permissions';
-import { useCompleteHumanTask, useFailHumanTask, useHumanTask, useHumanTasks, type HumanTask } from '../../api/workflows';
+import { isPreparing, useCompleteHumanTask, useFailHumanTask, useHumanTask, useHumanTasks, valueOf, type HumanTask } from '../../api/workflows';
 
 const emptySx = { py: 4, textAlign: 'center', color: 'text.secondary' } as const;
 
@@ -138,8 +138,14 @@ function MyTasks({ scope, onToast }: { scope: PortalScope; onToast: (t: Toast) =
   // Opened against the integration that owns the task, per the task's own task queue.
   const [open, setOpen] = useState<HumanTask | null>(null);
   const [status, setStatus] = useState('PENDING');
-  const { data: page, isLoading, error, refetch, isFetching } = useHumanTasks(gatewayScope(scope), { status: status === 'All' ? undefined : status, taskQueue: scope.taskQueue, limit: 50 });
+  const { data: result, isLoading, error, refetch, isFetching } = useHumanTasks(gatewayScope(scope), { status: status === 'All' ? undefined : status, taskQueue: scope.taskQueue, limit: 50 });
+  const page = valueOf(result);
   const tasks = sortByStartTimeDesc(page?.items ?? []);
+  // The list is materialized through the integration, so the first request for it is answered
+  // "still fetching". Saying so is not the same as saying there are no tasks.
+  const preparingNote = isPreparing(result) && tasks.length === 0
+    ? 'Fetching tasks from the integration…'
+    : null;
   const multi = scope.targets.length > 1;
 
   return (
@@ -158,6 +164,8 @@ function MyTasks({ scope, onToast }: { scope: PortalScope; onToast: (t: Toast) =
         <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
       ) : error ? (
         <Typography sx={emptySx}>{error instanceof Error ? error.message : 'Failed to load tasks.'}</Typography>
+      ) : preparingNote ? (
+        <Typography sx={emptySx}>{preparingNote}</Typography>
       ) : tasks.length === 0 ? (
         <Typography sx={emptySx}>{status === 'All' ? 'No tasks.' : `No ${status.toLowerCase()} tasks.`}</Typography>
       ) : (
@@ -178,7 +186,11 @@ function payloadDetailEntries(payload: unknown): Array<[string, string]> | null 
 }
 
 function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { scope: WorkflowScope; taskId: string; actionable?: boolean; onClose: () => void; onToast: (t: Toast) => void }) {
-  const { data: task, isLoading, error: taskError } = useHumanTask(scope, taskId);
+  const { data: taskResult, isLoading, error: taskError } = useHumanTask(scope, taskId);
+  const task = valueOf(taskResult);
+  // A dialog opened on a task whose detail is still being prepared shows its spinner rather
+  // than a form with every field blank.
+  const waiting = isLoading || isPreparing(taskResult);
   const complete = useCompleteHumanTask(scope);
   const fail = useFailHumanTask(scope);
   const [mode, setMode] = useState<'view' | 'complete' | 'fail'>('view');
@@ -276,7 +288,7 @@ function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }: { sco
         </Stack>
       </DialogTitle>
       <DialogContent>
-        {isLoading ? (
+        {waiting ? (
           <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
         ) : taskError || !task ? (
           <Typography sx={emptySx}>{taskError instanceof Error ? taskError.message : 'Failed to load task details.'}</Typography>

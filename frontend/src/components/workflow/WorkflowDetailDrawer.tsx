@@ -22,7 +22,7 @@ import { useState } from 'react';
 import CodeViewer from '../CodeViewer';
 import ExecutionGraph from './ExecutionGraph';
 import WorkflowTimeline from './WorkflowTimeline';
-import { useWorkflowExecutionGraph, useWorkflowHistory, useWorkflowInfo, useWorkflowLifecycle, type WorkflowLifecycleAction } from '../../api/workflows';
+import { isPreparing, useWorkflowExecutionGraph, useWorkflowHistory, useWorkflowInfo, useWorkflowLifecycle, valueOf, type WorkflowLifecycleAction } from '../../api/workflows';
 import { extractWorkflowInput, jsonPretty } from './helpers';
 import { StatusChip, type WorkflowScope } from './shared';
 import Authorized from '../Authorized';
@@ -43,13 +43,22 @@ export default function WorkflowDetailDrawer({ scope, workflowId, onClose }: { s
   const [toast, setToast] = useState<{ severity: 'success' | 'error'; message: string } | null>(null);
   const { sidebarWidth } = useLayout();
 
-  const { data: info, isLoading: loadingInfo, error: infoError } = useWorkflowInfo(scope, workflowId);
+  const { data: infoResult, isLoading: loadingInfo, error: infoError } = useWorkflowInfo(scope, workflowId);
   // History is loaded eagerly: the Timeline tab derives the start input from it, renders the timeline,
   // and the History tab renders the raw events.
-  const { data: history = [], isLoading: loadingHistory } = useWorkflowHistory(scope, workflowId);
+  const { data: historyResult, isLoading: loadingHistory } = useWorkflowHistory(scope, workflowId);
   // Fetched for the Execution Graph tab (1) and also the Timeline tab (0), which uses the graph's
   // authoritative node types to fix categories/icons the history alone can't determine.
-  const { data: graph, isLoading: loadingGraph } = useWorkflowExecutionGraph(scope, tab === 0 || tab === 1 ? workflowId : null);
+  const { data: graphResult, isLoading: loadingGraph } = useWorkflowExecutionGraph(scope, tab === 0 || tab === 1 ? workflowId : null);
+  // Each of these is materialized through the integration, so the first read of a drawer that
+  // has just been opened is still being prepared. `preparing` is treated as loading here
+  // rather than as an empty result: an empty history tab would be a wrong answer.
+  const info = valueOf(infoResult);
+  const history = valueOf(historyResult) ?? [];
+  const graph = valueOf(graphResult);
+  const waitingForInfo = loadingInfo || isPreparing(infoResult);
+  const waitingForHistory = loadingHistory || isPreparing(historyResult);
+  const waitingForGraph = loadingGraph || isPreparing(graphResult);
   const lifecycle = useWorkflowLifecycle(scope);
 
   const status = (info?.status as string | undefined) ?? '';
@@ -125,7 +134,7 @@ export default function WorkflowDetailDrawer({ scope, workflowId, onClose }: { s
         {tab === 0 && (
           <Stack gap={2}>
             {/* Info: start input and execution info side by side, then the run's timeline. */}
-            {loadingInfo ? (
+            {waitingForInfo ? (
               <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
             ) : infoError || !info ? (
               <Typography sx={emptySx}>Could not load workflow info.</Typography>
@@ -141,7 +150,7 @@ export default function WorkflowDetailDrawer({ scope, workflowId, onClose }: { s
                 </Box>
               </Stack>
             )}
-            {loadingHistory ? (
+            {waitingForHistory ? (
               <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
             ) : history.length === 0 ? (
               <Typography sx={emptySx}>No history events.</Typography>
@@ -152,7 +161,7 @@ export default function WorkflowDetailDrawer({ scope, workflowId, onClose }: { s
         )}
 
         {tab === 2 &&
-          (loadingHistory ? (
+          (waitingForHistory ? (
             <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
           ) : history.length === 0 ? (
             <Typography sx={emptySx}>No history events.</Typography>
@@ -182,7 +191,7 @@ export default function WorkflowDetailDrawer({ scope, workflowId, onClose }: { s
           ))}
 
         {tab === 1 &&
-          (loadingGraph ? (
+          (waitingForGraph ? (
             <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
           ) : !graph ? (
             <Typography sx={emptySx}>No execution graph available.</Typography>

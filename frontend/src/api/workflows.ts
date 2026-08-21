@@ -168,6 +168,64 @@ const newIdempotencyKey = (): string =>
     ? crypto.randomUUID()
     : `wf-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+/**
+ * A read that may not be answered yet.
+ *
+ * The workflow API materializes a read through the integration, so the first request for a
+ * view nobody has opened recently is answered `202 {status:"FETCHING"}`. Waiting for it inside
+ * the request — which is what this module used to do — makes the page hang with a spinner for
+ * as long as it takes, and tells the user nothing. Surfacing the state instead lets the page
+ * say so and come back for it.
+ */
+export type Fetchable<T> =
+  | { state: 'ready'; value: T }
+  | { state: 'fetching'; retryAfterMs: number };
+
+/** Named to sit beside react-query's own `isFetching` without being mistaken for it: this is
+ *  the SERVER still preparing the answer, not the browser having a request in flight. */
+export const isPreparing = <T,>(r: Fetchable<T> | undefined): boolean => r?.state === 'fetching';
+export const valueOf = <T,>(r: Fetchable<T> | undefined): T | undefined =>
+  r?.state === 'ready' ? r.value : undefined;
+
+/** How soon to come back for a read the server is still preparing, when it names no interval. */
+const WF_FETCHING_POLL_MS = 900;
+
+/**
+ * A read request that reports `fetching` rather than waiting for the answer.
+ *
+ * Used by the list and detail queries, whose caller is a page that can render the state. The
+ * polling belongs to react-query here: it already knows how to come back, and it keeps the
+ * previous answer on screen while it does.
+ */
+async function wfFetchable<T>(componentId: string, environmentId: string, subpath: string): Promise<Fetchable<T>> {
+  const { status, body } = await wfFetchOnce(workflowApiUrl(componentId, environmentId, subpath), {});
+  if (status === 202) {
+    const accepted = (body ?? {}) as { retryAfterMs?: number };
+    return { state: 'fetching', retryAfterMs: accepted.retryAfterMs ?? WF_FETCHING_POLL_MS };
+  }
+  if (status < 200 || status >= 300) {
+    const b = body as { error?: { message?: string }; message?: string } | undefined;
+    const error = new Error(b?.error?.message || b?.message || `Request failed (${status})`);
+    (error as Error & { status?: number }).status = status;
+    throw error;
+  }
+  return { state: 'ready', value: body as T };
+}
+
+/** Comes back at the interval the server asked for while a read is still being prepared. */
+export const fetchableRefetch = <T,>(data: Fetchable<T> | undefined): number | false =>
+  data?.state === 'fetching' ? data.retryAfterMs : false;
+
+/** Applies a projection to a ready value, so a hook can unwrap an envelope or default a
+ *  field without losing the `fetching` state. */
+const mapFetchable = <A, B>(r: Fetchable<A>, f: (a: A) => B): Fetchable<B> =>
+  r.state === 'ready' ? { state: 'ready', value: f(r.value) } : r;
+
+/**
+ * A request that waits for its answer. Mutations use this: the caller pressed a button, so a
+ * spinner on that button is the honest thing to show, and a queued operation is polled by its
+ * id rather than re-sent.
+ */
 async function wfRequest<T>(componentId: string, environmentId: string, subpath: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   let request = init;
@@ -224,8 +282,9 @@ const enabledFor = (s: Scope) => !!s.componentId && !!s.environmentId;
 
 // ── Definitions ──
 
-function fetchDefinitions(componentId: string, environmentId: string): Promise<WorkflowDefinition[]> {
-  return wfRequest<{ definitions: WorkflowDefinition[] }>(componentId, environmentId, 'definitions').then((d) => d.definitions ?? []);
+function fetchDefinitions(componentId: string, environmentId: string): Promise<Fetchable<WorkflowDefinition[]>> {
+  return wfFetchable<{ definitions: WorkflowDefinition[] }>(componentId, environmentId, 'definitions')
+    .then((r) => mapFetchable(r, (d) => d.definitions ?? []));
 }
 
 // ── Workflow instances ──
@@ -242,14 +301,15 @@ export interface WorkflowFilters {
   pageToken?: string;
 }
 
-function fetchWorkflowInstances(componentId: string, environmentId: string, filters: WorkflowFilters): Promise<Page<WorkflowInstance>> {
-  return wfRequest<Page<WorkflowInstance>>(componentId, environmentId, `workflows${buildQuery({ ...filters })}`);
-}
 
 export function useWorkflowInstances(s: Scope, filters: WorkflowFilters) {
   return useQuery({
     queryKey: ['wf', 'instances', s.componentId, s.environmentId, filters],
-    queryFn: () => fetchWorkflowInstances(s.componentId, s.environmentId, filters),
+    // Reports `fetching` on the first request for a view the server has not materialized yet,
+    // so the page can say so instead of showing a spinner for however long it takes, and comes
+    // back at the interval the server asked for.
+    queryFn: () => wfFetchable<Page<WorkflowInstance>>(s.componentId, s.environmentId, `workflows${buildQuery({ ...filters })}`),
+    refetchInterval: ({ state }) => fetchableRefetch(state.data),
     enabled: enabledFor(s),
   });
 }
@@ -257,7 +317,8 @@ export function useWorkflowInstances(s: Scope, filters: WorkflowFilters) {
 export function useWorkflowInfo(s: Scope, workflowId: string | null) {
   return useQuery({
     queryKey: ['wf', 'info', s.componentId, s.environmentId, workflowId],
-    queryFn: () => wfRequest<WorkflowInstance>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}`),
+    queryFn: () => wfFetchable<WorkflowInstance>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}`),
+    refetchInterval: ({ state }) => fetchableRefetch(state.data),
     enabled: enabledFor(s) && !!workflowId,
   });
 }
@@ -265,7 +326,9 @@ export function useWorkflowInfo(s: Scope, workflowId: string | null) {
 export function useWorkflowHistory(s: Scope, workflowId: string | null) {
   return useQuery({
     queryKey: ['wf', 'history', s.componentId, s.environmentId, workflowId],
-    queryFn: () => wfRequest<{ events: HistoryEvent[] }>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}/history`).then((d) => d.events ?? []),
+    queryFn: () => wfFetchable<{ events: HistoryEvent[] }>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}/history`)
+      .then((r) => mapFetchable(r, (d) => d.events ?? [])),
+    refetchInterval: ({ state }) => fetchableRefetch(state.data),
     enabled: enabledFor(s) && !!workflowId,
   });
 }
@@ -273,7 +336,8 @@ export function useWorkflowHistory(s: Scope, workflowId: string | null) {
 export function useWorkflowExecutionGraph(s: Scope, workflowId: string | null) {
   return useQuery({
     queryKey: ['wf', 'graph', s.componentId, s.environmentId, workflowId],
-    queryFn: () => wfRequest<ExecutionGraph>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}/execution-graph`),
+    queryFn: () => wfFetchable<ExecutionGraph>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}/execution-graph`),
+    refetchInterval: ({ state }) => fetchableRefetch(state.data),
     enabled: enabledFor(s) && !!workflowId,
   });
 }
@@ -322,20 +386,22 @@ export interface HumanTaskFilters {
   pageToken?: string;
 }
 
-function fetchHumanTasks(componentId: string, environmentId: string, filters: HumanTaskFilters): Promise<Page<HumanTask>> {
-  return wfRequest<Page<HumanTask>>(componentId, environmentId, `human-tasks${buildQuery({ ...filters })}`);
+function fetchHumanTasks(componentId: string, environmentId: string, filters: HumanTaskFilters): Promise<Fetchable<Page<HumanTask>>> {
+  return wfFetchable<Page<HumanTask>>(componentId, environmentId, `human-tasks${buildQuery({ ...filters })}`);
 }
 
 export function useHumanTasks(s: Scope, filters: HumanTaskFilters) {
   return useQuery({
     queryKey: ['wf', 'human-tasks', s.componentId, s.environmentId, filters],
     queryFn: () => fetchHumanTasks(s.componentId, s.environmentId, filters),
+    refetchInterval: ({ state }) => fetchableRefetch(state.data),
     enabled: enabledFor(s),
   });
 }
 
-function fetchPendingTaskCount(componentId: string, environmentId: string, taskQueue?: string): Promise<number> {
-  return wfRequest<{ count: number }>(componentId, environmentId, `human-tasks/pending-count${buildQuery({ taskQueue })}`).then((d) => d.count ?? 0);
+function fetchPendingTaskCount(componentId: string, environmentId: string, taskQueue?: string): Promise<Fetchable<number>> {
+  return wfFetchable<{ count: number }>(componentId, environmentId, `human-tasks/pending-count${buildQuery({ taskQueue })}`)
+    .then((r) => mapFetchable(r, (d) => d.count ?? 0));
 }
 
 /** `enabled` lets a caller skip the poll when the count is not being shown. */
@@ -344,7 +410,7 @@ export function usePendingTaskCount(s: Scope, taskQueue?: string, enabled = true
     queryKey: ['wf', 'pending-count', s.componentId, s.environmentId, taskQueue],
     queryFn: () => fetchPendingTaskCount(s.componentId, s.environmentId, taskQueue),
     enabled: enabledFor(s) && enabled,
-    refetchInterval: 30000,
+    refetchInterval: ({ state }) => fetchableRefetch(state.data) || 30000,
   });
 }
 
@@ -352,7 +418,7 @@ export function usePendingTaskCount(s: Scope, taskQueue?: string, enabled = true
 export function humanTaskQueryOptions(s: Scope, taskId: string) {
   return {
     queryKey: ['wf', 'human-task', s.componentId, s.environmentId, taskId] as const,
-    queryFn: () => wfRequest<HumanTask>(s.componentId, s.environmentId, `human-tasks/${encodeURIComponent(taskId)}`),
+    queryFn: () => wfFetchable<HumanTask>(s.componentId, s.environmentId, `human-tasks/${encodeURIComponent(taskId)}`),
   };
 }
 
@@ -406,22 +472,28 @@ const REVIEW_ACTIVITY_MAX_PAGES = 20;
 // Page size the badge count reads; a full page is reported as capped rather than as an exact total.
 const PENDING_REVIEW_PAGE = 50;
 
-async function fetchReviewActivities(componentId: string, environmentId: string, filters: ReviewActivityFilters): Promise<Page<ReviewActivity>> {
+async function fetchReviewActivities(componentId: string, environmentId: string, filters: ReviewActivityFilters): Promise<Fetchable<Page<ReviewActivity>>> {
   const items: ReviewActivity[] = [];
   let pageToken: string | undefined;
   for (let i = 0; i < REVIEW_ACTIVITY_MAX_PAGES; i++) {
-    const page = await wfRequest<Page<ReviewActivity>>(componentId, environmentId, `review-activities${buildQuery({ ...filters, pageToken })}`);
+    const result = await wfFetchable<Page<ReviewActivity>>(componentId, environmentId, `review-activities${buildQuery({ ...filters, pageToken })}`);
+    // Each page is its own cached read, so any of them may still be being prepared. The
+    // listing is reported as fetching until every page it needs has arrived: combining the
+    // pages that did arrive would present a partial set as the whole.
+    if (result.state === 'fetching') return result;
+    const page = result.value;
     items.push(...(page.items ?? []));
-    if (!page.hasMore || !page.nextPageToken) return { items, hasMore: false };
+    if (!page.hasMore || !page.nextPageToken) return { state: 'ready', value: { items, hasMore: false } };
     pageToken = page.nextPageToken;
   }
-  return { items, hasMore: true };
+  return { state: 'ready', value: { items, hasMore: true } };
 }
 
 export function useReviewActivities(s: Scope, filters: ReviewActivityFilters) {
   return useQuery({
     queryKey: ['wf', 'review-activities', s.componentId, s.environmentId, filters],
     queryFn: () => fetchReviewActivities(s.componentId, s.environmentId, filters),
+    refetchInterval: ({ state }) => fetchableRefetch(state.data),
     enabled: enabledFor(s),
   });
 }
@@ -441,20 +513,21 @@ export interface PendingReviewCount {
 export function usePendingReviewActivityCount(s: Scope, taskQueue?: string, enabled = true) {
   return useQuery({
     queryKey: ['wf', 'pending-review-count', s.componentId, s.environmentId, taskQueue],
-    queryFn: (): Promise<PendingReviewCount> =>
-      wfRequest<Page<ReviewActivity>>(s.componentId, s.environmentId, `review-activities${buildQuery({ status: 'PENDING', taskQueue, limit: PENDING_REVIEW_PAGE })}`).then((p) => ({
-        count: p.items?.length ?? 0,
-        capped: p.hasMore === true,
-      })),
+    queryFn: (): Promise<Fetchable<PendingReviewCount>> =>
+      wfFetchable<Page<ReviewActivity>>(s.componentId, s.environmentId, `review-activities${buildQuery({ status: 'PENDING', taskQueue, limit: PENDING_REVIEW_PAGE })}`)
+        .then((r) => mapFetchable(r, (p) => ({
+          count: p.items?.length ?? 0,
+          capped: p.hasMore === true,
+        }))),
     enabled: enabledFor(s) && enabled,
-    refetchInterval: 30000,
+    refetchInterval: ({ state }) => fetchableRefetch(state.data) || 30000,
   });
 }
 
 export function reviewActivityQueryOptions(s: Scope, taskId: string) {
   return {
     queryKey: ['wf', 'review-activity', s.componentId, s.environmentId, taskId] as const,
-    queryFn: () => wfRequest<ReviewActivityDetail>(s.componentId, s.environmentId, `review-activities/${encodeURIComponent(taskId)}`),
+    queryFn: () => wfFetchable<ReviewActivityDetail>(s.componentId, s.environmentId, `review-activities/${encodeURIComponent(taskId)}`),
   };
 }
 
@@ -550,14 +623,23 @@ export function useWorkflowDefinitionsAcross(targets: WorkflowTarget[], environm
   results.forEach((r, i) => {
     const target = targets[i];
     if (!target) return;
-    for (const d of r.data ?? []) {
+    // A target whose definitions are still being prepared contributes nothing yet; the query
+    // comes back for it, and `isLoading` below keeps the caller from treating the partial
+    // fan-out as complete.
+    for (const d of valueOf(r.data) ?? []) {
       items.push({ ...d, componentId: target.componentId, componentName: target.componentName });
     }
     if (r.error && !isAbsent(r.error)) {
       failed.push({ componentName: target.componentName, message: r.error instanceof Error ? r.error.message : 'Request failed' });
     }
   });
-  return { items, isLoading: results.some((r) => r.isLoading), failed };
+  return {
+    items,
+    // Still "loading" while any target's definitions are being prepared server-side: the list
+    // is genuinely incomplete until they arrive.
+    isLoading: results.some((r) => r.isLoading || isPreparing(r.data)),
+    failed,
+  };
 }
 
 /**

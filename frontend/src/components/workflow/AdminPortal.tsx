@@ -40,6 +40,8 @@ import {
   type ReviewDecision,
   type WorkflowDefinition,
   type WorkflowTarget,
+  isPreparing,
+  valueOf,
 } from '../../api/workflows';
 
 const WORKFLOW_STATUSES = ['All', 'RUNNING', 'COMPLETED', 'FAILED', 'TERMINATED', 'CANCELED', 'TIMED_OUT'];
@@ -251,8 +253,15 @@ function WorkflowsAdmin({
     startTimeTo: timeFilter.bounds.startTimeTo,
     limit: 50,
   };
-  const { data: page, isLoading, error, refetch, isFetching } = useWorkflowInstances(gatewayScope(scope), filters);
+  const { data: result, isLoading, error, refetch, isFetching } = useWorkflowInstances(gatewayScope(scope), filters);
+  const page = valueOf(result);
+  // The server materializes this view through the integration, so the first request for it is
+  // answered "still fetching". Saying so beats a spinner that outstays its welcome.
+  const preparing = isPreparing(result);
   const items = sortByStartTimeDesc(page?.items ?? []);
+  const preparingNote = preparing && items.length === 0
+    ? 'Fetching executions from the integration…'
+    : null;
   const hasFilters = status !== 'All' || !!selectedType || !!search || !!integration || timeFilter.active;
 
   return (
@@ -298,6 +307,11 @@ function WorkflowsAdmin({
         <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
       ) : error ? (
         <Typography sx={emptySx}>{error instanceof Error ? error.message : 'Failed to load workflows.'}</Typography>
+      ) : preparingNote ? (
+        // Not the same as "none found": the integration has not answered yet and the query is
+        // already coming back for it. Stating an empty result here would be a wrong answer,
+        // stated confidently.
+        <Typography sx={emptySx}>{preparingNote}</Typography>
       ) : items.length === 0 ? (
         <Typography sx={emptySx}>No workflows found.</Typography>
       ) : (
@@ -537,7 +551,7 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
   const taskQueue = integration?.handler ?? scope.taskQueue;
   const definitions = useWorkflowDefinitionsAcross(scope.targets, scope.environmentId);
   const {
-    data: page,
+    data: result,
     isLoading,
     error,
     refetch,
@@ -551,8 +565,14 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
     limit: 50,
   });
 
+  const page = valueOf(result);
   // The review-activity API has no workflow-name filter; the qualified task name carries it, so filter client-side.
   const items = sortByStartTimeDesc((page?.items ?? []).filter((t) => !selectedType || splitQualifiedName(t.taskName ?? t.activityName).workflow === selectedType.workflowType));
+  // Materialized through the integration, so the first request is answered "still fetching" —
+  // which is not the same statement as "no review activities".
+  const reviewsPreparing = isPreparing(result) && items.length === 0
+    ? 'Fetching review activities from the integration…'
+    : null;
   const hasFilters = status !== 'PENDING' || !!selectedType || !!search || !!integration || timeFilter.active;
 
   return (
@@ -593,6 +613,8 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
         <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
       ) : error ? (
         <Typography sx={emptySx}>{error instanceof Error ? error.message : 'Failed to load review activities.'}</Typography>
+      ) : reviewsPreparing ? (
+        <Typography sx={emptySx}>{reviewsPreparing}</Typography>
       ) : items.length === 0 ? (
         <Typography sx={emptySx}>No review activities found.</Typography>
       ) : (
@@ -660,7 +682,10 @@ function reviewActivityDisplayName(taskName?: string, activityName?: string, fal
 }
 
 function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: { scope: WorkflowScope; taskId: string; onClose: () => void; onToast: (t: Toast) => void }) {
-  const { data: activity, isLoading, error: loadError } = useReviewActivity(scope, taskId);
+  const { data: activityResult, isLoading, error: loadError } = useReviewActivity(scope, taskId);
+  const activity = valueOf(activityResult);
+  // A decision form whose fields are still being prepared shows a spinner, not blank inputs.
+  const waiting = isLoading || isPreparing(activityResult);
   const decide = useReviewDecision(scope);
   const [mode, setMode] = useState<'view' | 'reject'>('view');
   const [formValues, setFormValues] = useState<Record<string, string | boolean>>({});
@@ -732,7 +757,7 @@ function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: { scope
         </Stack>
       </DialogTitle>
       <DialogContent>
-        {isLoading ? (
+        {waiting ? (
           <CircularProgress size={24} sx={{ display: 'block', mx: 'auto', py: 4 }} />
         ) : loadError || !activity ? (
           <Typography sx={emptySx}>{loadError instanceof Error ? loadError.message : 'Failed to load activity details.'}</Typography>

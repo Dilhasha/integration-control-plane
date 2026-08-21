@@ -27,7 +27,7 @@ import { useAccessControl } from '../contexts/AccessControlContext';
 import { useLoadComponentPermissions, useLoadProjectPermissions } from '../hooks/usePermissionLoader';
 import { Permissions } from '../constants/permissions';
 import { resourceUrl, broaden, hasComponent, type ComponentScope, type ProjectScope } from '../nav';
-import { usePendingReviewActivityCount, usePendingTaskCount, type WorkflowTarget } from '../api/workflows';
+import { usePendingReviewActivityCount, usePendingTaskCount, valueOf, type WorkflowTarget } from '../api/workflows';
 import { gatewayScope } from '../components/workflow/helpers';
 import { isWorkflowIntegration } from '../constants/integrationTypes';
 
@@ -148,8 +148,13 @@ export default function Workflows(scope: ComponentScope | ProjectScope): JSX.Ele
   // read through the same gateway runtime the views themselves use.
   const gateway = gatewayScope({ targets, environmentId: activeEnvId, taskQueue });
   // Declared above the early returns below, so these hooks run in the same order on every render.
-  const { data: pendingTasks } = usePendingTaskCount(gateway, taskQueue, allowedTabs.tasks);
-  const { data: pendingReviews } = usePendingReviewActivityCount(gateway, taskQueue, allowedTabs.reviews);
+  // A badge with no number yet simply shows no number: these counts are materialized through
+  // the integration, so the first read of each is still being prepared, and the tab label is
+  // not the place to explain that.
+  const { data: pendingTasksResult } = usePendingTaskCount(gateway, taskQueue, allowedTabs.tasks);
+  const { data: pendingReviewsResult } = usePendingReviewActivityCount(gateway, taskQueue, allowedTabs.reviews);
+  const pendingTasks = valueOf(pendingTasksResult);
+  const pendingReviews = valueOf(pendingReviewsResult);
 
   if (loadingProject || loadingComponent || loadingEnvs || loadingComponents)
     return (
