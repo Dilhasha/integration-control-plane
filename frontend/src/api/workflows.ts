@@ -419,6 +419,10 @@ export function humanTaskQueryOptions(s: Scope, taskId: string) {
   return {
     queryKey: ['wf', 'human-task', s.componentId, s.environmentId, taskId] as const,
     queryFn: () => wfFetchable<HumanTask>(s.componentId, s.environmentId, `human-tasks/${encodeURIComponent(taskId)}`),
+    // Without this the query reports `fetching` once and never asks again, which is worse
+    // than the blocking behaviour it replaced: the dialog would spin until something else
+    // happened to invalidate it.
+    refetchInterval: ({ state }: { state: { data?: Fetchable<HumanTask> } }) => fetchableRefetch(state.data),
   };
 }
 
@@ -528,6 +532,7 @@ export function reviewActivityQueryOptions(s: Scope, taskId: string) {
   return {
     queryKey: ['wf', 'review-activity', s.componentId, s.environmentId, taskId] as const,
     queryFn: () => wfFetchable<ReviewActivityDetail>(s.componentId, s.environmentId, `review-activities/${encodeURIComponent(taskId)}`),
+    refetchInterval: ({ state }: { state: { data?: Fetchable<ReviewActivityDetail> } }) => fetchableRefetch(state.data),
   };
 }
 
@@ -614,6 +619,7 @@ export function useWorkflowDefinitionsAcross(targets: WorkflowTarget[], environm
     queries: targets.map((t) => ({
       queryKey: ['wf', 'definitions', t.componentId, environmentId],
       queryFn: () => fetchDefinitions(t.componentId, environmentId),
+      refetchInterval: ({ state }: { state: { data?: Fetchable<WorkflowDefinition[]> } }) => fetchableRefetch(state.data),
       enabled: !!environmentId && !!t.componentId,
     })),
   });
