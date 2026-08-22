@@ -39,7 +39,6 @@ import {
   type Owned,
   type ReviewDecision,
   type WorkflowDefinition,
-  type WorkflowTarget,
   isPreparing,
   valueOf,
 } from '../../api/workflows';
@@ -79,20 +78,6 @@ export type Toast = { severity: 'success' | 'error'; message: string } | null;
 export type { PortalScope };
 
 /** Integration filter, offered only when the portal spans more than one. */
-function IntegrationFilter({ targets, value, onChange }: { targets: WorkflowTarget[]; value: WorkflowTarget | null; onChange: (v: WorkflowTarget | null) => void }) {
-  return (
-    <Autocomplete
-      size="small"
-      sx={{ width: 240 }}
-      options={targets}
-      value={value}
-      getOptionLabel={(t) => t.componentName}
-      isOptionEqualToValue={(a, b) => a.componentId === b.componentId}
-      onChange={(_, v) => onChange(v)}
-      renderInput={(params) => <TextField {...params} label="Integration" placeholder="All integrations" />}
-    />
-  );
-}
 
 /**
  * Warns that some integrations did not return their workflow definitions, so the workflow names on
@@ -237,7 +222,6 @@ function WorkflowsAdmin({
   const [startOpen, setStartOpen] = useState(false);
   // The drawer opens against the integration that owns the run, per the row's own task queue.
   const [detail, setDetail] = useState<{ workflowId: string; taskQueue?: string } | null>(null);
-  const [integration, setIntegration] = useState<WorkflowTarget | null>(null);
 
   const multi = scope.targets.length > 1;
   // Narrowing by integration WOULD be a task-queue filter on the same gateway request, if the
@@ -264,7 +248,7 @@ function WorkflowsAdmin({
   const preparing = isPreparing(result);
   const items = sortByStartTimeDesc(page?.items ?? []);
   const preparingNote = preparing && items.length === 0 ? 'Fetching executions from the integration…' : null;
-  const hasFilters = status !== 'All' || !!selectedType || !!search || !!integration || timeFilter.active;
+  const hasFilters = status !== 'All' || !!selectedType || !!search || timeFilter.active;
 
   return (
     <>
@@ -286,7 +270,6 @@ function WorkflowsAdmin({
       <Stack direction="row" gap={1.5} sx={{ mb: 2 }} flexWrap="wrap" alignItems="center">
         <StatusFilter options={WORKFLOW_STATUSES} value={status} onChange={setStatus} />
         <WorkflowNameFilter definitions={distinctWorkflowTypes(definitions.items)} value={selectedType} onChange={setSelectedType} />
-        {multi && <IntegrationFilter targets={scope.targets} value={integration} onChange={setIntegration} />}
         {timeFilter.controls}
         {hasFilters && (
           <Button
@@ -295,7 +278,6 @@ function WorkflowsAdmin({
               setStatus('All');
               setSelectedType(null);
               setSearch('');
-              setIntegration(null);
               timeFilter.reset();
             }}>
             Clear
@@ -546,7 +528,6 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
   const [selectedType, setSelectedType] = useState<WorkflowDefinition | null>(null);
   // Like the workflow list, the dialog opens against the integration that owns the row.
   const [open, setOpen] = useState<{ taskId: string; taskQueue?: string } | null>(null);
-  const [integration, setIntegration] = useState<WorkflowTarget | null>(null);
   const timeFilter = useTimeRangeFilter();
 
   const multi = scope.targets.length > 1;
@@ -574,7 +555,7 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
   // Materialized through the integration, so the first request is answered "still fetching" —
   // which is not the same statement as "no review activities".
   const reviewsPreparing = isPreparing(result) && items.length === 0 ? 'Fetching review activities from the integration…' : null;
-  const hasFilters = status !== 'PENDING' || !!selectedType || !!search || !!integration || timeFilter.active;
+  const hasFilters = status !== 'PENDING' || !!selectedType || !!search || timeFilter.active;
 
   return (
     <>
@@ -591,7 +572,6 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
       <Stack direction="row" gap={1.5} sx={{ mb: 2 }} flexWrap="wrap" alignItems="center">
         <StatusFilter options={REVIEW_ACTIVITY_STATUSES} value={status} onChange={setStatus} />
         <WorkflowNameFilter definitions={distinctWorkflowTypes(definitions.items)} value={selectedType} onChange={setSelectedType} />
-        {multi && <IntegrationFilter targets={scope.targets} value={integration} onChange={setIntegration} />}
         {timeFilter.controls}
         {hasFilters && (
           <Button
@@ -600,7 +580,6 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
               setStatus('PENDING');
               setSelectedType(null);
               setSearch('');
-              setIntegration(null);
               timeFilter.reset();
             }}>
             Clear
