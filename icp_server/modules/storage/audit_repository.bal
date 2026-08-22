@@ -262,10 +262,23 @@ isolated function buildTimestamp() returns string {
 # + metadata - Structured detail as a JSON string
 public isolated function raiseSystemEvent(string eventType, string severity, string message,
         string? eventSource = (), string? metadata = ()) {
-    sql:ExecutionResult|sql:Error result = dbClient->execute(`
-        INSERT INTO system_events (event_type, severity, source, message, metadata)
-        VALUES (${eventType}, ${severity}, ${eventSource}, ${message}, ${metadata})
-    `);
+    // `metadata` is jsonb on PostgreSQL and a text column on the others, so the cast has to be
+    // conditional — the same split upsertWorkflowMetadata makes. Without it PostgreSQL refuses
+    // the bind with 42804 ("column is of type jsonb but expression is of type character
+    // varying") and, because this function deliberately swallows its errors, every notification
+    // was lost in a log line nobody reads. The table was empty for an entire test round.
+    sql:ExecutionResult|sql:Error result;
+    if dbType == POSTGRESQL {
+        result = dbClient->execute(`
+            INSERT INTO system_events (event_type, severity, source, message, metadata)
+            VALUES (${eventType}, ${severity}, ${eventSource}, ${message}, ${metadata}::jsonb)
+        `);
+    } else {
+        result = dbClient->execute(`
+            INSERT INTO system_events (event_type, severity, source, message, metadata)
+            VALUES (${eventType}, ${severity}, ${eventSource}, ${message}, ${metadata})
+        `);
+    }
     if result is sql:Error {
         // Never propagated: an event nobody can store is still worth having in the log, and
         // failing the caller would turn a reporting problem into a functional one.
