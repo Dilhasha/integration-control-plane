@@ -57,9 +57,7 @@ export default function WorkflowInstancesPanel({ componentId, environmentId, wor
   const items = page?.items ?? [];
   // The server materializes this view through the integration, so the first request for it
   // comes back "still fetching". Say so, and let the query come back for it.
-  const note = preparing && items.length === 0
-    ? 'Fetching running instances from the integration…'
-    : null;
+  const note = preparing && items.length === 0 ? 'Fetching running instances from the integration…' : null;
 
   return (
     <Box sx={{ px: 2, py: 1.5 }}>

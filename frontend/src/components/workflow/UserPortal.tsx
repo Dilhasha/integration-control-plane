@@ -143,9 +143,7 @@ function MyTasks({ scope, onToast }: { scope: PortalScope; onToast: (t: Toast) =
   const tasks = sortByStartTimeDesc(page?.items ?? []);
   // The list is materialized through the integration, so the first request for it is answered
   // "still fetching". Saying so is not the same as saying there are no tasks.
-  const preparingNote = isPreparing(result) && tasks.length === 0
-    ? 'Fetching tasks from the integration…'
-    : null;
+  const preparingNote = isPreparing(result) && tasks.length === 0 ? 'Fetching tasks from the integration…' : null;
   const multi = scope.targets.length > 1;
 
   return (

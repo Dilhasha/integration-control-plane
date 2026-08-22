@@ -263,9 +263,7 @@ function WorkflowsAdmin({
   // answered "still fetching". Saying so beats a spinner that outstays its welcome.
   const preparing = isPreparing(result);
   const items = sortByStartTimeDesc(page?.items ?? []);
-  const preparingNote = preparing && items.length === 0
-    ? 'Fetching executions from the integration…'
-    : null;
+  const preparingNote = preparing && items.length === 0 ? 'Fetching executions from the integration…' : null;
   const hasFilters = status !== 'All' || !!selectedType || !!search || !!integration || timeFilter.active;
 
   return (
@@ -575,9 +573,7 @@ export function ReviewActivities({ scope, onToast }: { scope: PortalScope; onToa
   const items = sortByStartTimeDesc((page?.items ?? []).filter((t) => !selectedType || splitQualifiedName(t.taskName ?? t.activityName).workflow === selectedType.workflowType));
   // Materialized through the integration, so the first request is answered "still fetching" —
   // which is not the same statement as "no review activities".
-  const reviewsPreparing = isPreparing(result) && items.length === 0
-    ? 'Fetching review activities from the integration…'
-    : null;
+  const reviewsPreparing = isPreparing(result) && items.length === 0 ? 'Fetching review activities from the integration…' : null;
   const hasFilters = status !== 'PENDING' || !!selectedType || !!search || !!integration || timeFilter.active;
 
   return (

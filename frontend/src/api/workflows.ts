@@ -163,10 +163,7 @@ async function wfFetchOnce(url: string, init: RequestInit): Promise<{ status: nu
 // crypto.randomUUID exists only in a secure context — HTTPS, or localhost. A console served
 // over plain HTTP on any other host would throw here and fail every mutation before it was
 // sent, so the key falls back to something unique enough for de-duplicating one submit.
-const newIdempotencyKey = (): string =>
-  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `wf-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+const newIdempotencyKey = (): string => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `wf-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
 /**
  * A read that may not be answered yet.
@@ -177,15 +174,12 @@ const newIdempotencyKey = (): string =>
  * as long as it takes, and tells the user nothing. Surfacing the state instead lets the page
  * say so and come back for it.
  */
-export type Fetchable<T> =
-  | { state: 'ready'; value: T }
-  | { state: 'fetching'; retryAfterMs: number };
+export type Fetchable<T> = { state: 'ready'; value: T } | { state: 'fetching'; retryAfterMs: number };
 
 /** Named to sit beside react-query's own `isFetching` without being mistaken for it: this is
  *  the SERVER still preparing the answer, not the browser having a request in flight. */
-export const isPreparing = <T,>(r: Fetchable<T> | undefined): boolean => r?.state === 'fetching';
-export const valueOf = <T,>(r: Fetchable<T> | undefined): T | undefined =>
-  r?.state === 'ready' ? r.value : undefined;
+export const isPreparing = <T>(r: Fetchable<T> | undefined): boolean => r?.state === 'fetching';
+export const valueOf = <T>(r: Fetchable<T> | undefined): T | undefined => (r?.state === 'ready' ? r.value : undefined);
 
 /** How soon to come back for a read the server is still preparing, when it names no interval. */
 const WF_FETCHING_POLL_MS = 900;
@@ -213,13 +207,11 @@ async function wfFetchable<T>(componentId: string, environmentId: string, subpat
 }
 
 /** Comes back at the interval the server asked for while a read is still being prepared. */
-const fetchableRefetch = <T,>(data: Fetchable<T> | undefined): number | false =>
-  data?.state === 'fetching' ? data.retryAfterMs : false;
+const fetchableRefetch = <T>(data: Fetchable<T> | undefined): number | false => (data?.state === 'fetching' ? data.retryAfterMs : false);
 
 /** Applies a projection to a ready value, so a hook can unwrap an envelope or default a
  *  field without losing the `fetching` state. */
-const mapFetchable = <A, B>(r: Fetchable<A>, f: (a: A) => B): Fetchable<B> =>
-  r.state === 'ready' ? { state: 'ready', value: f(r.value) } : r;
+const mapFetchable = <A, B>(r: Fetchable<A>, f: (a: A) => B): Fetchable<B> => (r.state === 'ready' ? { state: 'ready', value: f(r.value) } : r);
 
 /**
  * A request that waits for its answer. Mutations use this: the caller pressed a button, so a
@@ -283,8 +275,7 @@ const enabledFor = (s: Scope) => !!s.componentId && !!s.environmentId;
 // ── Definitions ──
 
 function fetchDefinitions(componentId: string, environmentId: string): Promise<Fetchable<WorkflowDefinition[]>> {
-  return wfFetchable<{ definitions: WorkflowDefinition[] }>(componentId, environmentId, 'definitions')
-    .then((r) => mapFetchable(r, (d) => d.definitions ?? []));
+  return wfFetchable<{ definitions: WorkflowDefinition[] }>(componentId, environmentId, 'definitions').then((r) => mapFetchable(r, (d) => d.definitions ?? []));
 }
 
 // ── Workflow instances ──
@@ -300,7 +291,6 @@ export interface WorkflowFilters {
   limit?: number;
   pageToken?: string;
 }
-
 
 export function useWorkflowInstances(s: Scope, filters: WorkflowFilters) {
   return useQuery({
@@ -326,8 +316,7 @@ export function useWorkflowInfo(s: Scope, workflowId: string | null) {
 export function useWorkflowHistory(s: Scope, workflowId: string | null) {
   return useQuery({
     queryKey: ['wf', 'history', s.componentId, s.environmentId, workflowId],
-    queryFn: () => wfFetchable<{ events: HistoryEvent[] }>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}/history`)
-      .then((r) => mapFetchable(r, (d) => d.events ?? [])),
+    queryFn: () => wfFetchable<{ events: HistoryEvent[] }>(s.componentId, s.environmentId, `workflows/${encodeURIComponent(workflowId!)}/history`).then((r) => mapFetchable(r, (d) => d.events ?? [])),
     refetchInterval: ({ state }) => fetchableRefetch(state.data),
     enabled: enabledFor(s) && !!workflowId,
   });
@@ -400,8 +389,7 @@ export function useHumanTasks(s: Scope, filters: HumanTaskFilters) {
 }
 
 function fetchPendingTaskCount(componentId: string, environmentId: string, taskQueue?: string): Promise<Fetchable<number>> {
-  return wfFetchable<{ count: number }>(componentId, environmentId, `human-tasks/pending-count${buildQuery({ taskQueue })}`)
-    .then((r) => mapFetchable(r, (d) => d.count ?? 0));
+  return wfFetchable<{ count: number }>(componentId, environmentId, `human-tasks/pending-count${buildQuery({ taskQueue })}`).then((r) => mapFetchable(r, (d) => d.count ?? 0));
 }
 
 /** `enabled` lets a caller skip the poll when the count is not being shown. */
@@ -518,11 +506,12 @@ export function usePendingReviewActivityCount(s: Scope, taskQueue?: string, enab
   return useQuery({
     queryKey: ['wf', 'pending-review-count', s.componentId, s.environmentId, taskQueue],
     queryFn: (): Promise<Fetchable<PendingReviewCount>> =>
-      wfFetchable<Page<ReviewActivity>>(s.componentId, s.environmentId, `review-activities${buildQuery({ status: 'PENDING', taskQueue, limit: PENDING_REVIEW_PAGE })}`)
-        .then((r) => mapFetchable(r, (p) => ({
+      wfFetchable<Page<ReviewActivity>>(s.componentId, s.environmentId, `review-activities${buildQuery({ status: 'PENDING', taskQueue, limit: PENDING_REVIEW_PAGE })}`).then((r) =>
+        mapFetchable(r, (p) => ({
           count: p.items?.length ?? 0,
           capped: p.hasMore === true,
-        }))),
+        })),
+      ),
     enabled: enabledFor(s) && enabled,
     refetchInterval: ({ state }) => fetchableRefetch(state.data) || 30000,
   });
