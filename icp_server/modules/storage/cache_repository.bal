@@ -544,13 +544,26 @@ public isolated function sweepCacheTables(int staleRetentionSeconds,
 # + environmentId - The environment
 # + until - Epoch seconds up to which fast heartbeats are wanted
 # + return - An error if the update failed
-public isolated function boostCacheOwner(string componentId, string environmentId, int until)
-        returns error? {
+# Extends the boost window on a component's runtimes, but only when it is running out.
+#
+# `extendWhenBelow` is what keeps this off the hot path. `until` always moves forward, because
+# it is derived from now, so a guard against moving backwards still writes on EVERY read — and
+# these are the same `runtimes` rows that `processHeartbeat` locks for the length of its
+# transaction (see analysis/05 §8b). Twenty readers polling therefore queued twenty writes
+# against a row that a heartbeat was already holding. Extending only when the remaining window
+# has half lapsed keeps the boost continuous and turns a write per read into at most one write
+# per half-window.
+#
+# + until - The new expiry to set
+# + extendWhenBelow - Only write when the stored expiry is earlier than this
+# + return - An error if the update fails
+public isolated function boostCacheOwner(string componentId, string environmentId, int until,
+        int extendWhenBelow) returns error? {
     sql:ExecutionResult|sql:Error result = dbClient->execute(`
         UPDATE runtimes
         SET wf_boosted_until = ${until}
         WHERE component_id = ${componentId} AND environment_id = ${environmentId}
-          AND (wf_boosted_until IS NULL OR wf_boosted_until < ${until})
+          AND (wf_boosted_until IS NULL OR wf_boosted_until < ${extendWhenBelow})
     `);
     if result is sql:Error {
         return error(string `Failed to boost an owner`, result);

@@ -268,7 +268,8 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
     if target is () {
         return {state: "NO_RUNTIME"};
     }
-    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
+    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS,
+            now + WORKFLOW_BOOST_WINDOW_SECONDS / 2);
 
     string request = workflowRequestDocument(operation, params, roles);
     boolean owns = check storage:startCacheFetch(cacheKey, CACHE_KIND_WORKFLOW_READ, scopeKey,
@@ -295,7 +296,8 @@ isolated function startWorkflowReadRefresh(string cacheKey, string operation, ma
         // Nothing can answer it; keep serving what we have rather than marking it in flight.
         return ();
     }
-    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
+    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS,
+            now + WORKFLOW_BOOST_WINDOW_SECONDS / 2);
     _ = check storage:claimCacheRefresh(cacheKey, newFetchId(),
             now + WF_READ_FETCH_DEADLINE_SECONDS);
     return ();
@@ -352,7 +354,8 @@ isolated function enqueueWorkflowMutation(string componentId, string environment
         return ();
     }
     int now = nowUnixSeconds();
-    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS);
+    check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS,
+            now + WORKFLOW_BOOST_WINDOW_SECONDS / 2);
     string operationId = WF_OPERATION_COMMAND_PREFIX + idempotencyKey;
     boolean created = check storage:enqueueCacheOperation({
         operationId: operationId,

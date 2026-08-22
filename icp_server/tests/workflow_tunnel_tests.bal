@@ -305,7 +305,7 @@ function testDeadlineExpiresAnUnconfirmedMutation() returns error? {
 @test:Config {groups: ["workflow_tunnel"]}
 function testBoostWindowIsSharedThroughTheDatabase() returns error? {
     int until = storage:cacheNowEpoch() + 30;
-    check storage:boostCacheOwner(WF_TUNNEL_COMPONENT_ID, WF_TUNNEL_ENVIRONMENT_ID, until);
+    check storage:boostCacheOwner(WF_TUNNEL_COMPONENT_ID, WF_TUNNEL_ENVIRONMENT_ID, until, until);
     // Any node answering this runtime's heartbeat reads the same window, which is the point:
     // an in-memory window would boost only the node that served the user's request.
     int remaining = check storage:cacheBoostRemaining(WF_TUNNEL_RUNTIME_ID);
