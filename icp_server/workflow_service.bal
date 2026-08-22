@@ -191,6 +191,11 @@ isolated function serveWorkflowRead(string componentId, string environmentId, st
     return response;
 }
 
+# The longest client-supplied idempotency key accepted. `cache_operation_outbox.operation_id`
+# is VARCHAR(100) and the key is stored behind a 4-character prefix, so this leaves room to
+# spare while keeping the failure a 400 rather than a truncated or rejected INSERT.
+const int WF_MAX_IDEMPOTENCY_KEY_LENGTH = 64;
+
 # Queues a mutation and answers with the id to poll.
 #
 # The id is the caller's idempotency key, so re-submitting the same action returns the same
@@ -200,9 +205,26 @@ isolated function acceptWorkflowMutation(http:Request req, string componentId,
         string environmentId, string operation, map<json> params, string userId,
         string[] roles) returns http:Response {
     string|http:HeaderNotFoundError key = req.getHeader(WF_IDEMPOTENCY_HEADER);
-    string idempotencyKey = key is string && key.trim().length() > 0
-        ? key.trim()
-        : uuid:createType4AsString();
+    string idempotencyKey;
+    if key is string && key.trim().length() > 0 {
+        // Bounded and checked before it becomes a primary key. `operation_id` is VARCHAR(100)
+        // and carries a 4-character prefix, so an unbounded client header turned into a SQL
+        // "value too long" error and a 500 — a client's malformed input reported as a server
+        // fault, and trivial for any caller to trigger. The charset is restricted for the same
+        // reason: this value ends up in an id that is routed by prefix and read back in logs.
+        string candidate = key.trim();
+        if candidate.length() > WF_MAX_IDEMPOTENCY_KEY_LENGTH {
+            return workflowErrorResponse(400, string `The ${WF_IDEMPOTENCY_HEADER} header must be ` +
+                    string `at most ${WF_MAX_IDEMPOTENCY_KEY_LENGTH} characters`);
+        }
+        if !re `^[A-Za-z0-9._:-]+$`.isFullMatch(candidate) {
+            return workflowErrorResponse(400, string `The ${WF_IDEMPOTENCY_HEADER} header may ` +
+                    "only contain letters, digits, and the characters . _ : -");
+        }
+        idempotencyKey = candidate;
+    } else {
+        idempotencyKey = uuid:createType4AsString();
+    }
     [string, boolean]?|error queued = enqueueWorkflowMutation(componentId, environmentId,
             operation, params, userId, roles, idempotencyKey);
     if queued is error {

@@ -68,16 +68,20 @@ function testResultFromASupersededAttemptIsDiscarded() returns error? {
     string cacheKey = "fence-" + storage:cacheNowEpoch().toString();
     int now = storage:cacheNowEpoch();
     _ = check storage:startCacheFetch(cacheKey, "workflow.read", WF_TUNNEL_SCOPE,
-            tunnelRequest("instances.list"), "attempt-old", now + 60);
+            tunnelRequest("instances.list"), "attempt-1", now + 60);
 
     // The attempt that is current wins.
-    boolean stored = check storage:completeCacheFetch(cacheKey, "attempt-old",
+    boolean stored = check storage:completeCacheFetch(cacheKey, "attempt-1",
             "{\"body\":\"first\"}", now + 60);
     test:assertTrue(stored, "The current attempt's result must be stored");
 
-    // A late answer from an attempt the row no longer holds describes a world that has
-    // moved on. Storing it is how a completed task reappears and sticks for a whole TTL.
-    boolean late = check storage:completeCacheFetch(cacheKey, "attempt-old",
+    // Now the row genuinely belongs to a DIFFERENT attempt, which is the case worth fencing:
+    // the entry went stale, a refresh claimed it, and the first attempt's runtime is still
+    // out there holding an answer. Re-using the old token instead would only prove that a
+    // completed fetch cannot be completed twice — true, and much weaker.
+    _ = check storage:claimCacheRefresh(cacheKey, "attempt-2", now + 60);
+
+    boolean late = check storage:completeCacheFetch(cacheKey, "attempt-1",
             "{\"body\":\"stale\"}", now + 60);
     test:assertFalse(late, "A result whose attempt is no longer current must be discarded");
 
@@ -85,7 +89,18 @@ function testResultFromASupersededAttemptIsDiscarded() returns error? {
     if row is types:CacheEntry {
         test:assertEquals(row.data, "{\"body\":\"first\"}",
             "The stored payload must not be overwritten by a superseded attempt");
-        test:assertEquals(row.token, (), "A completed fetch must leave no attempt in flight");
+        test:assertEquals(row.token, "attempt-2",
+            "The refresh that owns the row must still be in flight after a late answer");
+    }
+
+    // And the attempt that does own it can still answer.
+    boolean current = check storage:completeCacheFetch(cacheKey, "attempt-2",
+            "{\"body\":\"second\"}", now + 60);
+    test:assertTrue(current, "The owning attempt's result must be stored");
+    types:CacheEntry? settled = check storage:getCacheEntry(cacheKey);
+    if settled is types:CacheEntry {
+        test:assertEquals(settled.data, "{\"body\":\"second\"}");
+        test:assertEquals(settled.token, (), "A completed fetch must leave no attempt in flight");
     }
 }
 
