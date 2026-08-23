@@ -360,6 +360,50 @@ function testUnansweredFetchIsAbandonedRatherThanReoffered() returns error? {
 }
 
 @test:Config {groups: ["workflow_tunnel"]}
+function testOneDecisionPerTaskReachesTheRuntime() returns error? {
+    // Two users deciding one task must produce ONE queued operation. The runtime cannot arbitrate
+    // this for us: it accepts a second taskCompletion signal whenever it arrives before the task
+    // workflow closes, so both callers were told they had succeeded while one decision was
+    // silently discarded. The outbox is where it can be settled, because the id is derived from
+    // the task rather than from the caller.
+    int now = storage:cacheNowEpoch();
+    string taskId = "humantask-decide-" + now.toString();
+    string first = decisionOperationId(WF_TUNNEL_SCOPE, taskId);
+    string second = decisionOperationId(WF_TUNNEL_SCOPE, taskId);
+    test:assertEquals(first, second, "One task must always produce one decision id");
+
+    types:CacheOperation decision = {
+        operationId: first,
+        target: WF_TUNNEL_RUNTIME_ID,
+        kind: "workflow.operation",
+        owner: WF_TUNNEL_SCOPE,
+        status: types:CACHE_OP_PENDING,
+        issuedAt: now,
+        deadline: now + 60,
+        data: {operation: "humanTasks.complete", params: {taskId: taskId},
+                identity: {userId: "user-a", roles: ["APPROVER"]}}.toJsonString()
+    };
+    test:assertTrue(check storage:enqueueCacheOperation(decision),
+            "The first decision must be queued");
+
+    types:CacheOperation racing = decision.clone();
+    racing.data = {operation: "humanTasks.complete", params: {taskId: taskId},
+            identity: {userId: "user-b", roles: ["APPROVER"]}}.toJsonString();
+    test:assertFalse(check storage:enqueueCacheOperation(racing),
+            "A second user's decision on the same task must not be queued");
+
+    // And the stored row still belongs to whoever got there first, which is what the refusal
+    // tells the loser.
+    types:CacheOperation? stored = check storage:getCacheOperation(first);
+    if stored is types:CacheOperation {
+        test:assertEquals(operationActor(stored), "user-a",
+                "The queued decision must remain the first user's");
+    } else {
+        test:assertFail("The first decision should still be queued");
+    }
+}
+
+@test:Config {groups: ["workflow_tunnel"]}
 function testASweepReportsOnlyWhatItExpired() returns error? {
     int now = storage:cacheNowEpoch();
     string operationId = "wfo-sweepdedup-" + now.toString();

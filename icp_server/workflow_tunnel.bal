@@ -346,28 +346,113 @@ isolated function readOutcomeFromPayload(string payload, types:CacheEntry row, i
 # + idempotencyKey - The caller's key for this action
 # + return - The operation id and whether this call created it, `()` when no runtime can
 #            execute it, or an error
+# The operations that decide a task, and can therefore only happen once.
+#
+# WS-HumanTask models this as an *actual owner*: a task is claimed, and only its owner
+# completes it. There is no claim step here, so the equivalent is enforced at submission —
+# the first decision to reach the outbox is the one that goes, and the rest are refused.
+final string[] & readonly WF_DECISION_OPERATIONS = [
+    "humanTasks.complete",
+    "humanTasks.fail",
+    "reviewActivities.decide"
+];
+
+# What happened to a submitted mutation.
+#
+# `TAKEN` is the case worth having a name for: someone else decided this task first. Without
+# it two users both got `202` and then both got `200`, because the runtime accepts a second
+# signal whenever it arrives before the task workflow closes — so the user whose decision was
+# discarded was told it succeeded.
+type WorkflowMutationOutcome record {|
+    string operationId;
+    "QUEUED"|"RESUBMITTED"|"TAKEN" state;
+    // Who owns the decision that got there first, when this one is TAKEN.
+    string? owner = ();
+|};
+
+# The id a decision on one task must always produce, so two of them collide.
+#
+# Deliberately NOT the caller's idempotency key: that key makes one user's retry idempotent,
+# which is a different question from two users racing. Keyed on the task and the scope, and
+# hashed to stay inside `operation_id`'s column width.
+isolated function decisionOperationId(string scopeKey, string taskId) returns string {
+    byte[] digest = crypto:hashSha256((scopeKey + "|decision|" + taskId).toBytes());
+    return WF_OPERATION_COMMAND_PREFIX + digest.toBase16();
+}
+
+# The user who submitted a stored operation, from its request document.
+isolated function operationActor(types:CacheOperation row) returns string? {
+    json|error document = row.data.fromJsonString();
+    if document is map<json> {
+        json identity = document["identity"] ?: ();
+        if identity is map<json> {
+            json userId = identity["userId"] ?: ();
+            return userId is string ? userId : ();
+        }
+    }
+    return ();
+}
+
 isolated function enqueueWorkflowMutation(string componentId, string environmentId,
         string operation, map<json> params, string userId, string[] roles,
-        string idempotencyKey) returns [string, boolean]?|error {
+        string idempotencyKey) returns WorkflowMutationOutcome?|error {
     WorkflowCommandTarget? target = check selectWorkflowCommandTarget(componentId, environmentId);
     if target is () {
         return ();
     }
     int now = nowUnixSeconds();
+    string scopeKey = workflowScopeKey(componentId, environmentId);
     check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS,
             now + WORKFLOW_BOOST_WINDOW_SECONDS / 2);
-    string operationId = WF_OPERATION_COMMAND_PREFIX + idempotencyKey;
-    boolean created = check storage:enqueueCacheOperation({
+
+    // A decision is identified by the task it decides, so two users deciding at once collide on
+    // the primary key and the loser never reaches the runtime. Everything else keeps the
+    // caller's own key, where a repeat submission is the caller's own retry.
+    json taskId = params["taskId"] ?: ();
+    boolean decides = WF_DECISION_OPERATIONS.indexOf(operation) is int && taskId is string;
+    string operationId = decides
+        ? decisionOperationId(scopeKey, <string>taskId)
+        : WF_OPERATION_COMMAND_PREFIX + idempotencyKey;
+
+    string request = workflowRequestDocument(operation, params, roles, userId);
+    types:CacheOperation row = {
         operationId: operationId,
         target: target.runtimeId,
         kind: CACHE_KIND_WORKFLOW_OPERATION,
-        owner: workflowScopeKey(componentId, environmentId),
+        owner: scopeKey,
         status: types:CACHE_OP_PENDING,
         issuedAt: now,
         deadline: now + WF_OPERATION_DEADLINE_SECONDS,
-        data: workflowRequestDocument(operation, params, roles, userId)
-    });
-    return [operationId, created];
+        data: request
+    };
+    boolean created = check storage:enqueueCacheOperation(row);
+    if created {
+        return {operationId: operationId, state: "QUEUED"};
+    }
+
+    // The id was taken. Who took it decides what this caller is told.
+    types:CacheOperation? existing = check storage:getCacheOperation(operationId);
+    if existing is () {
+        // Swept between the insert and this read. Treat it as queued: the caller polls an id
+        // that no longer exists and is told so, rather than being refused something nobody holds.
+        return {operationId: operationId, state: "QUEUED"};
+    }
+    string? actor = operationActor(existing);
+    if !decides || actor == userId {
+        // The caller's own resubmission — the idempotency key doing its job.
+        return {operationId: operationId, state: "RESUBMITTED"};
+    }
+    if existing.status == types:CACHE_OP_FAILED || existing.status == types:CACHE_OP_EXPIRED {
+        // The first decision did not take effect, so the task is still open and this caller is
+        // entitled to decide it. A fresh row, because the deterministic id is already spent.
+        types:CacheOperation reopened = row.clone();
+        reopened.operationId = operationId + ".r" + newFetchId().substring(0, 8);
+        boolean retried = check storage:enqueueCacheOperation(reopened);
+        if retried {
+            return {operationId: reopened.operationId, state: "QUEUED"};
+        }
+    }
+    return {operationId: operationId, state: "TAKEN", owner: actor};
 }
 
 // ── Keys ─────────────────────────────────────────────────────────────────────

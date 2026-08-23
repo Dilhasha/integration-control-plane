@@ -225,7 +225,7 @@ isolated function acceptWorkflowMutation(http:Request req, string componentId,
     } else {
         idempotencyKey = uuid:createType4AsString();
     }
-    [string, boolean]?|error queued = enqueueWorkflowMutation(componentId, environmentId,
+    WorkflowMutationOutcome?|error queued = enqueueWorkflowMutation(componentId, environmentId,
             operation, params, userId, roles, idempotencyKey);
     if queued is error {
         log:printError("Failed to queue a workflow mutation", queued, operation = operation);
@@ -235,14 +235,53 @@ isolated function acceptWorkflowMutation(http:Request req, string componentId,
         return workflowErrorResponse(503,
                 "No running workflow runtime can serve this environment's workflow requests");
     }
+    if queued.state == "TAKEN" {
+        // Someone else decided this task first, and only their decision was sent. Saying so is
+        // the whole point: before this, both callers were told 202 and then both were told 200,
+        // because the runtime accepts a second signal whenever it arrives before the task
+        // workflow closes — so the user whose decision was discarded believed it had taken
+        // effect. There is no claim step to consult (WS-HumanTask's actual owner), so first
+        // submission is the owner.
+        log:printWarn("A workflow decision was refused because another user decided first",
+                operation = operation, operationId = queued.operationId,
+                refusedFor = userId, decidedBy = queued.owner ?: "unknown",
+                componentId = componentId, environmentId = environmentId);
+        // And recorded where an operator can find it afterwards. The console log is the minimum;
+        // an unresolved event is the durable half, and it is the same place an unconfirmed
+        // operation lands. A per-user record of refused decisions belongs in a system built for
+        // it, which this is not.
+        storage:raiseSystemEvent("workflow_decision_conflict", "WARN",
+                string `A workflow decision was refused: ${operation} on this task was already ` +
+                    "submitted by another user, and only the first was sent to the integration.",
+                eventSource = componentId,
+                metadata = {
+                    operationId: queued.operationId,
+                    operation: operation,
+                    refusedFor: userId,
+                    decidedBy: queued.owner ?: (),
+                    environmentId: environmentId
+                }.toJsonString());
+        http:Response refused = new;
+        refused.statusCode = 409;
+        refused.setJsonPayload({
+            status: "CONFLICT",
+            // The id of the decision that did go, so the caller can read what it did.
+            operationId: queued.operationId,
+            "error": {
+                message: "Someone else decided this task first. Only their decision was applied — " +
+                    "refresh to see it."
+            }
+        });
+        return refused;
+    }
     http:Response accepted = new;
     accepted.statusCode = 202;
     accepted.setJsonPayload({
         status: "PENDING",
-        operationId: queued[0],
-        // false means this exact action was already submitted; the caller polls the same id
-        // rather than being told it failed.
-        created: queued[1],
+        operationId: queued.operationId,
+        // false means this exact action was already submitted by this caller; they poll the same
+        // id rather than being told it failed.
+        created: queued.state == "QUEUED",
         retryAfterMs: 750
     });
     return accepted;
