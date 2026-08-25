@@ -324,7 +324,12 @@ isolated function readOutcomeFromPayload(string payload, types:CacheEntry row, i
         body: envelope["body"],
         httpStatus: httpStatus,
         fetchedAt: fetchedAt,
-        stale: row.expiresAt <= now
+        // Stale while expired — and also while a refresh is IN FLIGHT. Claiming a refresh
+        // pushes expires_at out to the fetch deadline, so on expiry alone the old answer
+        // reported itself fresh for exactly the seconds its replacement was being fetched;
+        // a client polling on staleness stopped right then, and the fresh copy landed to
+        // nobody. An answer being replaced is stale by definition, whatever its clock says.
+        stale: row.expiresAt <= now || row.token !is ()
     };
 }
 
@@ -536,6 +541,11 @@ isolated function splitReadCommandId(string commandId) returns [string, string]?
 // answer can change, and whether a change the ICP causes is caught by invalidation
 // anyway. A task created by the integration itself is only ever noticed by expiry, which
 // is what keeps the worklist number small.
+// How long an answer stands when it was produced right after a mutation, when it may still
+// predate that mutation's effects. Short enough that a racing snapshot corrects itself on the
+// next couple of reads; long enough that the correction is a handful of fetches, not a stream.
+const int WF_TTL_SETTLING_SECONDS = 4;
+
 const int WF_TTL_WORKLIST_SECONDS = 15;
 const int WF_TTL_INSTANCE_LIST_SECONDS = 15;
 // Short deliberately: a running instance's detail, history and graph are exactly the views
@@ -788,6 +798,17 @@ isolated function recordWorkflowReadResult(string cacheKey, string fetchId,
     };
     if result.httpStatus >= 200 && result.httpStatus < 300 {
         int ttl = workflowReadTtlSeconds(request, result.body);
+        // An answer produced while the scope is still hot from a mutation may predate that
+        // mutation's own effects: the refresh raced the workflow — it listed the tasks
+        // before the completed one's child closed — and then stood as fresh for a full TTL,
+        // which is how a just-completed task kept reading as pending. While the runtime is
+        // boosted (exactly the window after a mutation) a settled answer expires fast, so
+        // the next read re-refreshes — still one coalesced fetch at a time — until the world
+        // it describes has caught up.
+        int|error boostLeft = storage:cacheBoostRemaining(result.runtimeId);
+        if boostLeft is int && boostLeft > 0 && ttl > WF_TTL_SETTLING_SECONDS {
+            ttl = WF_TTL_SETTLING_SECONDS;
+        }
         boolean|error stored = storage:completeCacheFetch(cacheKey, fetchId,
                 envelope.toJsonString(), now + ttl);
         if stored is error {
