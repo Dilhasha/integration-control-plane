@@ -177,6 +177,9 @@ function updateFrontendConfig() returns error? {
         "VITE_TRYIT_URL": backendTryitEndpoint,
         "VITE_WS_URL": backendWsUrl,
         "VITE_SSO_ENABLED": ssoEnabled,
+        "VITE_SSO_ISSUER": ssoIssuer,
+        "VITE_PASSWORD_LOGIN_DISABLED": passwordLoginDisabled,
+        "VITE_FEDERATED_ACCESS_CONTROL_ENABLED": federatedAccessControlEnabled,
         "VITE_ICP_VERSION": icpVersion
     };
 

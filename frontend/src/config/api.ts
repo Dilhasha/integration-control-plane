@@ -30,6 +30,9 @@ interface RuntimeConfig {
   VITE_TRYIT_URL?: string;
   VITE_WS_URL?: string;
   VITE_SSO_ENABLED?: boolean;
+  VITE_SSO_ISSUER?: string;
+  VITE_PASSWORD_LOGIN_DISABLED?: boolean;
+  VITE_FEDERATED_ACCESS_CONTROL_ENABLED?: boolean;
   VITE_ICP_VERSION?: string;
 }
 
@@ -41,6 +44,9 @@ export interface ApiConfig {
   tryitUrl: string;
   wsUrl: string;
   ssoEnabled: boolean;
+  ssoIssuer: string;
+  passwordLoginDisabled: boolean;
+  federatedAccessControlEnabled: boolean;
   version: string;
 }
 
@@ -60,6 +66,9 @@ const DEFAULT_CONFIG: ApiConfig = {
   tryitUrl: 'https://localhost:9446/icp/tryit',
   wsUrl: 'wss://localhost:9446/runtime-status',
   ssoEnabled: false,
+  ssoIssuer: '',
+  passwordLoginDisabled: false,
+  federatedAccessControlEnabled: false,
   version: '',
 };
 
@@ -84,6 +93,9 @@ export async function loadConfig(): Promise<void> {
       tryitUrl: config.VITE_TRYIT_URL || DEFAULT_CONFIG.tryitUrl,
       wsUrl: config.VITE_WS_URL || DEFAULT_CONFIG.wsUrl,
       ssoEnabled: config.VITE_SSO_ENABLED ?? DEFAULT_CONFIG.ssoEnabled,
+      ssoIssuer: config.VITE_SSO_ISSUER || DEFAULT_CONFIG.ssoIssuer,
+      passwordLoginDisabled: config.VITE_PASSWORD_LOGIN_DISABLED ?? DEFAULT_CONFIG.passwordLoginDisabled,
+      federatedAccessControlEnabled: config.VITE_FEDERATED_ACCESS_CONTROL_ENABLED ?? DEFAULT_CONFIG.federatedAccessControlEnabled,
       version: config.VITE_ICP_VERSION || DEFAULT_CONFIG.version,
     };
 
@@ -118,6 +130,8 @@ export const oidcCallbackApiUrl = (): string => `${window.API_CONFIG.authBaseUrl
 export const changePasswordApiUrl = (): string => `${window.API_CONFIG.authBaseUrl}/change-password`;
 export const forceChangePasswordApiUrl = (): string => `${window.API_CONFIG.authBaseUrl}/force-change-password`;
 export const isSsoEnabled = (): boolean => window.API_CONFIG.ssoEnabled;
+export const isPasswordLoginDisabled = (): boolean => window.API_CONFIG.passwordLoginDisabled;
+export const isFederatedAccessControlEnabled = (): boolean => window.API_CONFIG.federatedAccessControlEnabled;
 export const getIcpVersion = (): string => window.API_CONFIG.version;
 
 /**

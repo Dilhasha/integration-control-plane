@@ -173,7 +173,22 @@ export function UsersTab({ orgHandler }: { orgHandler: string }): JSX.Element {
                     </Stack>
                   </ListingTable.Cell>
                   <ListingTable.Cell>{u.username}</ListingTable.Cell>
-                  <ListingTable.Cell>{u.groupCount > 0 ? u.groups.map((g) => <Chip key={g.groupId} label={g.groupName} size="small" sx={{ mr: 0.5 }} />) : <>—</>}</ListingTable.Cell>
+                  <ListingTable.Cell>
+                    {u.groupCount > 0 ? (
+                      <Stack direction="row" gap={0.5} flexWrap="wrap">
+                        {u.groups.map((g) => (
+                          <Chip
+                            key={g.groupId}
+                            label={g.membershipSource === 'federated' ? `${g.groupName} · SSO` : g.membershipSource === 'manual_and_federated' ? `${g.groupName} · Local + SSO` : g.groupName}
+                            size="small"
+                            variant={g.membershipSource?.includes('federated') ? 'outlined' : 'filled'}
+                          />
+                        ))}
+                      </Stack>
+                    ) : (
+                      <>—</>
+                    )}
+                  </ListingTable.Cell>
                   <ListingTable.Cell align="right">
                     <Authorized permissions={Permissions.USER_MANAGE_USERS}>
                       {capabilities.includes('password_reset') && (

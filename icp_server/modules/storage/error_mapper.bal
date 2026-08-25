@@ -23,6 +23,7 @@ enum SqlErrorCategory {
     DUPLICATE_KEY,
     VALUE_TOO_LONG,
     FOREIGN_KEY_VIOLATION,
+    MISSING_SCHEMA_OBJECT,
     UNKNOWN_SQL_ERROR
 }
 
@@ -57,6 +58,19 @@ isolated function classifySqlError(sql:Error err) returns SqlErrorCategory {
     if msg.includes("foreign key") || msg.includes("violates foreign key") ||
             msg.includes("ora-02291") || msg.includes("ora-02292") {
         return FOREIGN_KEY_VIOLATION;
+    }
+
+    // A table or view the query depends on does not exist. In practice this means a
+    // pending schema migration rather than a bad request, so call sites should say so.
+    // "table ... not found"           — H2
+    // "doesn't exist"                 — MySQL / MariaDB
+    // "relation ... does not exist"   — PostgreSQL
+    // "invalid object name"           — MSSQL
+    // "ora-00942" ("table or view does not exist") — Oracle
+    if (msg.includes("table") && msg.includes("not found")) ||
+            msg.includes("doesn't exist") || msg.includes("does not exist") ||
+            msg.includes("invalid object name") || msg.includes("ora-00942") {
+        return MISSING_SCHEMA_OBJECT;
     }
 
     return UNKNOWN_SQL_ERROR;

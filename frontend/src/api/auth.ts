@@ -72,7 +72,7 @@ export interface User {
   displayName: string;
   isSuperAdmin: boolean;
   isOidcUser: boolean;
-  groups: { groupId: string; groupName: string; groupDescription: string }[];
+  groups: { groupId: string; groupName: string; groupDescription: string; membershipSource?: MembershipSource }[];
   groupCount: number;
 }
 
@@ -127,6 +127,35 @@ export interface GroupUser {
   userId: string;
   username: string;
   displayName: string;
+  membershipSource?: MembershipSource;
+}
+
+export type MembershipSource = 'manual' | 'federated' | 'manual_and_federated';
+
+export interface SSOGroupMapping {
+  mappingId: string;
+  orgUuid: number;
+  issuer: string;
+  claimName: string;
+  claimValue: string;
+  groupId: string;
+  groupName: string;
+  // Administrative scope the mapping was created at (null = org level).
+  projectUuid?: string | null;
+  integrationUuid?: string | null;
+  projectName?: string | null;
+  integrationName?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SSOGroupMappingInput {
+  issuer: string;
+  claimName: string;
+  claimValue: string;
+  groupId: string;
+  projectUuid?: string;
+  integrationUuid?: string;
 }
 
 export interface RoleGroupMapping {

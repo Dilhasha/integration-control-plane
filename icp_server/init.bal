@@ -15,6 +15,7 @@
 // under the License.
 
 import icp_server.storage;
+import icp_server.types;
 import icp_server.utils;
 
 import ballerina/http;
@@ -73,7 +74,12 @@ function init() returns error? {
         log:printInfo("OpenSearch client initialized successfully");
     }
 
-// Initialize audit logging
+    types:SSOConfig ssoConfig = getSSOConfig();
+    if ssoConfig.passwordLoginDisabled || ssoConfig.federatedAccessControlEnabled {
+        check validateSSOConfig(ssoConfig);
+    }
+
+    // Initialize audit logging
     storage:initAuditLogging(enableAuditLogging, auditLogFilePath);
 
     // Initialize the runtime scheduler

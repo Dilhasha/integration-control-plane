@@ -33,11 +33,18 @@ const string VALID_AUTH_CODE = "valid-auth-code-12345";
 const string INVALID_AUTH_CODE = "invalid-auth-code";
 const string EXPIRED_AUTH_CODE = "expired-auth-code";
 const string NEW_USER_CODE = "new-user-auth-code";
+// Identity carrying neither the configured admin claim value nor any mappable
+// group — the only way to exercise a login that resolves to zero permissions.
+const string UNMAPPED_USER_CODE = "unmapped-user-auth-code";
 
 // Test user data
 const string TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440001";
 const string TEST_USER_EMAIL = "[email protected]";
 const string TEST_USER_NAME = "Test User";
+
+const string UNMAPPED_USER_ID = "550e8400-e29b-41d4-a716-446655440002";
+const string UNMAPPED_USER_EMAIL = "unmapped-user";
+const string UNMAPPED_USER_NAME = "Unmapped User";
 
 // RSA signing configuration for the mock provider
 const string MOCK_KEYSTORE_PATH = "tests/resources/keys/mock_oidc.p12";
@@ -121,7 +128,7 @@ service /oauth2 on mockOidcListener {
             }
 
             // Generate mock ID token (signed with RSA)
-            string idToken = check generateMockIdToken();
+            string idToken = check generateMockIdToken(code);
 
             // Return successful token response
             response.statusCode = 200;
@@ -149,16 +156,24 @@ service /oauth2 on mockOidcListener {
     }
 }
 
-// Generate a mock ID token signed with RS256
-function generateMockIdToken() returns string|error {
+// Generate a mock ID token signed with RS256. Every code other than
+// UNMAPPED_USER_CODE resolves to the same admin-claim identity, preserving the
+// behaviour the pre-existing OIDC tests were written against.
+function generateMockIdToken(string code) returns string|error {
     // Get current timestamp
     time:Utc currentTime = time:utcNow();
     int currentTimestamp = <int>currentTime[0];
     int expiryTimestamp = currentTimestamp + 3600; // 1 hour from now
 
+    boolean unmapped = code == UNMAPPED_USER_CODE;
+    string subject = unmapped ? UNMAPPED_USER_ID : TEST_USER_ID;
+    string email = unmapped ? UNMAPPED_USER_EMAIL : TEST_USER_EMAIL;
+    string name = unmapped ? UNMAPPED_USER_NAME : TEST_USER_NAME;
+    string[] groups = unmapped ? ["contractors"] : ["icp-platform-admins", "developers"];
+
     // Create ID token claims with RSA signature
     jwt:IssuerConfig issuerConfig = {
-        username: TEST_USER_ID,
+        username: subject,
         issuer: MOCK_ISSUER,
         audience: MOCK_CLIENT_ID,
         expTime: 3600,
@@ -172,9 +187,21 @@ function generateMockIdToken() returns string|error {
             }
         },
         customClaims: {
-            "sub": TEST_USER_ID,
-            "email": TEST_USER_EMAIL,
-            "name": TEST_USER_NAME,
+            "sub": subject,
+            "email": email,
+            "name": name,
+            "groups": groups,
+            "roles": "platform-admin",
+            "realm_access": {
+                "roles": ["realm-admin", "realm-auditor"]
+            },
+            "resource_access": {
+                "icp": {
+                    "roles": ["icp-admin", "icp-viewer"]
+                }
+            },
+            "invalid_claim": {"roles": ["not-a-string-root"]},
+            "mixed_values": ["valid", 100, true, "also-valid"],
             "iat": currentTimestamp,
             "exp": expiryTimestamp
         }

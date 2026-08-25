@@ -2,8 +2,8 @@ import { createContext, useContext, useState, useCallback, useMemo, useEffect } 
 import type { JSX, ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { loginApiUrl, loginUrl, oidcAuthorizeApiUrl, oidcCallbackApiUrl } from '../paths';
-import { saveTokens, clearTokens, getAccessToken, revokeToken, setOnAuthFailure, saveRedirectUrl, generateAndSaveOIDCState } from './tokenManager';
+import { loginApiUrl, loginUrl, notAuthorizedUrl, oidcAuthorizeApiUrl, oidcCallbackApiUrl } from '../paths';
+import { saveTokens, clearTokens, getAccessToken, revokeToken, setOnAuthFailure, setOnAuthorizationFailure, saveRedirectUrl, generateAndSaveOIDCState } from './tokenManager';
 
 const USER_KEY = 'icp_user';
 
@@ -50,12 +50,19 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   const [userInfo, setUserInfo] = useState<UserInfo | null>(() => loadUserInfo());
 
   useEffect(() => {
-    setOnAuthFailure(() => {
+    const clearSession = () => {
       localStorage.removeItem(USER_KEY);
       setUserInfo(null);
       setIsAuthenticated(false);
       queryClient.clear();
+    };
+    setOnAuthFailure(() => {
+      clearSession();
       navigate(loginUrl());
+    });
+    setOnAuthorizationFailure(() => {
+      clearSession();
+      navigate(notAuthorizedUrl());
     });
   }, [navigate, queryClient]);
 
@@ -115,8 +122,22 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       body: JSON.stringify({ code, state }),
     });
     if (!res.ok) {
+      // ICP error responses are JSON. Without parsing, err.message becomes the raw
+      // `{"message":"..."}` string and the callback page renders it verbatim.
       const body = await res.text();
-      throw new Error(body || `Token exchange failed (${res.status})`);
+      let errorMessage = body || `Token exchange failed (${res.status})`;
+      let username: string | undefined;
+      try {
+        const parsed = JSON.parse(body);
+        if (parsed.message) errorMessage = parsed.message;
+        if (parsed.username) username = parsed.username;
+      } catch {
+        /* keep raw body */
+      }
+      const err: Error & { status?: number; username?: string } = new Error(errorMessage);
+      err.status = res.status;
+      err.username = username;
+      throw err;
     }
     const data: { userId: string; token: string; expiresIn: number; refreshToken: string; refreshTokenExpiresIn: number; username: string; displayName: string; permissions: string[]; isOidcUser: boolean } = await res.json();
     saveTokens({ token: data.token, expiresIn: data.expiresIn, refreshToken: data.refreshToken, refreshTokenExpiresIn: data.refreshTokenExpiresIn });

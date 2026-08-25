@@ -19,6 +19,10 @@ import ballerina/jwt;
 import ballerina/log;
 import ballerina/test;
 
+import icp_server.auth;
+import icp_server.storage;
+import icp_server.types;
+
 // Test configuration
 const string AUTH_SERVICE_URL = "https://localhost:9446";
 const string MOCK_OIDC_PROVIDER_PORT = "9458";
@@ -153,6 +157,9 @@ function testOIDCLoginWithValidCode() returns error? {
     test:assertTrue(responseBody.refreshToken is string, "Refresh token should be present in response");
     test:assertTrue(responseBody.refreshTokenExpiresIn is int, "Refresh token expiresIn should be present in response");
     test:assertTrue(responseBody.displayName is string, "Display name should be present in response");
+    json[] permissions = check responseBody.permissions.ensureType();
+    test:assertTrue(permissions.toString().includes(auth:PERMISSION_USER_MANAGE_GROUPS),
+            "OIDC admin claim should grant Super Admins permissions before token generation");
 
     // Validate JWT token
     string token = check responseBody.token;
@@ -175,6 +182,9 @@ function testOIDCLoginWithValidCode() returns error? {
     test:assertTrue(payload.sub is string, "Subject should be present in JWT");
     test:assertEquals(payload["username"], TEST_USER_EMAIL, "Username should match the OIDC user email");
     test:assertEquals(payload["displayName"], TEST_USER_NAME, "Display name should match OIDC user name");
+    string scope = check payload["scope"].ensureType();
+    test:assertTrue(scope.includes(auth:PERMISSION_USER_MANAGE_GROUPS),
+            "OIDC admin claim should grant Super Admins scope in the JWT");
 
     log:printInfo("OIDC Test: Successfully logged in with valid authorization code");
 }
@@ -315,6 +325,138 @@ function testIDTokenClaimExtraction() returns error? {
     log:printInfo("OIDC Test: ID token claims extracted correctly");
 }
 
+// Test: Verify provider-specific OIDC claim path extraction
+@test:Config {
+    groups: ["oidc", "claims", "claim-paths"]
+}
+function testOIDCClaimPathExtraction() {
+    types:OIDCIdTokenClaims claims = {
+        sub: TEST_USER_ID,
+        iss: MOCK_ISSUER,
+        aud: MOCK_CLIENT_ID,
+        exp: 2000000000,
+        iat: 1999999000,
+        email: TEST_USER_EMAIL,
+        name: TEST_USER_NAME,
+        rawClaims: {
+            "sub": TEST_USER_ID,
+            "iss": MOCK_ISSUER,
+            "aud": MOCK_CLIENT_ID,
+            "exp": 2000000000,
+            "iat": 1999999000,
+            "email": TEST_USER_EMAIL,
+            "name": TEST_USER_NAME,
+            "groups": ["icp-platform-admins", "developers"],
+            "roles": "platform-admin",
+            "realm_access": {
+                "roles": ["realm-admin", "realm-auditor"]
+            },
+            "resource_access": {
+                "icp": {
+                    "roles": ["icp-admin", "icp-viewer"]
+                }
+            },
+            "invalid_claim": {"roles": ["not-a-string-root"]},
+            "mixed_values": ["valid", 100, true, "also-valid"]
+        }
+    };
+
+    test:assertEquals(auth:extractClaimValues(claims, "groups"),
+            ["icp-platform-admins", "developers"], "Should extract string array claims");
+    test:assertEquals(auth:extractClaimValues(claims, "roles"),
+            ["platform-admin"], "Should normalize scalar string claims");
+    test:assertEquals(auth:extractClaimValues(claims, "realm_access.roles"),
+            ["realm-admin", "realm-auditor"], "Should extract nested claim paths");
+    test:assertEquals(auth:extractClaimValues(claims, "resource_access.icp.roles"),
+            ["icp-admin", "icp-viewer"], "Should extract deeper nested claim paths");
+    test:assertEquals(auth:extractClaimValues(claims, "missing.roles"),
+            [], "Missing claim paths should return an empty list");
+    test:assertEquals(auth:extractClaimValues(claims, "invalid_claim"),
+            [], "Unsupported claim shapes should return an empty list");
+    test:assertEquals(auth:extractClaimValues(claims, "mixed_values"),
+            ["valid", "also-valid"], "Non-string values in arrays should be ignored");
+}
+
+@test:Config {
+    groups: ["oidc", "claims", "group-mapping"]
+}
+function testResolveFederatedGroupMemberships() {
+    types:OIDCIdTokenClaims claims = {
+        sub: TEST_USER_ID,
+        iss: MOCK_ISSUER,
+        aud: MOCK_CLIENT_ID,
+        exp: 2000000000,
+        iat: 1999999000,
+        rawClaims: {
+            "groups": ["developers", "auditors"],
+            "realm_access": {
+                "roles": ["realm-admin"]
+            }
+        }
+    };
+
+    types:SSOGroupMapping[] mappings = [
+        {
+            mappingId: "mapping-1",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: MOCK_ISSUER,
+            claimName: "groups",
+            claimValue: "developers",
+            groupId: "group-developers"
+        },
+        {
+            mappingId: "mapping-2",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: MOCK_ISSUER,
+            claimName: "realm_access.roles",
+            claimValue: "realm-admin",
+            groupId: "group-realm-admins"
+        },
+        {
+            mappingId: "mapping-3",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: MOCK_ISSUER,
+            claimName: "groups",
+            claimValue: "auditors",
+            groupId: "group-auditors",
+            projectUuid: "project-1",
+            integrationUuid: "integration-1"
+        },
+        {
+            mappingId: "mapping-4",
+            orgUuid: storage:DEFAULT_ORG_ID,
+            issuer: "https://other-idp.example.com",
+            claimName: "groups",
+            claimValue: "developers",
+            groupId: "group-other-issuer"
+        }
+    ];
+
+    types:FederatedGroupMembershipInput[] memberships =
+        auth:resolveFederatedGroupMemberships(claims, mappings);
+
+    test:assertEquals(memberships.length(), 3,
+        "Only mappings for the validated issuer should resolve, regardless of scope");
+    test:assertTrue(hasDesiredFederatedMembership(memberships, "group-developers", "groups", "developers"),
+        "Flat group claims should resolve");
+    test:assertTrue(hasDesiredFederatedMembership(
+        memberships, "group-realm-admins", "realm_access.roles", "realm-admin"),
+        "Nested role claims should resolve");
+    test:assertTrue(hasDesiredFederatedMembership(memberships, "group-auditors", "groups", "auditors"),
+        "Scoped mappings should resolve the same as org-level mappings");
+}
+
+function hasDesiredFederatedMembership(types:FederatedGroupMembershipInput[] memberships,
+        string groupId, string claimName, string claimValue) returns boolean {
+    foreach types:FederatedGroupMembershipInput membership in memberships {
+        if membership.groupId == groupId && membership.claimName == claimName
+                && membership.claimValue == claimValue {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Test: Verify display name fallback logic
 @test:Config {
     groups: ["oidc", "claims", "fallback"],
@@ -327,4 +469,3 @@ function testDisplayNameFallback() returns error? {
 
     log:printInfo("OIDC Test: Display name fallback logic (placeholder)");
 }
-
