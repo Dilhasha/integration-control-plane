@@ -65,7 +65,9 @@ service /auth on httpListener {
     }
     resource function get capabilities() returns http:Ok {
         string[] caps;
-        if ldapUserStoreEnabled {
+        if passwordLoginDisabled {
+            caps = [];
+        } else if ldapUserStoreEnabled {
             caps = ["authenticate"];
         } else {
             caps = [
@@ -79,8 +81,17 @@ service /auth on httpListener {
         return <http:Ok>{body: {capabilities: caps}};
     }
 
-    isolated resource function post login(types:Credentials credentials, http:Request req) returns http:Ok|http:Unauthorized|http:TooManyRequests|http:InternalServerError|error {
+    isolated resource function post login(types:Credentials credentials, http:Request req) returns http:Ok|http:Unauthorized|http:Forbidden|http:TooManyRequests|http:InternalServerError|error {
         log:printInfo("Login attempt for user", username = credentials.username);
+
+        if passwordLoginDisabled {
+            log:printWarn("Password login rejected because it is disabled", username = credentials.username);
+            storage:logAuditEvent(storage:AUDIT_LOGIN_FAILURE, resourceType = storage:AUDIT_RESOURCE_SESSION,
+                    details = string `Password login rejected because password login is disabled for user '${credentials.username}'`,
+                    clientIp = extractClientIp(req));
+            return utils:createForbiddenError("Password login is disabled. Use SSO to sign in.");
+        }
+
         // Call the authentication backend to verify credentials
         http:Response|error authResponse = authBackendClient->post("/authenticate", credentials);
 
@@ -273,7 +284,7 @@ service /auth on httpListener {
     }
 
     // OIDC Login endpoint - exchanges authorization code for ICP token
-    isolated resource function post login/oidc(types:OIDCCallbackRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:BadRequest|http:InternalServerError {
+    isolated resource function post login/oidc(types:OIDCCallbackRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:Forbidden|http:BadRequest|http:InternalServerError {
         log:printInfo("OIDC login attempt - exchanging authorization code");
 
         // Get SSO configuration
@@ -347,6 +358,55 @@ service /auth on httpListener {
             }
         }
 
+        error? ssoAdminGrantResult = grantSuperAdminFromSSOClaims(userDetails.userId, userInfo.username, claims, ssoConfig);
+        if ssoAdminGrantResult is error {
+            log:printError("Error applying SSO super admin claim mapping", ssoAdminGrantResult,
+                    username = userInfo.username);
+            return utils:createInternalServerError("Error applying SSO admin access");
+        }
+
+        error? federatedSyncResult = syncFederatedGroupsFromSSOClaims(userDetails.userId, userInfo.username, claims);
+        if federatedSyncResult is error {
+            log:printError("Error synchronizing SSO group memberships", federatedSyncResult,
+                    username = userInfo.username);
+            // A pending schema update is an operator problem with a known remedy, so
+            // pass that message through instead of a generic failure. Login-time
+            // reconciliation runs for every SSO login, so a database that has not been
+            // updated breaks SSO entirely — the message has to name the fix.
+            if federatedSyncResult.message() == storage:SSO_SCHEMA_UPDATE_REQUIRED {
+                return utils:createInternalServerError(storage:SSO_SCHEMA_UPDATE_REQUIRED);
+            }
+            return utils:createInternalServerError("Error synchronizing SSO group access");
+        }
+
+        // Resolved after the super admin grant and the federated sync so the gate below
+        // sees this login's membership, and so the bootstrapped super admin can never be
+        // locked out by the gate that their own grant satisfies.
+        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
+        if userPermissions is error {
+            log:printError("Error getting user permissions for OIDC user", userPermissions, userId = userDetails.userId);
+            return utils:createInternalServerError("Error getting user permissions");
+        }
+
+        // The user record is kept even when the login is refused: JIT provisioning is
+        // independent of authorization, and an admin needs the user to appear under
+        // Access Control → Users to map their IdP groups.
+        if !isLoginAuthorized(isLoginAuthorizationRequired(), userPermissions) {
+            log:printWarn("OIDC login refused — user has no ICP authorization",
+                    username = userDetails.username,
+                    userId = userDetails.userId);
+            storage:logAuditEvent(storage:AUDIT_OIDC_LOGIN_FAILURE, userId = userDetails.userId,
+                    resourceType = storage:AUDIT_RESOURCE_SESSION,
+                    details = string `OIDC login refused — no ICP authorization mapped for user '${userDetails.username}'`,
+                    clientIp = extractClientIp(req));
+            return <http:Forbidden>{
+                body: {
+                    message: LOGIN_NOT_AUTHORIZED_MESSAGE,
+                    username: userDetails.username
+                }
+            };
+        }
+
         // Generate JWT token using V2 utility function with permissions
         string|error jwtToken = auth:generateJWTTokenV2(
                 userDetails.userId,
@@ -361,13 +421,6 @@ service /auth on httpListener {
         if jwtToken is error {
             log:printError("Error generating JWT token for OIDC user", jwtToken);
             return utils:createInternalServerError("Error generating JWT token");
-        }
-
-        // Get user permissions for response
-        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
-        if userPermissions is error {
-            log:printError("Error getting user permissions for OIDC user", userPermissions, userId = userDetails.userId);
-            return utils:createInternalServerError("Error getting user permissions");
         }
 
         // Generate refresh token
@@ -581,7 +634,7 @@ service /auth on httpListener {
 
     // Token refresh endpoint - uses refresh token to generate new access token
     // This endpoint does NOT require JWT authentication - uses refresh token instead
-    isolated resource function post 'refresh\-token(types:RefreshTokenRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:BadRequest|http:InternalServerError {
+    isolated resource function post 'refresh\-token(types:RefreshTokenRequest request, http:Request req) returns http:Ok|http:Unauthorized|http:Forbidden|http:BadRequest|http:InternalServerError {
         log:printInfo("Token refresh requested using refresh token");
 
         // Validate request
@@ -600,6 +653,39 @@ service /auth on httpListener {
             return utils:createUnauthorizedError("Invalid or expired refresh token");
         }
 
+        // Resolved before the token is minted — without this gate a user authorized
+        // yesterday keeps refreshing indefinitely after their access is revoked.
+        // Note this reads effective permissions, so ICP-side revocation (roles removed
+        // from the group, group deleted) bites immediately, while deleting an SSO group
+        // mapping only takes effect once the user's next login runs the membership sync.
+        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
+        if userPermissions is error {
+            log:printError("Error getting user permissions for refresh token", userPermissions, userId = userDetails.userId);
+            return utils:createInternalServerError("Error getting user permissions");
+        }
+
+        if !isLoginAuthorized(isLoginAuthorizationRequired(), userPermissions) {
+            log:printWarn("Token refresh refused — user has no ICP authorization",
+                    username = userDetails.username,
+                    userId = userDetails.userId);
+            // Revoke the presented token so the client stops retrying with it.
+            error? revokeResult = storage:revokeRefreshToken(tokenHash);
+            if revokeResult is error {
+                log:printError("Error revoking refresh token for unauthorized user", revokeResult,
+                        userId = userDetails.userId);
+            }
+            storage:logAuditEvent(storage:AUDIT_OIDC_LOGIN_FAILURE, userId = userDetails.userId,
+                    resourceType = storage:AUDIT_RESOURCE_SESSION,
+                    details = string `Token refresh refused — no ICP authorization mapped for user '${userDetails.username}'`,
+                    clientIp = extractClientIp(req));
+            return <http:Forbidden>{
+                body: {
+                    message: LOGIN_NOT_AUTHORIZED_MESSAGE,
+                    username: userDetails.username
+                }
+            };
+        }
+
         // Generate new JWT access token using V2 with permissions
         string|error jwtToken = auth:generateJWTTokenV2(
                 userDetails.userId,
@@ -614,13 +700,6 @@ service /auth on httpListener {
         if jwtToken is error {
             log:printError("Error generating JWT token from refresh token", jwtToken);
             return utils:createInternalServerError("Error generating JWT token");
-        }
-
-        // Get user permissions for response
-        string[]|error userPermissions = auth:getUserPermissionNames(userDetails.userId);
-        if userPermissions is error {
-            log:printError("Error getting user permissions for refresh token", userPermissions, userId = userDetails.userId);
-            return utils:createInternalServerError("Error getting user permissions");
         }
 
         // If rotation is disabled, return response with same refresh token
@@ -1182,6 +1261,299 @@ service /auth on httpListener {
     }
 
     // ============================================================================
+    // SSO Group Mapping Endpoints
+    // ============================================================================
+
+    // GET /auth/orgs/{orgHandle}/sso/group-mappings - List SSO group mappings
+    @http:ResourceConfig {
+        auth: [
+            {
+                jwtValidatorConfig: {
+                    issuer: frontendJwtIssuer,
+                    audience: frontendJwtAudience,
+                    signatureConfig: {
+                        secret: resolvedFrontendJwtHMACSecret
+                    }
+                }
+            }
+        ]
+    }
+    isolated resource function get orgs/[string orgHandle]/sso/'group\-mappings(http:Request req)
+            returns http:Ok|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
+        log:printInfo("Fetching SSO group mappings", orgHandle = orgHandle);
+
+        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
+        if userContext is error {
+            return utils:createUnauthorizedError("Invalid or missing authentication token");
+        }
+
+        types:AccessScope orgScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], orgScope);
+        if hasPermission is error {
+            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
+            return utils:createInternalServerError("Error checking permissions");
+        }
+        if !hasPermission {
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to list SSO group mappings"
+                }
+            };
+        }
+
+        types:SSOGroupMappingResponse[]|error mappings =
+            storage:getSSOGroupMappingsWithGroupNamesByOrgId(storage:DEFAULT_ORG_ID);
+        if mappings is error {
+            log:printError("Error fetching SSO group mappings", mappings, orgHandle = orgHandle);
+            if mappings.message() == storage:SSO_SCHEMA_UPDATE_REQUIRED {
+                return utils:createInternalServerError(storage:SSO_SCHEMA_UPDATE_REQUIRED);
+            }
+            return utils:createInternalServerError("Failed to fetch SSO group mappings");
+        }
+
+        return <http:Ok>{
+            body: mappings
+        };
+    }
+
+    // POST /auth/orgs/{orgHandle}/sso/group-mappings - Create an SSO group mapping
+    @http:ResourceConfig {
+        auth: [
+            {
+                jwtValidatorConfig: {
+                    issuer: frontendJwtIssuer,
+                    audience: frontendJwtAudience,
+                    signatureConfig: {
+                        secret: resolvedFrontendJwtHMACSecret
+                    }
+                }
+            }
+        ]
+    }
+    isolated resource function post orgs/[string orgHandle]/sso/'group\-mappings(
+            @http:Payload types:SSOGroupMappingInput mappingInput, http:Request req)
+            returns http:Created|http:BadRequest|http:Conflict|http:NotFound|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
+        log:printInfo("Creating SSO group mapping", orgHandle = orgHandle);
+
+        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
+        if userContext is error {
+            return utils:createUnauthorizedError("Invalid or missing authentication token");
+        }
+
+        string? validationError = validateSSOGroupMappingInput(mappingInput);
+        if validationError is string {
+            return utils:createBadRequestError(validationError);
+        }
+
+        string? projectUuid = normalizeOptionalId(mappingInput?.projectUuid);
+        string? integrationUuid = normalizeOptionalId(mappingInput?.integrationUuid);
+
+        // Authorize at the mapping's administrative scope so project/integration
+        // scoped admins can manage mappings at their level but not broader ones.
+        types:AccessScope mappingScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        if projectUuid is string {
+            mappingScope.projectUuid = projectUuid;
+        }
+        if integrationUuid is string {
+            mappingScope.integrationUuid = integrationUuid;
+        }
+        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], mappingScope);
+        if hasPermission is error {
+            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
+            return utils:createInternalServerError("Error checking permissions");
+        }
+        if !hasPermission {
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to create SSO group mappings at the requested scope"
+                }
+            };
+        }
+
+        string? projectName = ();
+        string? integrationName = ();
+        if projectUuid is string {
+            types:Project|error project = storage:getProjectById(projectUuid);
+            if project is error || project.orgId != storage:DEFAULT_ORG_ID {
+                return <http:NotFound>{
+                    body: {
+                        message: "Target project not found"
+                    }
+                };
+            }
+            projectName = project.name;
+        }
+        if integrationUuid is string {
+            types:Component|error component = storage:getComponentById(integrationUuid);
+            if component is error || component.projectId != projectUuid {
+                return <http:NotFound>{
+                    body: {
+                        message: "Target integration not found in the specified project"
+                    }
+                };
+            }
+            integrationName = component.displayName;
+        }
+
+        types:SSOGroupMappingInput inputWithOrg = {
+            issuer: mappingInput.issuer.trim(),
+            claimName: mappingInput.claimName.trim(),
+            claimValue: mappingInput.claimValue.trim(),
+            groupId: mappingInput.groupId.trim(),
+            orgUuid: storage:DEFAULT_ORG_ID
+        };
+        if projectUuid is string {
+            inputWithOrg.projectUuid = projectUuid;
+        }
+        if integrationUuid is string {
+            inputWithOrg.integrationUuid = integrationUuid;
+        }
+        types:Group|error targetGroup = storage:getGroupById(inputWithOrg.groupId);
+        if targetGroup is error || targetGroup.orgUuid != storage:DEFAULT_ORG_ID {
+            return <http:NotFound>{
+                body: {
+                    message: "Target group not found"
+                }
+            };
+        }
+
+        // A mapping grants whatever the target group's roles grant, which may reach
+        // wider than the scope the mapping is administered at. Without this check a
+        // project-scoped administrator could map a claim onto an org-wide group
+        // (Super Admins included) and escalate privileges. Require the caller to
+        // hold the permission at every scope the target group's roles apply to.
+        boolean|error mayTargetGroup = canManageTargetGroupScopes(userContext.userId, inputWithOrg.groupId);
+        if mayTargetGroup is error {
+            log:printError("Error checking target group role scopes", mayTargetGroup, groupId = inputWithOrg.groupId);
+            return utils:createInternalServerError("Failed to verify target group permissions");
+        }
+        if !mayTargetGroup {
+            log:printWarn("SSO group mapping rejected — target group grants access beyond the caller's scope",
+                    userId = userContext.userId, groupId = inputWithOrg.groupId);
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to target this group. The group's roles apply beyond " +
+                        "the scope of this mapping; org-level user management is required."
+                }
+            };
+        }
+
+        string|error mappingId = storage:createSSOGroupMapping(inputWithOrg);
+        if mappingId is error {
+            log:printError("Error creating SSO group mapping", mappingId);
+            if mappingId.message().includes("already exists") {
+                // The unique constraint ignores scope, so the conflicting mapping
+                // may live at a different level than the caller can see.
+                return <http:Conflict>{
+                    body: {
+                        message: describeSSOMappingConflict(inputWithOrg)
+                    }
+                };
+            }
+            return utils:createInternalServerError("Failed to create SSO group mapping");
+        }
+
+        types:SSOGroupMapping|error createdMapping = storage:getSSOGroupMappingById(mappingId);
+        if createdMapping is error {
+            log:printError("Error fetching created SSO group mapping", createdMapping, mappingId = mappingId);
+            return utils:createInternalServerError("Mapping created but failed to fetch details");
+        }
+
+        types:SSOGroupMappingResponse response = {
+            ...createdMapping,
+            groupName: targetGroup.groupName,
+            projectName: projectName,
+            integrationName: integrationName
+        };
+        return <http:Created>{
+            body: response
+        };
+    }
+
+    // SSO group mappings are immutable: there is no update endpoint. Changing a
+    // mapping's issuer, claim, group, or scope means delete + create.
+
+    // DELETE /auth/orgs/{orgHandle}/sso/group-mappings/{mappingId} - Delete an SSO group mapping
+    @http:ResourceConfig {
+        auth: [
+            {
+                jwtValidatorConfig: {
+                    issuer: frontendJwtIssuer,
+                    audience: frontendJwtAudience,
+                    signatureConfig: {
+                        secret: resolvedFrontendJwtHMACSecret
+                    }
+                }
+            }
+        ]
+    }
+    isolated resource function delete orgs/[string orgHandle]/sso/'group\-mappings/[string mappingId](
+            http:Request req)
+            returns http:Ok|http:NotFound|http:Unauthorized|http:Forbidden|http:InternalServerError|error {
+        log:printInfo("Deleting SSO group mapping", orgHandle = orgHandle, mappingId = mappingId);
+
+        types:UserContextV2|error userContext = extractUserContextFromRequest(req);
+        if userContext is error {
+            return utils:createUnauthorizedError("Invalid or missing authentication token");
+        }
+
+        types:SSOGroupMapping|error mapping = storage:getSSOGroupMappingById(mappingId);
+        if mapping is error || mapping.orgUuid != storage:DEFAULT_ORG_ID {
+            return <http:NotFound>{
+                body: {
+                    message: "SSO group mapping not found"
+                }
+            };
+        }
+
+        // Authorize at the mapping's administrative scope, mirroring create.
+        types:AccessScope mappingScope = {orgUuid: storage:DEFAULT_ORG_ID};
+        string? mappingProjectUuid = mapping.projectUuid;
+        if mappingProjectUuid is string {
+            mappingScope.projectUuid = mappingProjectUuid;
+        }
+        string? mappingIntegrationUuid = mapping.integrationUuid;
+        if mappingIntegrationUuid is string {
+            mappingScope.integrationUuid = mappingIntegrationUuid;
+        }
+        boolean|error hasPermission = auth:hasAnyPermission(userContext.userId,
+            [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], mappingScope);
+        if hasPermission is error {
+            log:printError("Error checking permissions", hasPermission, userId = userContext.userId);
+            return utils:createInternalServerError("Error checking permissions");
+        }
+        if !hasPermission {
+            return <http:Forbidden>{
+                body: {
+                    message: "Insufficient permissions to delete SSO group mappings at this scope"
+                }
+            };
+        }
+
+        error? deleteResult = storage:deleteSSOGroupMapping(mappingId, storage:DEFAULT_ORG_ID);
+        if deleteResult is error {
+            log:printError("Error deleting SSO group mapping", deleteResult, mappingId = mappingId);
+            if deleteResult.message().includes("not found") {
+                return <http:NotFound>{
+                    body: {
+                        message: "SSO group mapping not found"
+                    }
+                };
+            }
+            return utils:createInternalServerError("Failed to delete SSO group mapping");
+        }
+
+        return <http:Ok>{
+            body: {
+                message: "SSO group mapping deleted successfully",
+                mappingId: mappingId
+            }
+        };
+    }
+
+    // ============================================================================
     // Group-User Mapping Endpoints (RBAC v2)
     // ============================================================================
 
@@ -1217,6 +1589,14 @@ service /auth on httpListener {
             return <http:Forbidden>{
                 body: {
                     message: "Insufficient permissions to add users to group"
+                }
+            };
+        }
+
+        if federatedAccessControlEnabled {
+            return <http:Forbidden>{
+                body: {
+                    message: "Manual group membership additions are disabled because federated access control is enabled. Manage memberships through SSO group mappings."
                 }
             };
         }
@@ -1322,21 +1702,27 @@ service /auth on httpListener {
             };
         }
 
-        // Get user IDs in the group
-        string[]|error userIds = storage:getGroupUsers(groupId);
-        if userIds is error {
-            log:printError("Error fetching group users", userIds, groupId = groupId);
+        // Get effective users and whether each membership is manual or SSO-owned.
+        types:EffectiveGroupUserMembership[]|error memberships =
+            storage:getGroupUsersWithMembershipSource(groupId);
+        if memberships is error {
+            log:printError("Error fetching group users", memberships, groupId = groupId);
             return utils:createInternalServerError("Failed to fetch group users");
         }
 
         // Fetch details for each user
-        types:User[] users = [];
-        foreach string userId in userIds {
-            types:User|error user = storage:getUserDetailsById(userId);
+        json[] users = [];
+        foreach types:EffectiveGroupUserMembership membership in memberships {
+            types:User|error user = storage:getUserDetailsById(membership.userUuid);
             if user is types:User {
-                users.push(user);
+                users.push({
+                    userId: user.userId,
+                    username: user.username,
+                    displayName: user.displayName,
+                    membershipSource: membership.membershipSource
+                });
             } else {
-                log:printWarn(string `Failed to fetch details for user ${userId}`, user);
+                log:printWarn(string `Failed to fetch details for user ${membership.userUuid}`, user);
             }
         }
 
@@ -1446,7 +1832,7 @@ service /auth on httpListener {
         }
 
         // Fetch current group memberships
-        types:Group[]|error currentGroups = storage:getUserGroups(userId);
+        types:Group[]|error currentGroups = storage:getUserManualGroups(userId);
         if currentGroups is error {
             log:printError("Failed to fetch current user groups", currentGroups, userId = userId);
             return utils:createInternalServerError("Failed to fetch current user groups");
@@ -1488,6 +1874,17 @@ service /auth on httpListener {
             }
         }
 
+        // In federated mode manual memberships come from SSO group mappings;
+        // admins may still remove manual rows (e.g. a stale super admin grant)
+        // but must not add new ones.
+        if federatedAccessControlEnabled && toAdd.length() > 0 {
+            return <http:Forbidden>{
+                body: {
+                    message: "Manual group membership additions are disabled because federated access control is enabled. Only removals are allowed."
+                }
+            };
+        }
+
         int added = 0;
         int removed = 0;
         string[] errors = [];
@@ -1514,16 +1911,20 @@ service /auth on httpListener {
             }
         }
 
-        // Fetch final groups
-        types:Group[]|error finalGroups = storage:getUserGroups(userId);
+        // Fetch the final manual memberships. This endpoint only ever adds or removes
+        // manual rows, so the result deliberately excludes SSO-owned (federated)
+        // memberships. The response field is named accordingly so callers do not read
+        // it as the user's effective group set — use GET /users, which reports
+        // membershipSource, for that.
+        types:Group[]|error finalGroups = storage:getUserManualGroups(userId);
         if finalGroups is error {
             log:printError("Failed to fetch final user groups", finalGroups, userId = userId);
             return utils:createInternalServerError("Failed to fetch final user groups");
         }
 
-        string[] finalIds = [];
+        string[] manualGroupIds = [];
         foreach types:Group g in <types:Group[]>finalGroups {
-            finalIds.push(g.groupId);
+            manualGroupIds.push(g.groupId);
         }
 
         return <http:Ok>{
@@ -1533,7 +1934,7 @@ service /auth on httpListener {
                 addedCount: added,
                 removedCount: removed,
                 errors: errors,
-                groupIds: finalIds
+                manualGroupIds: manualGroupIds
             }
         };
     }
@@ -2089,6 +2490,15 @@ service /auth on httpListener {
             return <http:Forbidden>{
                 body: {
                     message: "Insufficient permissions to create users"
+                }
+            };
+        }
+
+        // SSO-only deployments (modes 2 and 3) provision users through SSO login.
+        if passwordLoginDisabled {
+            return <http:Forbidden>{
+                body: {
+                    message: "User creation is disabled because password login is disabled. Users are provisioned through SSO login."
                 }
             };
         }
@@ -3205,3 +3615,203 @@ isolated function extractUserContextFromRequest(http:Request req) returns types:
     return userContext;
 }
 
+isolated function validateSSOGroupMappingInput(types:SSOGroupMappingInput input) returns string? {
+    string issuer = input.issuer.trim();
+    string claimName = input.claimName.trim();
+    string claimValue = input.claimValue.trim();
+    string groupId = input.groupId.trim();
+
+    if issuer == "" {
+        return "Issuer must not be empty";
+    }
+    if claimName == "" {
+        return "Claim name must not be empty";
+    }
+    if claimValue == "" {
+        return "Claim value must not be empty";
+    }
+    if groupId == "" {
+        return "Group ID must not be empty";
+    }
+    if issuer.length() > 255 {
+        return "Issuer must not exceed 255 characters";
+    }
+    if claimName.length() > 128 {
+        return "Claim name must not exceed 128 characters";
+    }
+    if claimValue.length() > 255 {
+        return "Claim value must not exceed 255 characters";
+    }
+    if groupId.length() > 36 {
+        return "Group ID must not exceed 36 characters";
+    }
+
+    string? projectUuid = normalizeOptionalId(input?.projectUuid);
+    string? integrationUuid = normalizeOptionalId(input?.integrationUuid);
+    if projectUuid is string && projectUuid.length() > 36 {
+        return "Project ID must not exceed 36 characters";
+    }
+    if integrationUuid is string && integrationUuid.length() > 36 {
+        return "Integration ID must not exceed 36 characters";
+    }
+    if integrationUuid is string && projectUuid is () {
+        return "Integration-scoped mappings require a project ID";
+    }
+
+    return ();
+}
+
+// Trim an optional ID; blank values are treated as absent (org-level scope).
+isolated function normalizeOptionalId(string? value) returns string? {
+    if value is () {
+        return ();
+    }
+    string trimmed = value.trim();
+    return trimmed == "" ? () : trimmed;
+}
+
+// The sso_group_mappings unique constraint ignores scope, so a duplicate may
+// have been created at a level the caller's tab does not manage. Name the
+// existing mapping's scope in the conflict message to avoid confusion.
+# Checks whether the caller may target a group in an SSO mapping.
+#
+# The mapping's own scope only decides where it is administered; the access it
+# hands out comes from the target group's `group_role_mapping` rows, which may be
+# scoped more widely. The caller must therefore hold user-management permission at
+# every scope those roles apply to, otherwise a narrowly-scoped administrator could
+# grant org-wide access (including Super Admins) through a scoped mapping.
+#
+# + userId - The calling user's ID.
+# + groupId - The target ICP group.
+# + return - true if the caller may target the group, false otherwise, or an error.
+isolated function canManageTargetGroupScopes(string userId, string groupId) returns boolean|error {
+    types:GroupRoleMapping[] roleMappings = check storage:getGroupRoleMappings(groupId);
+
+    foreach types:GroupRoleMapping roleMapping in roleMappings {
+        types:AccessScope roleScope = {orgUuid: roleMapping.orgUuid ?: storage:DEFAULT_ORG_ID};
+        string? roleProject = roleMapping.projectUuid;
+        if roleProject is string {
+            roleScope.projectUuid = roleProject;
+        }
+        string? roleIntegration = roleMapping.integrationUuid;
+        if roleIntegration is string {
+            roleScope.integrationUuid = roleIntegration;
+        }
+
+        boolean hasScopedPermission = check auth:hasAnyPermission(userId,
+                [auth:PERMISSION_USER_MANAGE_GROUPS, auth:PERMISSION_USER_UPDATE_GROUP_ROLES], roleScope);
+        if !hasScopedPermission {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+isolated function describeSSOMappingConflict(types:SSOGroupMappingInput input) returns string {
+    string baseMessage = "This SSO group mapping already exists";
+    types:SSOGroupMappingResponse[]|error mappings =
+        storage:getSSOGroupMappingsWithGroupNamesByOrgId(input.orgUuid ?: storage:DEFAULT_ORG_ID);
+    if mappings is error {
+        return baseMessage;
+    }
+    foreach types:SSOGroupMappingResponse mapping in mappings {
+        if mapping.issuer == input.issuer && mapping.claimName == input.claimName
+                && mapping.claimValue == input.claimValue && mapping.groupId == input.groupId {
+            string? integrationName = mapping.integrationName;
+            string? projectName = mapping.projectName;
+            if integrationName is string {
+                return string `${baseMessage} for integration '${integrationName}'`;
+            }
+            if projectName is string {
+                return string `${baseMessage} in project '${projectName}'`;
+            }
+            return string `${baseMessage} at the organization level`;
+        }
+    }
+    return baseMessage;
+}
+
+isolated function grantSuperAdminFromSSOClaims(string userId, string username, types:OIDCIdTokenClaims claims,
+        types:SSOConfig ssoConfig) returns error? {
+    if ssoConfig.adminClaim.trim() == "" || ssoConfig.adminValues.length() == 0 {
+        return;
+    }
+
+    string[] claimValues = auth:extractClaimValues(claims, ssoConfig.adminClaim);
+    if !hasMatchingSSOAdminValue(claimValues, ssoConfig.adminValues) {
+        log:printDebug("SSO admin claim did not match configured values", username = username,
+                claim = ssoConfig.adminClaim);
+        return;
+    }
+
+    string|error superAdminsGroupId = storage:getSuperAdminsGroupId();
+    if superAdminsGroupId is error {
+        return error("Could not resolve Super Admins group", superAdminsGroupId);
+    }
+
+    boolean|error alreadyMember = storage:isUserInGroup(userId, superAdminsGroupId);
+    if alreadyMember is error {
+        return error("Could not check Super Admins group membership", alreadyMember);
+    }
+    if alreadyMember {
+        log:printDebug("SSO user is already in Super Admins group", username = username);
+        return;
+    }
+
+    error? addResult = storage:addUserToGroup(userId, superAdminsGroupId);
+    if addResult is error {
+        return error("Could not add SSO user to Super Admins group", addResult);
+    }
+
+    log:printInfo("Granted Super Admins group membership from SSO claim", username = username,
+            claim = ssoConfig.adminClaim);
+}
+
+isolated function syncFederatedGroupsFromSSOClaims(string userId, string username,
+        types:OIDCIdTokenClaims claims) returns error? {
+    types:SSOGroupMapping[] mappings =
+        check storage:getSSOGroupMappingsByIssuer(storage:DEFAULT_ORG_ID, claims.iss);
+    types:FederatedGroupMembershipInput[] desiredMemberships =
+        auth:resolveFederatedGroupMemberships(claims, mappings);
+
+    check storage:reconcileFederatedGroupUserMappings(
+        storage:DEFAULT_ORG_ID,
+        claims.iss,
+        userId,
+        desiredMemberships
+    );
+
+    log:printDebug("Synchronized SSO group memberships", username = username,
+            issuer = claims.iss, membershipCount = desiredMemberships.length());
+}
+
+// Shown to an authenticated user who resolved to no ICP authorization. Kept free
+// of configuration detail — it must not reveal which claim or values gate access.
+const string LOGIN_NOT_AUTHORIZED_MESSAGE = "Your account is not authorized to access this instance. " +
+    "Contact your administrator to have your identity provider groups mapped.";
+
+// Only federated access control makes the IdP the sole source of group membership,
+// so it is the only mode where "no mapping" means "no access". SSO-only mode
+// deliberately admits zero-permission users so an admin can assign groups by hand.
+isolated function isLoginAuthorizationRequired() returns boolean {
+    return federatedAccessControlEnabled;
+}
+
+// The gate reads the effective permission set rather than group membership, so a
+// user in a group carrying no group_role_mapping rows is refused just like a user
+// in no group at all — neither can do anything with a token.
+isolated function isLoginAuthorized(boolean authorizationRequired, string[] permissions) returns boolean {
+    return !authorizationRequired || permissions.length() > 0;
+}
+
+isolated function hasMatchingSSOAdminValue(string[] claimValues, string[] configuredAdminValues) returns boolean {
+    foreach string claimValue in claimValues {
+        foreach string configuredValue in configuredAdminValues {
+            if configuredValue.trim() != "" && claimValue == configuredValue.trim() {
+                return true;
+            }
+        }
+    }
+    return false;
+}

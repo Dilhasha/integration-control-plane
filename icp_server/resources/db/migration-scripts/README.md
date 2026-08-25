@@ -1,9 +1,10 @@
 # ICP Database Migration Scripts
 
-This directory contains two kinds of SQL scripts:
+This directory contains **in-place v2 schema upgrade** scripts — they bring an existing ICP v2
+database up to the current schema.
 
-1. **In-place v2 schema upgrades** (`add_workflow_feature_<engine>.sql`, `add_openapi_definitions_<engine>.sql`, `add_integration_types_<engine>.sql`, `add_faulty_data_service_state_<engine>.sql`) — bring an existing ICP v2 database up to the current schema.
-2. **ICP v1 → v2 user migration** (`v1_to_v2_<engine>.sql`) — migrate user accounts, credentials, and role assignments from ICP v1.
+For migrating user accounts, credentials, and role assignments from **ICP v1**, see
+[`../icp-1.2.x-to-2.x.x/`](../icp-1.2.x-to-2.x.x/).
 
 ---
 
@@ -109,6 +110,59 @@ sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_openapi_d
 
 ---
 
+## Upgrading an existing ICP v2 deployment: service-to-listener bindings
+
+Deployments whose database was initialised **before runtimes reported which listeners each
+service is attached to** must run the service-listener-bindings upgrade script once against the
+**main ICP DB** — **before** deploying this server version. Fresh installs do not need it — the
+`*_init.sql` scripts already contain everything.
+
+Without it, every full heartbeat fails: `insertRuntimeArtifacts` unconditionally issues
+`DELETE FROM bi_service_listener_bindings` for the reporting runtime before inserting its
+services, so a missing table errors out that statement and aborts the whole heartbeat
+transaction.
+
+Pick the script matching your database engine:
+
+| Engine | Script |
+|---|---|
+| H2 | `add_service_listener_bindings_h2.sql` |
+| MySQL / MariaDB | `add_service_listener_bindings_mysql.sql` |
+| PostgreSQL | `add_service_listener_bindings_postgresql.sql` |
+| Microsoft SQL Server | `add_service_listener_bindings_mssql.sql` |
+| Oracle (19c+) | `add_service_listener_bindings_oracle.sql` |
+
+Each script adds the `bi_service_listener_bindings` table — many-to-many, keyed by
+`(runtime_id, service_name, service_package, listener_name)` and cascade-deleted with the
+runtime — plus indexes for lookups by service and by listener. The binding arrives in the
+heartbeat as `heartbeat.artifacts.services[].listeners` and is keyed to
+`bi_runtime_listener_artifacts` by `(runtime_id, listener_name)`.
+
+The scripts are **idempotent** — safe to re-run. No server restart is required; the next
+heartbeat starts populating the table.
+
+```bash
+# H2 (server may stay running thanks to AUTO_SERVER)
+java -cp <path-to-h2.jar> org.h2.tools.RunScript \
+  -url "jdbc:h2:file:./database/icp_db;MODE=MySQL;AUTO_SERVER=TRUE" \
+  -user <db_user> -password <db_password> \
+  -script add_service_listener_bindings_h2.sql
+
+# MySQL
+mysql -u <admin_user> -p <icp_db_name> < add_service_listener_bindings_mysql.sql
+
+# PostgreSQL
+psql -U <admin_user> -d <icp_db_name> -f add_service_listener_bindings_postgresql.sql
+
+# Microsoft SQL Server
+sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_service_listener_bindings_mssql.sql
+
+# Oracle (run as the ICP schema owner)
+sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_service_listener_bindings_oracle.sql
+```
+
+---
+
 ## Upgrading an existing ICP v2 deployment: integration types
 
 Deployments whose database was initialised **before integrations carried a type** must run the
@@ -164,188 +218,73 @@ sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_integrati
 
 ---
 
-## Upgrading an existing ICP v2 deployment: faulty data service tracking
+## Upgrading an existing ICP v2 deployment: SSO group mapping
 
-Deployments whose database was initialised **before data services reported a
-deploy failure** must run the faulty data service upgrade script once against the
-**main ICP DB** — **before** deploying this server version. Fresh installs do not
-need it — the `*_init.sql` scripts already contain everything.
+Deployments whose database was initialised **before SSO-driven group membership** must run the
+SSO group mapping upgrade script once against the **main ICP DB** — **before** deploying this
+server version. Fresh installs do not need it — the `*_init.sql` scripts already contain
+everything.
 
-Without it, every full heartbeat that carries a data service fails: the heartbeat
-now inserts `mi_data_service_artifacts.error_message` and reports the artifact
-state as `Active` or `Faulty`, so a missing `error_message` column (or the old
-`enabled`/`disabled` state CHECK/ENUM) errors out the insert and aborts the whole
-heartbeat transaction.
+**This applies to every deployment, not just those using SSO.** The script rebinds the core
+RBAC access views onto a new membership view, and `buildUserAuthzContext` — the authorization
+context built for authenticated requests — resolves a user's groups through it regardless of
+whether SSO is configured. Without the script, those queries reference objects that do not
+exist and authorization fails, so it is not optional for password-only deployments.
+
+If the script has not been run, SSO login fails and the server responds with:
+
+> This update adds new SSO capabilities that need a one-time update to the ICP database.
+> Update the database and restart ICP to continue using SSO.
+
+The accompanying server log names the exact script to apply. This is reported on **every**
+SSO login, not only when SSO group mappings are configured: login-time reconciliation reads
+these tables on each login to work out which memberships should be added or removed, so an
+empty mapping list still requires the tables to exist.
 
 Pick the script matching your database engine:
 
 | Engine | Script |
 |---|---|
-| H2 | `add_faulty_data_service_state_h2.sql` |
-| MySQL / MariaDB | `add_faulty_data_service_state_mysql.sql` |
-| PostgreSQL | `add_faulty_data_service_state_postgresql.sql` |
-| Microsoft SQL Server | `add_faulty_data_service_state_mssql.sql` |
-| Oracle (19c+) | `add_faulty_data_service_state_oracle.sql` |
+| H2 | `add_sso_group_mapping_tables_h2.sql` |
+| MySQL / MariaDB | `add_sso_group_mapping_tables_mysql.sql` |
+| PostgreSQL | `add_sso_group_mapping_tables_postgresql.sql` |
+| Microsoft SQL Server | `add_sso_group_mapping_tables_mssql.sql` |
+| Oracle (19c+) | `add_sso_group_mapping_tables_oracle.sql` |
 
-Each script adds `mi_data_service_artifacts.error_message` (the deploy failure
-message the runtime bridge reports when `state = 'Faulty'`), canonicalizes every
-previously deployed service to `Active`, and restricts the state contract to
-`('Active', 'Faulty')`.
+Each script applies, in order:
 
-The scripts are **idempotent** — safe to re-run. No server restart is required;
-the next heartbeat starts populating the column.
+1. `sso_group_mappings` — maps an IdP claim value to an ICP group, with optional project or
+   integration scope
+2. `federated_group_user_mapping` — SSO-owned group memberships, kept separate from the manual
+   ones in `group_user_mapping` so the two can be told apart and managed independently
+3. `v_effective_group_user_mapping` — a `UNION` of manual and SSO-owned memberships
+4. Rebinds `v_user_project_access`, `v_user_integration_access` and `v_user_environment_access`
+   onto that view, so permission resolution honours federated memberships
+
+Step 4 is the reason this is more than a table addition: the three access views already exist in
+a pre-SSO database, reading `group_user_mapping` directly. Their column lists do not change —
+only the membership source — and the definitions match the `*_init.sql` ones, so a migrated
+schema ends up identical to a fresh install.
+
+The scripts are **idempotent** — safe to re-run, including after a partial failure. No data
+backfill is involved: federated memberships are recorded as users log in through the IdP.
 
 ```bash
 # H2 (server may stay running thanks to AUTO_SERVER)
 java -cp <path-to-h2.jar> org.h2.tools.RunScript \
   -url "jdbc:h2:file:./database/icp_db;MODE=MySQL;AUTO_SERVER=TRUE" \
   -user <db_user> -password <db_password> \
-  -script add_faulty_data_service_state_h2.sql
+  -script add_sso_group_mapping_tables_h2.sql
 
 # MySQL
-mysql -u <admin_user> -p <icp_db_name> < add_faulty_data_service_state_mysql.sql
+mysql -u <admin_user> -p <icp_db_name> < add_sso_group_mapping_tables_mysql.sql
 
 # PostgreSQL
-psql -U <admin_user> -d <icp_db_name> -f add_faulty_data_service_state_postgresql.sql
+psql -U <admin_user> -d <icp_db_name> -f add_sso_group_mapping_tables_postgresql.sql
 
 # Microsoft SQL Server
-sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_faulty_data_service_state_mssql.sql
+sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_sso_group_mapping_tables_mssql.sql
 
 # Oracle (run as the ICP schema owner)
-sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_faulty_data_service_state_oracle.sql
+sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_sso_group_mapping_tables_oracle.sql
 ```
-
----
-
-# ICP v1 → v2 User Migration
-
-The following scripts migrate user accounts, credentials, and role assignments from **ICP v1** to **ICP v2**.
-
-Scripts are provided for **MySQL / MariaDB** and **Microsoft SQL Server**. The script requires the old and new databases to be on the same server instance, using cross-database references to read from the old schema and write to both new schemas in a single session.
-
----
-
-## Running the script
-
-**Prerequisites:**
-
-1. The new ICP v2 main DB and credentials DB must already be initialised using the standard init scripts.
-2. The database user running the script must have `SELECT` privileges on the old database and `INSERT` / `UPDATE` / `DELETE` privileges on the two new databases.
-
----
-
-### MySQL / MariaDB (`v1_to_v2_mysql.sql`)
-
-1. Edit the configuration variables at the top of `v1_to_v2_mysql.sql`:
-
-   ```sql
-   SET @old_db          = 'userdb';    -- Old ICP v1 database name
-   SET @new_main_db     = 'icp_db';    -- New ICP v2 main database name
-   SET @new_creds_db    = 'icp_creds'; -- New ICP v2 credentials database name
-   SET @reset_passwords = FALSE;       -- Set TRUE to force a password change on first login
-   ```
-
-2. Run the script:
-
-   ```bash
-   mysql -u <admin_user> -p < v1_to_v2_mysql.sql 2>&1 | tee migration.log
-   ```
-
----
-
-### Microsoft SQL Server (`v1_to_v2_mssql.sql`)
-
-1. Edit the configuration variables at the top of `v1_to_v2_mssql.sql`:
-
-   ```sql
-   DECLARE @old_db          NVARCHAR(128) = N'userdb';    -- Old ICP v1 database name
-   DECLARE @new_main_db     NVARCHAR(128) = N'icp_db';    -- New ICP v2 main database name
-   DECLARE @new_creds_db    NVARCHAR(128) = N'icp_creds'; -- New ICP v2 credentials database name
-   DECLARE @reset_passwords BIT           = 0;             -- Set 1 to force a password change on first login
-   ```
-
-2. Run the script:
-
-   ```bash
-   sqlcmd -S <server> -U <user> -P <password> -i v1_to_v2_mssql.sql
-   ```
-
-   Alternatively, open the file in SSMS and execute it.
-
-The script prints a status message after each step and a summary table at the end.
-
----
-
-## Post-migration checklist
-
-1. **`Config.toml`** — set `passwordHashingAlgorithm` to match the old `PasswordDigest`:
-
-   ```toml
-   passwordHashingAlgorithm = "sha-256"   # or sha-1, md5, sha-512, plain_text
-   ```
-
-2. **Restart** the ICP v2 server.
-
----
-
-## What is migrated
-
-| Data | Source (ICP v1) | Destination (ICP v2) |
-|---|---|---|
-| User identity | `UM_USER` (`UM_USER_ID`, `UM_USER_NAME`) | `users` (main DB) |
-| Display name | `UM_USER_ATTRIBUTE` (`displayName` claim) | `users.display_name` |
-| Password hash + salt | `UM_USER` (`UM_USER_PASSWORD`, `UM_SALT_VALUE`) | `user_credentials` (credentials DB) |
-| Role → group assignment | `UM_USER_ROLE` + `UM_HYBRID_USER_ROLE` | `group_user_mapping` (main DB) |
-
-**What is NOT migrated:** refresh tokens, OIDC sessions, audit logs, custom attributes beyond display name, or project/environment data (which does not exist in ICP v1).
-
----
-
-## Conflict resolution
-
-The ICP v2 init scripts seed a default `admin` user. When the migration script encounters a username that already exists in the new database it applies the following rules:
-
-| Existing username in new DB | Action |
-|---|---|
-| `admin` | **Merge** — keep the v2 UUID and group membership intact; overwrite `password_hash`/`password_salt` with old system values |
-| any other username | **Replace** — delete the pre-existing v2 user (and their group mappings) then insert the old system's version of that user with its original UUID |
-
-The replace strategy gives the old system full priority: any user account that was pre-created in ICP v2 before migration (other than the seed admin) will be overwritten by the migrated account.
-
----
-
-## Password migration
-
-ICP v1 stored passwords as:
-
-```text
-Base64( Digest( password + salt ) )
-```
-
-where `Digest` is the algorithm set in `user-mgt.xml` → `PasswordDigest` (default: `SHA-256`). Salt storage is controlled by `StoreSaltedPassword` (default: `true`).
-
-ICP v2's default authentication backend (`default_user_service.bal`) supports the **same algorithm family** via the `passwordHashingAlgorithm` setting in `Config.toml`:
-
-| Old `PasswordDigest` value | ICP v2 `passwordHashingAlgorithm` |
-|---|---|
-| `SHA-256` *(default)* | `sha-256` |
-| `SHA-1` / `SHA` | `sha-1` |
-| `SHA-384` | `sha-384` |
-| `SHA-512` | `sha-512` |
-| `MD5` | `md5` |
-| *(null / `PLAIN_TEXT`)* | `plain_text` |
-
-The migration script copies hashes and salts **as-is**. After migration, set `passwordHashingAlgorithm` in `Config.toml` to match your old `PasswordDigest` value. Migrated users will not be forced to change their password on first login by default. Set `@reset_passwords = TRUE` in the script configuration to require a password change on first login.
-
----
-
-## Role → group mapping
-
-ICP v1 used flat WSO2 roles. ICP v2 uses a group-based RBAC model. The migration applies a simple two-bucket mapping:
-
-| Old role (`UM_ROLE` or `UM_HYBRID_ROLE`) | ICP v2 group |
-|---|---|
-| `admin` / `Internal/admin` | Super Admins |
-| any other role (or no role) | Developers |
-
-Users assigned to Super Admins also get `is_super_admin = TRUE` in the `users` table.

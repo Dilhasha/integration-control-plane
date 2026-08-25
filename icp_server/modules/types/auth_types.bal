@@ -124,6 +124,148 @@ public type GroupUserMapping record {
     string createdAt?;
 };
 
+public type EffectiveGroupUserMembership record {|
+    @sql:Column {name: "user_uuid"}
+    string userUuid;
+
+    @sql:Column {name: "membership_source"}
+    string membershipSource;
+|};
+
+// SSO group mapping - links IdP claim values to existing ICP groups.
+// projectUuid/integrationUuid record the administrative scope the mapping was
+// created at (absent = org level); they do not affect login-time sync.
+public type SSOGroupMapping record {|
+    @sql:Column {name: "mapping_id"}
+    string mappingId;
+
+    @sql:Column {name: "org_uuid"}
+    int orgUuid;
+
+    string issuer;
+
+    @sql:Column {name: "claim_name"}
+    string claimName;
+
+    @sql:Column {name: "claim_value"}
+    string claimValue;
+
+    @sql:Column {name: "group_id"}
+    string groupId;
+
+    @sql:Column {name: "project_uuid"}
+    string? projectUuid = ();
+
+    @sql:Column {name: "integration_uuid"}
+    string? integrationUuid = ();
+
+    @sql:Column {name: "created_at"}
+    string createdAt?;
+
+    @sql:Column {name: "updated_at"}
+    string updatedAt?;
+|};
+
+// SSO group mapping details returned by management APIs.
+public type SSOGroupMappingResponse record {|
+    @sql:Column {name: "mapping_id"}
+    string mappingId;
+
+    @sql:Column {name: "org_uuid"}
+    int orgUuid;
+
+    string issuer;
+
+    @sql:Column {name: "claim_name"}
+    string claimName;
+
+    @sql:Column {name: "claim_value"}
+    string claimValue;
+
+    @sql:Column {name: "group_id"}
+    string groupId;
+
+    @sql:Column {name: "project_uuid"}
+    string? projectUuid = ();
+
+    @sql:Column {name: "integration_uuid"}
+    string? integrationUuid = ();
+
+    @sql:Column {name: "created_at"}
+    string createdAt?;
+
+    @sql:Column {name: "updated_at"}
+    string updatedAt?;
+
+    @sql:Column {name: "group_name"}
+    string groupName;
+
+    @sql:Column {name: "project_name"}
+    string? projectName = ();
+
+    @sql:Column {name: "integration_name"}
+    string? integrationName = ();
+|};
+
+// Input for creating IdP-to-ICP group mappings.
+public type SSOGroupMappingInput record {|
+    int orgUuid?;
+    string issuer;
+    string claimName;
+    string claimValue;
+    string groupId;
+    string projectUuid?;
+    string integrationUuid?;
+|};
+
+// Federated group-user mapping - group memberships owned by SSO sync.
+public type FederatedGroupUserMapping record {|
+    int id;
+
+    @sql:Column {name: "org_uuid"}
+    int orgUuid;
+
+    string issuer;
+
+    @sql:Column {name: "user_uuid"}
+    string userUuid;
+
+    @sql:Column {name: "group_id"}
+    string groupId;
+
+    @sql:Column {name: "claim_name"}
+    string claimName;
+
+    @sql:Column {name: "claim_value"}
+    string claimValue;
+
+    @sql:Column {name: "last_seen_at"}
+    string lastSeenAt?;
+
+    @sql:Column {name: "created_at"}
+    string createdAt?;
+
+    @sql:Column {name: "updated_at"}
+    string updatedAt?;
+|};
+
+// Input for creating SSO-owned group memberships.
+public type FederatedGroupUserMappingInput record {|
+    int orgUuid?;
+    string issuer;
+    string userUuid;
+    string groupId;
+    string claimName;
+    string claimValue;
+|};
+
+// Desired SSO-owned membership used during issuer-scoped login reconciliation.
+public type FederatedGroupMembershipInput record {|
+    string groupId;
+    string claimName;
+    string claimValue;
+|};
+
 // Group-Role mapping - links groups to roles with hierarchical context (Many-to-Many with scoping)
 // This is the core of the authorization model - defines WHAT roles a group has and WHERE they apply
 public type GroupRoleMapping record {

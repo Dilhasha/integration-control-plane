@@ -16,13 +16,14 @@
  * under the License.
  */
 
-import { Alert, Autocomplete, Avatar, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, ListingTable, PageContent, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
+import { Alert, Autocomplete, Avatar, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, ListingTable, PageContent, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { ArrowLeft, Plus, Trash2 } from '@wso2/oxygen-ui-icons-react';
 import { useState, useCallback, type JSX } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import SearchField from '../components/SearchField';
 import { useAuth } from '../auth/AuthContext';
 import { useAccessControl } from '../contexts/AccessControlContext';
+import { isFederatedAccessControlEnabled } from '../config/api';
 import { Permissions } from '../constants/permissions';
 import { useUsers, useGroups, useUpdateUserGroups, useRemoveUserFromGroup } from '../api/authQueries';
 import type { User, Group } from '../api/auth';
@@ -44,7 +45,10 @@ function AssignGroupsDialog({ orgHandler, user, onClose, onAssigned }: { orgHand
       primaryDisabled={selected.length === 0 || mutation.isPending}
       onPrimary={() =>
         mutation.mutate(
-          { userId: user.userId, groupIds: [...user.groups.map((g) => g.groupId), ...selected.map((g) => g.groupId)] },
+          {
+            userId: user.userId,
+            groupIds: [...user.groups.filter((g) => g.membershipSource !== 'federated').map((g) => g.groupId), ...selected.map((g) => g.groupId)],
+          },
           {
             onSuccess: () => {
               onAssigned?.();
@@ -115,8 +119,10 @@ function UserDetailView({ orgHandler, user, onBack }: { orgHandler: string; user
         <ListingTable.Toolbar
           searchSlot={<SearchField value={search} onChange={setSearch} />}
           actions={
+            // In federated mode memberships are added through SSO group mappings.
             !isSelf &&
-            canManageUsers && (
+            canManageUsers &&
+            !isFederatedAccessControlEnabled() && (
               <Button variant="contained" startIcon={<Plus size={18} />} onClick={() => setAssigning(true)}>
                 Assign Groups
               </Button>
@@ -141,14 +147,21 @@ function UserDetailView({ orgHandler, user, onBack }: { orgHandler: string; user
             ) : (
               filtered.map((g) => (
                 <ListingTable.Row key={g.groupId}>
-                  <ListingTable.Cell>{g.groupName}</ListingTable.Cell>
+                  <ListingTable.Cell>
+                    <Stack direction="row" alignItems="center" gap={1}>
+                      {g.groupName}
+                      {g.membershipSource?.includes('federated') && <Chip label={g.membershipSource === 'manual_and_federated' ? 'Local + SSO' : 'SSO'} size="small" variant="outlined" />}
+                    </Stack>
+                  </ListingTable.Cell>
                   <ListingTable.Cell>{g.groupDescription}</ListingTable.Cell>
                   {!isSelf && canManageUsers && (
                     <ListingTable.Cell align="right">
-                      <Tooltip title="Remove">
-                        <IconButton size="small" color="error" aria-label={`Remove ${g.groupName} group`} onClick={() => setRemovingGroupId(g.groupId)}>
-                          <Trash2 size={16} />
-                        </IconButton>
+                      <Tooltip title={g.membershipSource === 'federated' ? 'Managed by SSO' : 'Remove'}>
+                        <span>
+                          <IconButton size="small" color="error" disabled={g.membershipSource === 'federated'} aria-label={`Remove ${g.groupName} group`} onClick={() => setRemovingGroupId(g.groupId)}>
+                            <Trash2 size={16} />
+                          </IconButton>
+                        </span>
                       </Tooltip>
                     </ListingTable.Cell>
                   )}

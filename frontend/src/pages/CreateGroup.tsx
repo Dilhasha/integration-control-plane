@@ -19,18 +19,19 @@
 import { Alert, Button, PageContent, Stack, TextField, Typography } from '@wso2/oxygen-ui';
 import { ArrowLeft } from '@wso2/oxygen-ui-icons-react';
 import { useState, type JSX } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { useCreateGroup } from '../api/authQueries';
 import { orgAccessControlUrl } from '../paths';
 
 export default function CreateGroup(): JSX.Element {
   const { orgHandler = 'default' } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [groupName, setGroupName] = useState('');
   const [description, setDescription] = useState('');
   const [error, setError] = useState<string | null>(null);
   const mutation = useCreateGroup(orgHandler);
-  const backUrl = orgAccessControlUrl(orgHandler, 'groups');
+  const backUrl = orgAccessControlUrl(orgHandler, searchParams.get('returnTo') === 'sso-mappings' ? 'sso-mappings' : 'groups');
 
   const submit = () => {
     setError(null);
@@ -46,7 +47,7 @@ export default function CreateGroup(): JSX.Element {
   return (
     <PageContent>
       <Button startIcon={<ArrowLeft size={16} />} onClick={() => navigate(backUrl)} sx={{ mb: 2 }}>
-        Back to Groups
+        Back to Access Control
       </Button>
 
       <Typography variant="h1" sx={{ mb: 4 }}>

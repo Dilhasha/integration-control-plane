@@ -23,9 +23,9 @@ import { Eye, EyeOff } from '@wso2/oxygen-ui-icons-react';
 import { useNavigate } from 'react-router';
 import { resourceUrl } from '../nav';
 import { useAuth } from '../auth/AuthContext';
-import { isSsoEnabled } from '../config/api';
+import { isPasswordLoginDisabled, isSsoEnabled } from '../config/api';
 
-function friendlyLoginError(err: unknown, isSso = false): string {
+function friendlyLoginError(err: unknown, isSso = false, passwordLoginDisabled = false): string {
   const rawMessage = err instanceof Error ? err.message : String(err);
   const message = rawMessage.toLowerCase();
   const status = (err as Record<string, unknown>)?.status as number | undefined;
@@ -34,9 +34,14 @@ function friendlyLoginError(err: unknown, isSso = false): string {
 
   if (isSso) {
     if (status === 429 || message.includes('too many') || message.includes('rate limit')) return 'Account temporarily locked due to too many failed attempts.';
-    return rawMessage && !rawMessage.startsWith('SSO login failed (') ? rawMessage : 'Single sign-on is currently unavailable. Please try again later or use username and password.';
+    return rawMessage && !rawMessage.startsWith('SSO login failed (')
+      ? rawMessage
+      : passwordLoginDisabled
+        ? 'Single sign-on is currently unavailable. Please try again later or contact your administrator.'
+        : 'Single sign-on is currently unavailable. Please try again later or use username and password.';
   }
 
+  if (message.includes('password login is disabled')) return 'Password sign-in is disabled. Use single sign-on to continue.';
   if (status === 401 || message.includes('invalid credentials') || message.includes('unauthorized')) return 'Incorrect username or password. Please try again.';
   if (status === 429 || message.includes('too many') || message.includes('rate limit')) return 'Account temporarily locked due to too many failed attempts.';
   if (status === 403 || message.includes('locked') || message.includes('disabled') || message.includes('forbidden')) return 'Your account has been locked or disabled. Please contact your administrator.';
@@ -48,6 +53,8 @@ function friendlyLoginError(err: unknown, isSso = false): string {
 export default function LoginForm(): JSX.Element {
   const navigate = useNavigate();
   const { login, loginWithOIDC } = useAuth();
+  const ssoEnabled = isSsoEnabled();
+  const passwordLoginDisabled = isPasswordLoginDisabled();
 
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState('');
@@ -80,7 +87,7 @@ export default function LoginForm(): JSX.Element {
     try {
       await loginWithOIDC();
     } catch (err) {
-      setError(friendlyLoginError(err, true));
+      setError(friendlyLoginError(err, true, passwordLoginDisabled));
       setSsoLoading(false);
     }
   };
@@ -115,53 +122,58 @@ export default function LoginForm(): JSX.Element {
       )}
 
       <Box display="flex" flexDirection="column" gap={2.5}>
-        <Box display="flex" flexDirection="column" gap={0.5}>
-          <InputLabel htmlFor="username">Username</InputLabel>
-          <OutlinedInput type="text" id="username" name="username" placeholder="Enter username" value={username} onChange={(e) => setUsername(e.target.value)} size="small" required disabled={loading} />
-        </Box>
-        <Box display="flex" flexDirection="column" gap={0.5}>
-          <InputLabel htmlFor="password">Password</InputLabel>
-          <OutlinedInput
-            type={showPassword ? 'text' : 'password'}
-            endAdornment={
-              <InputAdornment position="end">
-                <IconButton aria-label={showPassword ? 'hide the password' : 'display the password'} onClick={handleClickShowPassword} onMouseDown={handleMouseDownPassword} onMouseUp={handleMouseUpPassword} edge="end">
-                  {showPassword ? <EyeOff /> : <Eye />}
-                </IconButton>
-              </InputAdornment>
-            }
-            id="password"
-            name="password"
-            placeholder="Enter password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            size="small"
-            required
-            disabled={loading}
-          />
-        </Box>
-
-        <Button
-          variant="contained"
-          color="primary"
-          type="submit"
-          fullWidth
-          sx={{ mt: 1, bgcolor: '#1e1e1e', '&:hover': { bgcolor: '#333' }, textTransform: 'none', py: 1.2 }}
-          disabled={loading || isLockedOut}
-          startIcon={loading ? <CircularProgress size={20} color="inherit" /> : undefined}>
-          {isLockedOut ? `Locked (${lockoutSeconds}s)` : loading ? 'Signing In...' : 'Sign In'}
-        </Button>
-
-        {isSsoEnabled() && (
+        {!passwordLoginDisabled && (
           <>
-            <Divider sx={{ my: 0.5 }}>OR</Divider>
+            <Box display="flex" flexDirection="column" gap={0.5}>
+              <InputLabel htmlFor="username">Username</InputLabel>
+              <OutlinedInput type="text" id="username" name="username" placeholder="Enter username" value={username} onChange={(e) => setUsername(e.target.value)} size="small" required disabled={loading} />
+            </Box>
+            <Box display="flex" flexDirection="column" gap={0.5}>
+              <InputLabel htmlFor="password">Password</InputLabel>
+              <OutlinedInput
+                type={showPassword ? 'text' : 'password'}
+                endAdornment={
+                  <InputAdornment position="end">
+                    <IconButton aria-label={showPassword ? 'hide the password' : 'display the password'} onClick={handleClickShowPassword} onMouseDown={handleMouseDownPassword} onMouseUp={handleMouseUpPassword} edge="end">
+                      {showPassword ? <EyeOff /> : <Eye />}
+                    </IconButton>
+                  </InputAdornment>
+                }
+                id="password"
+                name="password"
+                placeholder="Enter password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                size="small"
+                required
+                disabled={loading}
+              />
+            </Box>
 
             <Button
+              variant="contained"
+              color="primary"
+              type="submit"
+              fullWidth
+              sx={{ mt: 1, bgcolor: '#1e1e1e', '&:hover': { bgcolor: '#333' }, textTransform: 'none', py: 1.2 }}
+              disabled={loading || isLockedOut}
+              startIcon={loading ? <CircularProgress size={20} color="inherit" /> : undefined}>
+              {isLockedOut ? `Locked (${lockoutSeconds}s)` : loading ? 'Signing In...' : 'Sign In'}
+            </Button>
+          </>
+        )}
+
+        {ssoEnabled && (
+          <>
+            {!passwordLoginDisabled && <Divider sx={{ my: 0.5 }}>OR</Divider>}
+
+            <Button
+              type="button"
               variant="outlined"
               fullWidth
               sx={{ textTransform: 'none', py: 1.2, borderColor: '#ccc', color: 'text.primary' }}
               onClick={handleSSOLogin}
-              disabled={loading || ssoLoading}
+              disabled={(!passwordLoginDisabled && loading) || ssoLoading}
               startIcon={ssoLoading ? <CircularProgress size={20} color="inherit" /> : undefined}>
               {ssoLoading ? 'Redirecting...' : 'Sign in with SSO'}
             </Button>
