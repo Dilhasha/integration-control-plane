@@ -59,6 +59,27 @@ sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_workflow_
 
 ---
 
+## Upgrading an existing ICP v2 deployment: workflow command-tunnel cache
+
+Deployments upgrading to the **database-backed command tunnel** must also run the cache-tables
+script once against the **main ICP DB** — `add_workflow_feature_*.sql` alone is not enough.
+Fresh installs do not need it — the `*_init.sql` scripts already contain everything.
+
+Without it, every workflow view fails at its first read: the tunnel answers requests from
+`cache_entry` and queues mutations in `cache_operation_outbox`, and a missing table turns each
+request into a 500.
+
+The tables are **derived state** (`cache_` prefix is the contract): they may be dropped and
+recreated on any upgrade with nothing to migrate — losing a row costs one refetch, or one
+caller being told their operation was never confirmed. The scripts only ever create; they are
+idempotent and safe to re-run.
+
+Pick the script matching your database engine — `add_cache_tables_h2.sql`,
+`add_cache_tables_mysql.sql`, `add_cache_tables_postgresql.sql`, `add_cache_tables_mssql.sql`,
+or `add_cache_tables_oracle.sql` — and run it exactly like the workflow-feature script above.
+
+---
+
 ## Upgrading an existing ICP v2 deployment: packed OpenAPI definitions
 
 Deployments whose database was initialised **before BI runtimes could report packed OpenAPI
