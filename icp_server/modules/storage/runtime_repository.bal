@@ -294,51 +294,9 @@ public isolated function getListenersForRuntime(string runtimeId) returns types:
     return listenerList;
 }
 
-// Resolve the workflow management service target (callbackUrl) for a component+environment,
-// along with the org-secret key id the runtime registered with — the workflow proxy uses it
-// to reconstruct the runtime's management API key.
-// Only a RUNNING runtime's callbackUrl is used — a stopped/offline runtime's URL is stale.
-// Returns () when no running runtime reported a callbackUrl (proxy surfaces this as 503).
-// Predicate matching a usable (non-null, non-empty) callback_url. Oracle stores empty
-// strings as NULL and any comparison with '' is never true there, so `callback_url <> ''`
+// Predicate matching a usable (non-null, non-empty) try_it_host. Oracle stores empty
+// strings as NULL and any comparison with '' is never true there, so `try_it_host <> ''`
 // would exclude every row on Oracle; IS NOT NULL alone is the correct Oracle form.
-isolated function usableCallbackUrlPredicate() returns sql:ParameterizedQuery =>
-    isOracle() ? ` AND callback_url IS NOT NULL` : ` AND callback_url IS NOT NULL AND callback_url <> ''`;
-
-public isolated function getRuntimeWorkflowTarget(string componentId, string environmentId) returns types:WorkflowTarget?|error {
-    sql:ParameterizedQuery query = sql:queryConcat(`
-        SELECT callback_url, key_id
-        FROM runtimes
-        WHERE component_id = ${componentId} AND environment_id = ${environmentId}
-            AND status = 'RUNNING'`, usableCallbackUrlPredicate());
-    stream<record {|string callback_url; string? key_id;|}, sql:Error?> rs = dbClient->query(query);
-    record {|record {|string callback_url; string? key_id;|} value;|}|sql:Error? row = rs.next();
-    check rs.close();
-    if row is sql:Error {
-        return row;
-    }
-    if row is () {
-        return ();
-    }
-    return {callbackUrl: row.value.callback_url, keyId: row.value.key_id};
-}
-
-// Distinct callback URLs of RUNNING runtimes — the only URLs the workflow proxy can
-// currently target (getRuntimeWorkflowTarget ignores non-RUNNING rows). Used by the
-// offline-runtime scheduler to prune the workflow proxy's http:Client cache: after a
-// heartbeat sweep, any cached URL absent from this set belongs to a dead/stopped runtime.
-public isolated function getRunningWorkflowCallbackUrls() returns string[]|error {
-    sql:ParameterizedQuery query = sql:queryConcat(`
-        SELECT DISTINCT callback_url
-        FROM runtimes
-        WHERE status = 'RUNNING'`, usableCallbackUrlPredicate());
-    stream<record {|string callback_url;|}, sql:Error?> rs = dbClient->query(query);
-    return from var r in rs
-        select r.callback_url;
-}
-
-// Predicate matching a usable (non-null, non-empty) try_it_host — same Oracle caveat as
-// usableCallbackUrlPredicate above.
 isolated function usableTryItHostPredicate() returns sql:ParameterizedQuery =>
     isOracle() ? ` AND r.try_it_host IS NOT NULL` : ` AND r.try_it_host IS NOT NULL AND r.try_it_host <> ''`;
 
@@ -1103,6 +1061,46 @@ public isolated function getOpenApiDefinitionsForRuntime(string runtimeId) retur
         };
 
     return definitionList;
+}
+
+// Get the stored workflow metadata document for a specific runtime, or () when the
+// runtime never published one.
+public isolated function getWorkflowMetadataForRuntime(string runtimeId)
+        returns types:WorkflowMetadataRecord?|error {
+    types:WorkflowMetadataRecord|error metadataRecord = dbClient->queryRow(`
+        SELECT runtime_id, metadata, capabilities, task_queue
+        FROM bi_workflow_metadata
+        WHERE runtime_id = ${runtimeId}
+    `);
+    if metadataRecord is sql:NoRowsError {
+        return ();
+    }
+    return metadataRecord;
+}
+
+// Get the stored workflow metadata documents of every RUNNING runtime of a
+// component+environment, freshest heartbeat first. Feeds the workflow definitions
+// resolver (documents are deduped across runtimes there) and, for the command tunnel,
+// leader selection: a runtime whose `capabilities` include workflowCommands can
+// execute tunneled workflow management commands.
+public isolated function getWorkflowMetadataForComponentEnv(string componentId, string environmentId)
+        returns types:WorkflowMetadataRecord[]|error {
+    types:WorkflowMetadataRecord[] metadataList = [];
+    stream<types:WorkflowMetadataRecord, sql:Error?> metadataStream = dbClient->query(`
+        SELECT m.runtime_id, m.metadata, m.capabilities, m.task_queue
+        FROM bi_workflow_metadata m
+        INNER JOIN runtimes r ON m.runtime_id = r.runtime_id
+        WHERE r.component_id = ${componentId} AND r.environment_id = ${environmentId}
+            AND r.status = 'RUNNING'
+        ORDER BY r.last_heartbeat DESC
+    `);
+
+    check from types:WorkflowMetadataRecord metadataRecord in metadataStream
+        do {
+            metadataList.push(metadataRecord);
+        };
+
+    return metadataList;
 }
 
 public isolated function getLogLevelsForRuntime(string runtimeId) returns types:RuntimeLogLevelRecord[]|error {

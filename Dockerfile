@@ -61,8 +61,13 @@ RUN chmod +x ./gradlew
 # Copy the pre-built frontend dist from stage 1 (avoids needing Node.js in this stage)
 COPY --from=frontend-builder /app/frontend/dist/ ./frontend/dist/
 
-# Build the project, skipping buildFrontend since the dist is already present
-RUN ./gradlew clean build -x buildFrontend
+# Build the project, skipping buildFrontend since the dist is already present.
+#
+# `check` is skipped too: the root project's check depends on :e2e-tests tasks, and this
+# stage deliberately does not copy e2e-tests/ (its Playwright suites need browsers and a
+# running server). Without -x check the build fails on a task that cannot exist here.
+# Packaging is not the place to run tests in any case — CI runs them against the source.
+RUN ./gradlew clean build -x buildFrontend -x check
 
 # Stage 3: Runtime stage
 FROM eclipse-temurin:21-jdk

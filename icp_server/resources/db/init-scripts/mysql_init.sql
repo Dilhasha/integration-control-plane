@@ -587,6 +587,7 @@ CREATE TABLE runtimes (
     runtime_hostname VARCHAR(255) NULL,
     runtime_port VARCHAR(10) NULL,
     callback_url VARCHAR(500) NULL,
+    wf_boosted_until BIGINT,
     try_it_host VARCHAR(255) NULL,
     platform_name VARCHAR(50) NOT NULL DEFAULT 'ballerina',
     platform_version VARCHAR(50) NULL,
@@ -699,6 +700,79 @@ CREATE TABLE bi_service_openapi_definitions (
   CONSTRAINT fk_bi_service_openapi_definitions_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes(runtime_id) ON DELETE CASCADE,
   INDEX idx_runtime_id (runtime_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime)
+CREATE TABLE bi_workflow_metadata (
+  runtime_id   CHAR(36) NOT NULL,
+  metadata     JSON NOT NULL,
+  capabilities VARCHAR(512),
+  task_queue VARCHAR(255),
+  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (runtime_id),
+  CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes(runtime_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- ============================================================================
+-- REQUEST CACHE (derived state, shared across ICP nodes)
+-- ============================================================================
+-- Two generic tables: one caching the answers to read requests, one queueing the
+-- operations that change something. Neither knows what a workflow is — `kind` says what a
+-- row is about and `data` carries the rest, so a second feature needing the same shape adds
+-- a kind rather than a table.
+--
+-- The `cache_` prefix is the contract: this is DERIVED state. An upgrade may drop and
+-- recreate these tables, and nothing in them needs migrating — losing a row costs one
+-- refetch, or one caller being told their operation was never confirmed.
+--
+-- What earns a column is what a WHERE clause needs; everything else lives in `data`. The ICP
+-- supports five database engines, and portable JSON predicates across them do not exist:
+--   cache_key   the request's identity, COMPUTED - sha256(kind|owner|request|identity), so
+--               the parts that make a request unique never become columns
+--   owner       the scope a row belongs to; what a delivery claim filters on
+--   token       the in-flight attempt, which fences a late answer from a superseded one
+--   expires_at  epoch SECONDS, not a timestamp: every read, claim and sweep compares it, and
+--               integers compare identically on all five engines while timestamp arithmetic
+--               needs four different implementations (see storage/database_dialect.bal)
+--
+-- Neither table has a foreign key, deliberately: a K8S deployment DELETEs runtime rows when
+-- they go offline, and ON DELETE CASCADE would discard the record of an operation whose
+-- outcome nobody has established - which is the one thing here worth keeping.
+
+CREATE TABLE cache_entry (
+    cache_key VARCHAR(64) NOT NULL,
+    kind VARCHAR(64) NOT NULL,
+    owner VARCHAR(200) NOT NULL,
+    token VARCHAR(36),
+    status VARCHAR(16) NOT NULL,
+    expires_at BIGINT NOT NULL,
+    claimed_at BIGINT,
+    data LONGTEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (cache_key),
+    KEY idx_cache_entry_claim (owner, token, claimed_at),
+    KEY idx_cache_entry_expiry (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE cache_operation_outbox (
+    operation_id VARCHAR(100) NOT NULL,
+    target VARCHAR(36) NOT NULL,
+    owner VARCHAR(200) NOT NULL,
+    kind VARCHAR(64) NOT NULL,
+    status VARCHAR(16) NOT NULL,
+    issued_at BIGINT NOT NULL,
+    deadline BIGINT NOT NULL,
+    delivered_at BIGINT,
+    completed_at BIGINT,
+    data LONGTEXT NOT NULL,
+    result LONGTEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (operation_id),
+    KEY idx_cache_outbox_delivery (target, status, issued_at),
+    KEY idx_cache_outbox_cleanup (status, completed_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_runtime_listener_artifacts (

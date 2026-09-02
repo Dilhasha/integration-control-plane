@@ -10,9 +10,9 @@ For migrating user accounts, credentials, and role assignments from **ICP v1**, 
 
 ## Upgrading an existing ICP v2 deployment: workflow feature
 
-Deployments whose database was initialised **before the workflow management feature** (v2.0.0-beta2 and earlier) must run the workflow upgrade script once against the **main ICP DB**. Fresh installs do not need it — the `*_init.sql` scripts already contain everything.
+Deployments whose database was initialised **before the workflow management feature** (v2.0.0-beta2 and earlier) must run the workflow upgrade script once against the **main ICP DB** — **before** deploying this server version. Fresh installs do not need it — the `*_init.sql` scripts already contain everything.
 
-Without it, the new server version starts normally but workflow views fail with `Column "CALLBACK_URL" not found`, and no Workflow-Management permissions appear in Access Control (even for Super Admin).
+Without it, two things break. Workflow views fail with `Column "CALLBACK_URL" not found` and no Workflow-Management permissions appear in Access Control (even for Super Admin). Worse, **every full heartbeat fails** — for MI runtimes as much as BI ones: `upsertWorkflowMetadata` issues `DELETE FROM bi_workflow_metadata` for the reporting runtime before checking whether the heartbeat carries any metadata, so a missing table errors out that statement and aborts the whole heartbeat transaction.
 
 Pick the script matching your database engine:
 
@@ -26,10 +26,11 @@ Pick the script matching your database engine:
 
 Each script applies, in order:
 
-1. `runtimes.callback_url` — workflow management service base URL reported via the runtime heartbeat
+1. `runtimes.callback_url` — retained for schema compatibility: heartbeat writes still reference the column, but nothing populates it now that workflow management goes through the command tunnel
 2. The `Workflow-Management` permission domain (widens the domain constraint / ENUM)
 3. The four `workflow_mgt:*` permissions (human tasks + workflow executions)
 4. Role grants — Super Admin / Admin / Project Admin: view + manage both; Developer: manage human tasks, view workflows; Viewer: view human tasks only
+5. `bi_workflow_metadata` — the workflow metadata document and advertised capabilities a BI runtime publishes in its full heartbeat (one row per runtime, replaced on every full heartbeat, removed with the runtime via `ON DELETE CASCADE`)
 
 The scripts are **idempotent** — safe to re-run, including after a partial failure. After running, restart the ICP server (or have users re-login) so sessions pick up the new permissions.
 
@@ -55,6 +56,27 @@ sqlcmd -S <server> -U <user> -P <password> -d <icp_db_name> -i add_workflow_feat
 # Oracle (run as the ICP schema owner)
 sqlplus <icp_schema_user>/<password>@//<host>:1521/<service_name> @add_workflow_feature_oracle.sql
 ```
+
+---
+
+## Upgrading an existing ICP v2 deployment: workflow command-tunnel cache
+
+Deployments upgrading to the **database-backed command tunnel** must also run the cache-tables
+script once against the **main ICP DB** — `add_workflow_feature_*.sql` alone is not enough.
+Fresh installs do not need it — the `*_init.sql` scripts already contain everything.
+
+Without it, every workflow view fails at its first read: the tunnel answers requests from
+`cache_entry` and queues mutations in `cache_operation_outbox`, and a missing table turns each
+request into a 500.
+
+The tables are **derived state** (`cache_` prefix is the contract): they may be dropped and
+recreated on any upgrade with nothing to migrate — losing a row costs one refetch, or one
+caller being told their operation was never confirmed. The scripts only ever create; they are
+idempotent and safe to re-run.
+
+Pick the script matching your database engine — `add_cache_tables_h2.sql`,
+`add_cache_tables_mysql.sql`, `add_cache_tables_postgresql.sql`, `add_cache_tables_mssql.sql`,
+or `add_cache_tables_oracle.sql` — and run it exactly like the workflow-feature script above.
 
 ---
 

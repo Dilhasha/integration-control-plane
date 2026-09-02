@@ -27,7 +27,7 @@ import { useAccessControl } from '../contexts/AccessControlContext';
 import { useLoadComponentPermissions, useLoadProjectPermissions } from '../hooks/usePermissionLoader';
 import { Permissions } from '../constants/permissions';
 import { resourceUrl, broaden, hasComponent, type ComponentScope, type ProjectScope } from '../nav';
-import { usePendingReviewActivityCount, usePendingTaskCount, type WorkflowTarget } from '../api/workflows';
+import { usePendingReviewActivityCount, usePendingTaskCount, valueOf, type WorkflowTarget } from '../api/workflows';
 import { gatewayScope } from '../components/workflow/helpers';
 import { isWorkflowIntegration } from '../constants/integrationTypes';
 
@@ -83,10 +83,21 @@ export default function Workflows(scope: ComponentScope | ProjectScope): JSX.Ele
       // before sorting so the cached component list is not mutated; sort is stable, so integrations
       // keep their relative order within each group.
       [...allComponents].sort((a, b) => Number(isWorkflowIntegration(b.displayType)) - Number(isWorkflowIntegration(a.displayType))).map((c) => ({ componentId: c.id, componentName: c.displayName ?? c.name, handler: c.handler }));
-  // The project shares one Temporal namespace, so a listing is narrowed by task queue rather than by
-  // which runtime is called: this integration's queue at component scope, the whole namespace at
-  // project scope.
-  const taskQueue = componentLevel ? component?.handler : undefined;
+  // NOT sent as a filter, at either scope.
+  //
+  // A project shares one Temporal namespace, so a listing does have to be narrowed by task
+  // queue — but the component handler is not that queue. It only looks like one. A runtime's
+  // queue is whatever the integration is configured with (`EXPENSE_TASK_QUEUE` here, against a
+  // handler of `expense-integration`), which is why the runtime publishes it on every
+  // heartbeat and the ICP stores it. Filtering on the handler matched nothing, so every
+  // component-level listing came back empty while the tab badge — which the module counts
+  // differently — said there was work. A number contradicting the page under it.
+  //
+  // The ICP narrows a component-level read to its target runtime's own published queue, so
+  // there is nothing to send. Resolving the queue in the browser needs the /task-queues
+  // endpoint, which belongs to the instance-graph work; until then the integration selector at
+  // project scope cannot narrow by integration, and says so where it is rendered.
+  const taskQueue = undefined;
 
   // Optional deep-link params (e.g. from the Overview page's "View Workflows" action or the
   // start-workflow success dialog): ?tab=management&type=<workflowType>&workflowId=<id>&env=<environmentId>
@@ -148,8 +159,13 @@ export default function Workflows(scope: ComponentScope | ProjectScope): JSX.Ele
   // read through the same gateway runtime the views themselves use.
   const gateway = gatewayScope({ targets, environmentId: activeEnvId, taskQueue });
   // Declared above the early returns below, so these hooks run in the same order on every render.
-  const { data: pendingTasks } = usePendingTaskCount(gateway, taskQueue, allowedTabs.tasks);
-  const { data: pendingReviews } = usePendingReviewActivityCount(gateway, taskQueue, allowedTabs.reviews);
+  // A badge with no number yet simply shows no number: these counts are materialized through
+  // the integration, so the first read of each is still being prepared, and the tab label is
+  // not the place to explain that.
+  const { data: pendingTasksResult } = usePendingTaskCount(gateway, taskQueue, allowedTabs.tasks);
+  const { data: pendingReviewsResult } = usePendingReviewActivityCount(gateway, taskQueue, allowedTabs.reviews);
+  const pendingTasks = valueOf(pendingTasksResult);
+  const pendingReviews = valueOf(pendingReviewsResult);
 
   if (loadingProject || loadingComponent || loadingEnvs || loadingComponents)
     return (

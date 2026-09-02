@@ -29,6 +29,21 @@ function initRuntimeScheduler() returns error? {
         }
     }
 
+    // Start a worker to periodically sweep the workflow tunnel: expire mutations the
+    // integration never confirmed (so each becomes a notification rather than a silent loss)
+    // and delete cache rows and finished operations nobody can still be served. Runs on every
+    // node; the statements are idempotent, so no leader election is needed.
+    worker workflowTunnelSweepWorker {
+        task:JobId|error id = task:scheduleJobRecurByFrequency(new WorkflowTunnelSweepJob(),
+                <decimal>workflowSweepIntervalSeconds);
+        if (id is error) {
+            log:printError("Failed to schedule the workflow tunnel sweep job", id);
+        } else {
+            log:printInfo("Workflow tunnel sweep job scheduled successfully",
+                    intervalSeconds = workflowSweepIntervalSeconds);
+        }
+    }
+
     // Start a worker to periodically clean up expired and revoked refresh tokens
     worker refreshTokenCleanupWorker {
         task:JobId|error id = task:scheduleJobRecurByFrequency(new RefreshTokenCleanupJob(), <decimal>refreshTokenCleanupIntervalSeconds);
@@ -54,9 +69,20 @@ class Job {
         }
         // Runtimes that just went offline were deleted (K8S) or marked OFFLINE (VM);
         // drop the workflow proxy's cached clients for their callback URLs.
-        pruneWorkflowClientCache();
         // Same idea for the Try-It proxy's cached clients.
         pruneTryitClientCache();
+    }
+
+}
+
+// Sweeps the workflow tunnel tables. Separate from the offline-runtime job so a slow sweep
+// cannot delay marking a runtime offline, and so each can be tuned on its own interval.
+class WorkflowTunnelSweepJob {
+
+    *task:Job;
+
+    public function execute() {
+        sweepWorkflowTunnelState();
     }
 
 }

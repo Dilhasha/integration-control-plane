@@ -274,6 +274,22 @@ public isolated function updateRuntimeKeyId(string runtimeId, string keyId) retu
     log:printDebug(string `updateRuntimeKeyId: recorded keyId=${keyId} on runtime=${runtimeId}`);
 }
 
+# The key a runtime last authenticated with, or `()` when the runtime is unknown or has
+# never had a key recorded. Used to refuse workflow command results posted with a key
+# that is not the target runtime's own.
+public isolated function getRuntimeKeyId(string runtimeId) returns string?|error {
+    record {|string? key_id;|}|sql:Error row = dbClient->queryRow(`
+        SELECT key_id FROM runtimes WHERE runtime_id = ${runtimeId}
+    `);
+    if row is sql:NoRowsError {
+        return ();
+    }
+    if row is sql:Error {
+        return row;
+    }
+    return row.key_id;
+}
+
 public isolated function resolveOrCreateProject(string handler, string? createdBy) returns string|error {
     log:printDebug(string `resolveOrCreateProject: handler=${handler}, createdBy=${createdBy ?: "null"}`);
 

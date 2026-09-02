@@ -323,7 +323,8 @@ public type Node record {
 // older bridges/servers that predate this negotiation simply never see the field and stay
 // on the baseline heartbeat shape. Update this list whenever an optional field is added to
 // Heartbeat below.
-final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS = ["workflowCallbackUrl", "tryItHost", "openApiDefinitions"];
+final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS =
+        ["tryItHost", "openApiDefinitions", "workflowMetadata"];
 
 // Heartbeat that includes all runtime information for registration/updates.
 // Open record so parsing tolerates fields from a newer agent that this server
@@ -332,7 +333,6 @@ final string[] & readonly SUPPORTED_HEARTBEAT_FIELDS = ["workflowCallbackUrl", "
 public type Heartbeat record {
     string heartbeatVersion = "v1.0"; // Version of the heartbeat format
     string runtimeId; // Unique identifier for the runtime
-    string workflowCallbackUrl?; // Base URL of the runtime's workflow management service (when it hosts workflows)
     string? runtime = (); // Alias for runtimeId (for backward compatibility)
     string runtimeType; // "wso2-mi" from payloads
     string status; // "RUNNING", "STOPPED", etc.
@@ -349,6 +349,31 @@ public type Heartbeat record {
     time:Utc timestamp;
     map<log:Level> logLevels?; // BI log levels from heartbeat payload
     map<json> openApiDefinitions?; // OpenAPI (Swagger) definitions packed into the runtime's JAR, keyed by file name
+    // The workflow metadata document published by the ICP runtime bridge when the
+    // integration uses ballerina/workflow: definitions, human tasks, activities, and
+    // durable agents, with their JSON schemas. Startup-constant per runtime process;
+    // sent on full heartbeats once this server advertises "workflowMetadata".
+    map<json> workflowMetadata?;
+    // Capabilities the runtime advertises — e.g. "workflowCommands" when it accepts
+    // tunneled workflow management commands. A capability-gated command must never be
+    // sent to a runtime that did not advertise it (older bridges fail record binding
+    // on unknown control actions).
+    string[] capabilities?;
+    // The Temporal task queue the integration's workflow worker serves. Runtime state
+    // like capabilities — chosen at program startup, so it may differ between two
+    // runtimes of one program — not part of the workflow metadata document. It is what
+    // scopes a shared Temporal namespace to one integration.
+    string workflowTaskQueue?;
+};
+
+// One runtime's stored workflow metadata row (bi_workflow_metadata).
+public type WorkflowMetadataRecord record {
+    @sql:Column {name: "runtime_id"}
+    string runtimeId;
+    string metadata; // the workflow metadata document as a JSON string
+    string? capabilities; // comma-joined capability names, or () when none were advertised
+    @sql:Column {name: "task_queue"}
+    string? taskQueue; // the worker's Temporal task queue, or () from older bridges/modules
 };
 
 // Shape of a single entry in the runtime's GET /workflow/definitions response.
@@ -380,8 +405,25 @@ public enum ControlCommandStatus {
 public enum ControlAction {
     START,
     STOP,
-    SET_LOGGER_LEVEL
+    SET_LOGGER_LEVEL,
+    // A tunneled workflow management operation, executed in-process by the runtime's ICP
+    // bridge (no inbound network access to the integration or its Temporal server). Only
+    // ever sent to runtimes that advertised the "workflowCommands" capability — older
+    // bridges fail record binding on unknown actions. The command's payload carries
+    // {commandId, operation, params, identity, deadline}; the runtime posts the outcome
+    // to POST /icp/commandResult.
+    WORKFLOW_MGMT
 }
+
+// The outcome of a tunneled workflow command, posted by the runtime's bridge to
+// POST /icp/commandResult. Open record so newer bridges can add fields.
+public type WorkflowCommandResult record {
+    string runtimeId;
+    string commandId;
+    string status; // COMPLETED (operation executed) | FAILED (could not execute)
+    int httpStatus; // the status code the runtime's management REST API would have returned
+    json body; // byte-identical to the management REST API's response body
+};
 
 # Represents a control command issued to a runtime
 #
@@ -408,6 +450,10 @@ public type HeartbeatResponse record {
     ControlCommand[] commands?;
     string[] errors?;
     string[] & readonly supportedHeartbeatFields = SUPPORTED_HEARTBEAT_FIELDS;
+    // Boost hint: ask the bridge to send its next heartbeat this many seconds from now
+    // (typically 1) instead of waiting for its regular interval — set while a user is
+    // actively working with workflow views so tunneled commands round-trip quickly.
+    int nextHeartbeatInSeconds?;
 };
 
 public enum MIControlAction {
@@ -936,14 +982,6 @@ public type Workflow record {
     ArtifactState state = "enabled"; // derived from isActive for the UI status chip
     ArtifactRuntimeInfo[]? runtimes?;
 };
-
-// Reachable workflow management endpoint of a runtime (callbackUrl from the heartbeat)
-// plus the org-secret key id the runtime authenticated with — used by the workflow proxy
-// to reconstruct the runtime's management API key (`<keyId>.<keyMaterial>`).
-public type WorkflowTarget record {|
-    string callbackUrl;
-    string? keyId;
-|};
 
 // Resolved target for a Try-It proxy request: the runtime's self-reported reachable host
 // (try_it_host from the heartbeat) plus the requested listener's protocol, used together to
@@ -2712,3 +2750,95 @@ public type MoesifApplication record {|
     string id;
     string name;
 |};
+
+// ============================================================================
+// REQUEST CACHE
+// ============================================================================
+// Rows of cache_entry and cache_operation_outbox, shared by every ICP node: the node that
+// accepts a user's request is usually not the node that delivers it to a runtime, so nothing
+// about a request may live in memory.
+//
+// Both types are deliberately free of any workflow vocabulary. `kind` says what a row is
+// about and `data` carries the rest, so a second feature wanting the same shape - answers
+// that take a round trip to fetch, operations that need confirming - adds a kind rather than
+// a table.
+//
+// Every time field is epoch SECONDS rather than a timestamp. They are compared on every
+// read, claim and sweep, and integers compare identically on all five supported engines
+// while timestamp arithmetic needs four implementations (see storage/database_dialect.bal).
+
+// Lifecycle of a cached answer. A stale READY row is still served while its refresh runs, so
+// "expired" is not the same as "unusable".
+public const string CACHE_FETCHING = "FETCHING";
+public const string CACHE_READY = "READY";
+public const string CACHE_FAILED = "FAILED";
+
+// Lifecycle of a queued operation. EXPIRED is the state that matters: it means nobody
+// established the outcome, which is what has to reach a person rather than be dropped.
+public const string CACHE_OP_PENDING = "PENDING";
+public const string CACHE_OP_DELIVERED = "DELIVERED";
+public const string CACHE_OP_COMPLETED = "COMPLETED";
+public const string CACHE_OP_FAILED = "FAILED";
+public const string CACHE_OP_EXPIRED = "EXPIRED";
+
+// One row of cache_entry.
+//
+// `cacheKey` is computed from everything that makes the request unique - its kind, its owner,
+// the request itself and the caller's identity - so none of those parts needs a column of its
+// own. Two callers whose identity differs in a way the answer depends on compute different
+// keys and cannot read each other's rows.
+//
+// `data` holds one document: the request, and the response once it arrives. One blob, because
+// nothing queries inside it; the claim reads the request out, the result write adds the
+// response beside it.
+//
+// `token` is non-nil exactly while a fetch is in flight, and is that fetch's id. It fences a
+// late answer: a result carrying a token the row no longer holds belongs to a superseded or
+// invalidated attempt and is discarded.
+public type CacheEntry record {
+    @sql:Column {name: "cache_key"}
+    string cacheKey;
+    string kind;
+    // The scope this row belongs to, and what a delivery claim filters on.
+    string owner;
+    string? token = ();
+    string status;
+    @sql:Column {name: "expires_at"}
+    int expiresAt;
+    @sql:Column {name: "claimed_at"}
+    int? claimedAt = ();
+    string? data = ();
+};
+
+// An entry a heartbeat should ask a runtime to fill. `token` is the command id.
+public type CachePendingFetch record {
+    @sql:Column {name: "cache_key"}
+    string cacheKey;
+    string token;
+    string data;
+};
+
+// One row of cache_operation_outbox.
+//
+// `operationId` is the caller's idempotency key as well as the command id, so a repeated
+// submission collides on the primary key instead of becoming a second operation. `target`
+// names who executes it - a runtime today, and nothing here assumes that.
+public type CacheOperation record {
+    @sql:Column {name: "operation_id"}
+    string operationId;
+    string target;
+    // The scope this operation affects. Completing it invalidates that scope's cached
+    // answers, so the value has to be here rather than derived from the target.
+    string owner;
+    string kind;
+    string status;
+    @sql:Column {name: "issued_at"}
+    int issuedAt;
+    int deadline;
+    @sql:Column {name: "delivered_at"}
+    int? deliveredAt = ();
+    @sql:Column {name: "completed_at"}
+    int? completedAt = ();
+    string data;
+    string? result = ();
+};

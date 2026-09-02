@@ -18,7 +18,7 @@
 
 import { Box, CircularProgress, ListingTable, Stack, Typography } from '@wso2/oxygen-ui';
 import { useState, type JSX } from 'react';
-import { useWorkflowInstances } from '../../api/workflows';
+import { isPreparing, useWorkflowInstances, valueOf } from '../../api/workflows';
 import SearchField from '../SearchField';
 import { formatTime } from './helpers';
 import { StatusChip, WorkflowIdLink } from './shared';
@@ -37,7 +37,7 @@ const emptySx = { py: 3, textAlign: 'center', color: 'text.secondary' } as const
 export default function WorkflowInstancesPanel({ componentId, environmentId, workflowType, taskQueue }: { componentId: string; environmentId: string; workflowType: string; taskQueue: string }): JSX.Element {
   const [search, setSearch] = useState('');
   const {
-    data: page,
+    data: result,
     isLoading,
     error,
   } = useWorkflowInstances(
@@ -50,7 +50,14 @@ export default function WorkflowInstancesPanel({ componentId, environmentId, wor
       limit: 50,
     },
   );
+  const page = valueOf(result);
+  // First request for a view the server has not materialized yet: it says so rather than
+  // making the panel wait.
+  const preparing = isPreparing(result);
   const items = page?.items ?? [];
+  // The server materializes this view through the integration, so the first request for it
+  // comes back "still fetching". Say so, and let the query come back for it.
+  const note = preparing && items.length === 0 ? 'Fetching running instances from the integration…' : null;
 
   return (
     <Box sx={{ px: 2, py: 1.5 }}>
@@ -65,6 +72,11 @@ export default function WorkflowInstancesPanel({ componentId, environmentId, wor
         <CircularProgress size={20} sx={{ display: 'block', mx: 'auto', py: 3 }} />
       ) : error ? (
         <Typography sx={emptySx}>{error instanceof Error ? error.message : 'Failed to load workflow instances.'}</Typography>
+      ) : note ? (
+        // Distinct from "none": the integration has not answered yet, and the query is already
+        // coming back for it. Saying "no running instances" here would be a wrong answer stated
+        // confidently.
+        <Typography sx={emptySx}>{note}</Typography>
       ) : items.length === 0 ? (
         <Typography sx={emptySx}>{search ? 'No running instances match that workflow ID.' : 'No running instances.'}</Typography>
       ) : (

@@ -744,6 +744,7 @@ CREATE TABLE runtimes (
     runtime_hostname VARCHAR2(255 CHAR) NULL,
     runtime_port VARCHAR2(10 CHAR) NULL,
     callback_url VARCHAR2(500 CHAR) NULL,
+    wf_boosted_until NUMBER(19),
     try_it_host VARCHAR2(255 CHAR) NULL,
     platform_name VARCHAR2(50 CHAR) DEFAULT 'ballerina' NOT NULL,
     platform_version VARCHAR2(50 CHAR) NULL,
@@ -888,6 +889,89 @@ BEGIN
     :NEW.updated_at := CURRENT_TIMESTAMP;
 END;
 /
+
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime)
+CREATE TABLE bi_workflow_metadata (
+  runtime_id   CHAR(36) NOT NULL,
+  metadata     CLOB NOT NULL,
+  capabilities VARCHAR2(512 CHAR),
+  task_queue VARCHAR2(255 CHAR),
+  created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  PRIMARY KEY (runtime_id),
+  CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
+);
+
+CREATE OR REPLACE TRIGGER trg_bi_workflow_metadata_updated
+BEFORE UPDATE ON bi_workflow_metadata
+FOR EACH ROW
+BEGIN
+    :NEW.updated_at := CURRENT_TIMESTAMP;
+END;
+/
+
+
+-- ============================================================================
+-- REQUEST CACHE (derived state, shared across ICP nodes)
+-- ============================================================================
+-- Two generic tables: one caching the answers to read requests, one queueing the
+-- operations that change something. Neither knows what a workflow is — `kind` says what a
+-- row is about and `data` carries the rest, so a second feature needing the same shape adds
+-- a kind rather than a table.
+--
+-- The `cache_` prefix is the contract: this is DERIVED state. An upgrade may drop and
+-- recreate these tables, and nothing in them needs migrating — losing a row costs one
+-- refetch, or one caller being told their operation was never confirmed.
+--
+-- What earns a column is what a WHERE clause needs; everything else lives in `data`. The ICP
+-- supports five database engines, and portable JSON predicates across them do not exist:
+--   cache_key   the request's identity, COMPUTED - sha256(kind|owner|request|identity), so
+--               the parts that make a request unique never become columns
+--   owner       the scope a row belongs to; what a delivery claim filters on
+--   token       the in-flight attempt, which fences a late answer from a superseded one
+--   expires_at  epoch SECONDS, not a timestamp: every read, claim and sweep compares it, and
+--               integers compare identically on all five engines while timestamp arithmetic
+--               needs four different implementations (see storage/database_dialect.bal)
+--
+-- Neither table has a foreign key, deliberately: a K8S deployment DELETEs runtime rows when
+-- they go offline, and ON DELETE CASCADE would discard the record of an operation whose
+-- outcome nobody has established - which is the one thing here worth keeping.
+
+CREATE TABLE cache_entry (
+    cache_key VARCHAR2(64 CHAR) NOT NULL,
+    kind VARCHAR2(64 CHAR) NOT NULL,
+    owner VARCHAR2(200 CHAR) NOT NULL,
+    token VARCHAR2(36 CHAR),
+    status VARCHAR2(16 CHAR) NOT NULL,
+    expires_at NUMBER(19) NOT NULL,
+    claimed_at NUMBER(19),
+    data CLOB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (cache_key)
+);
+
+CREATE INDEX idx_cache_entry_claim ON cache_entry (owner, token, claimed_at);
+CREATE INDEX idx_cache_entry_expiry ON cache_entry (expires_at);
+
+CREATE TABLE cache_operation_outbox (
+    operation_id VARCHAR2(100 CHAR) NOT NULL,
+    target VARCHAR2(36 CHAR) NOT NULL,
+    owner VARCHAR2(200 CHAR) NOT NULL,
+    kind VARCHAR2(64 CHAR) NOT NULL,
+    status VARCHAR2(16 CHAR) NOT NULL,
+    issued_at NUMBER(19) NOT NULL,
+    deadline NUMBER(19) NOT NULL,
+    delivered_at NUMBER(19),
+    completed_at NUMBER(19),
+    data CLOB NOT NULL,
+    result CLOB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    PRIMARY KEY (operation_id)
+);
+
+CREATE INDEX idx_cache_outbox_delivery ON cache_operation_outbox (target, status, issued_at);
+CREATE INDEX idx_cache_outbox_cleanup ON cache_operation_outbox (status, completed_at);
+
 
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_service_listener_bindings (

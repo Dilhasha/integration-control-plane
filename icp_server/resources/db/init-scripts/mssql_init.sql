@@ -1032,6 +1032,7 @@ CREATE TABLE runtimes (
     runtime_hostname NVARCHAR (255) NULL,
     runtime_port NVARCHAR (10) NULL,
     callback_url NVARCHAR (500) NULL,
+    wf_boosted_until BIGINT,
     try_it_host NVARCHAR (255) NULL,
     platform_name NVARCHAR (50) NOT NULL DEFAULT 'ballerina',
     platform_version NVARCHAR (50) NULL,
@@ -1220,6 +1221,19 @@ CREATE TABLE bi_service_openapi_definitions (
 );
 GO
 
+-- Workflow metadata document published by a runtime's ICP bridge (one row per runtime)
+CREATE TABLE bi_workflow_metadata (
+    runtime_id CHAR(36) NOT NULL,
+    metadata NVARCHAR (MAX) NOT NULL,
+    capabilities NVARCHAR (512),
+    task_queue NVARCHAR(255),
+    created_at DATETIME2 NOT NULL DEFAULT GETDATE (),
+    updated_at DATETIME2 NOT NULL DEFAULT GETDATE (),
+    PRIMARY KEY (runtime_id),
+    CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes (runtime_id) ON DELETE CASCADE
+);
+GO
+
 CREATE TRIGGER trg_bi_service_openapi_definitions_updated_at
 ON bi_service_openapi_definitions
 AFTER UPDATE
@@ -1233,6 +1247,90 @@ BEGIN
         AND t.file_name = i.file_name;
 END;
 GO
+
+-- Keep in step with add_workflow_feature_mssql.sql: a fresh install and a migrated
+-- deployment must end up with the same schema, trigger included.
+CREATE TRIGGER trg_bi_workflow_metadata_updated_at
+ON bi_workflow_metadata
+AFTER UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE bi_workflow_metadata
+    SET updated_at = GETDATE()
+    FROM bi_workflow_metadata t
+    INNER JOIN inserted i ON t.runtime_id = i.runtime_id;
+END;
+GO
+
+
+-- ============================================================================
+-- REQUEST CACHE (derived state, shared across ICP nodes)
+-- ============================================================================
+-- Two generic tables: one caching the answers to read requests, one queueing the
+-- operations that change something. Neither knows what a workflow is — `kind` says what a
+-- row is about and `data` carries the rest, so a second feature needing the same shape adds
+-- a kind rather than a table.
+--
+-- The `cache_` prefix is the contract: this is DERIVED state. An upgrade may drop and
+-- recreate these tables, and nothing in them needs migrating — losing a row costs one
+-- refetch, or one caller being told their operation was never confirmed.
+--
+-- What earns a column is what a WHERE clause needs; everything else lives in `data`. The ICP
+-- supports five database engines, and portable JSON predicates across them do not exist:
+--   cache_key   the request's identity, COMPUTED - sha256(kind|owner|request|identity), so
+--               the parts that make a request unique never become columns
+--   owner       the scope a row belongs to; what a delivery claim filters on
+--   token       the in-flight attempt, which fences a late answer from a superseded one
+--   expires_at  epoch SECONDS, not a timestamp: every read, claim and sweep compares it, and
+--               integers compare identically on all five engines while timestamp arithmetic
+--               needs four different implementations (see storage/database_dialect.bal)
+--
+-- Neither table has a foreign key, deliberately: a K8S deployment DELETEs runtime rows when
+-- they go offline, and ON DELETE CASCADE would discard the record of an operation whose
+-- outcome nobody has established - which is the one thing here worth keeping.
+
+CREATE TABLE cache_entry (
+    cache_key NVARCHAR(64) NOT NULL,
+    kind NVARCHAR(64) NOT NULL,
+    owner NVARCHAR(200) NOT NULL,
+    token NVARCHAR(36),
+    status NVARCHAR(16) NOT NULL,
+    expires_at BIGINT NOT NULL,
+    claimed_at BIGINT,
+    data NVARCHAR(MAX),
+    created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (cache_key)
+);
+GO
+
+CREATE INDEX idx_cache_entry_claim ON cache_entry (owner, token, claimed_at);
+GO
+CREATE INDEX idx_cache_entry_expiry ON cache_entry (expires_at);
+GO
+
+CREATE TABLE cache_operation_outbox (
+    operation_id NVARCHAR(100) NOT NULL,
+    target NVARCHAR(36) NOT NULL,
+    owner NVARCHAR(200) NOT NULL,
+    kind NVARCHAR(64) NOT NULL,
+    status NVARCHAR(16) NOT NULL,
+    issued_at BIGINT NOT NULL,
+    deadline BIGINT NOT NULL,
+    delivered_at BIGINT,
+    completed_at BIGINT,
+    data NVARCHAR(MAX) NOT NULL,
+    result NVARCHAR(MAX),
+    created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+    PRIMARY KEY (operation_id)
+);
+GO
+
+CREATE INDEX idx_cache_outbox_delivery ON cache_operation_outbox (target, status, issued_at);
+GO
+CREATE INDEX idx_cache_outbox_cleanup ON cache_operation_outbox (status, completed_at);
+GO
+
 
 -- Listeners bound to a runtime (e.g., HTTP/HTTPS)
 CREATE TABLE bi_service_listener_bindings (

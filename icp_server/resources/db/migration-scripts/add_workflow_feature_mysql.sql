@@ -1,11 +1,14 @@
 -- Migration: workflow feature support (MySQL / MariaDB)
 -- Adds everything an existing pre-workflow deployment needs for the workflow feature:
---   1. runtimes.callback_url        - workflow management service base URL from the heartbeat
+--   1. runtimes.callback_url        - retained for schema compatibility: heartbeat writes still
+--                                     reference the column, but nothing populates it now that
+--                                     management goes through the command tunnel
 --   2. 'Workflow-Management' domain - widens the permission_domain ENUM
 --   3. workflow_mgt:* permissions   - human-task and workflow-execution permissions
 --   4. role grants                  - Super Admin/Admin/Project Admin: view + manage both;
 --                                     Developer: manage human tasks, view workflows;
 --                                     Viewer: view human tasks only
+--   5. bi_workflow_metadata     - workflow metadata + capabilities from the full heartbeat
 -- Idempotent - safe to re-run. Fresh installs get all of this from mysql_init.sql.
 -- Run once against the main ICP DB.
 
@@ -66,3 +69,30 @@ WHERE p.permission_name IN ('workflow_mgt:view_workflows', 'workflow_mgt:manage_
          OR (r.role_name = 'Developer' AND p.permission_name = 'workflow_mgt:view_workflows'))
     AND NOT EXISTS (SELECT 1 FROM role_permission_mapping m
                     WHERE m.role_id = r.role_id AND m.permission_id = p.permission_id);
+
+-- 5. Workflow metadata published in the full heartbeat
+--    The BI runtime's ICP bridge sends its workflow metadata document (definitions, human
+--    tasks, activities, agents — with JSON schemas) and its advertised capabilities in the
+--    optional workflowMetadata/capabilities heartbeat fields. Heartbeat processing writes
+--    this table unconditionally, so a missing table fails every full heartbeat transaction:
+--    apply this script BEFORE upgrading the ICP server.
+CREATE TABLE IF NOT EXISTS bi_workflow_metadata (
+  runtime_id   CHAR(36) NOT NULL,
+  metadata     JSON NOT NULL,
+  capabilities VARCHAR(512),
+  task_queue   VARCHAR(255),
+  created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (runtime_id),
+  CONSTRAINT fk_bi_workflow_metadata_runtime FOREIGN KEY (runtime_id) REFERENCES runtimes(runtime_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- A re-run on a database that created bi_workflow_metadata before the task_queue column
+-- picks the column up here; a fresh run already has it from the CREATE above.
+SET @add_task_queue = (SELECT IF(COUNT(*) = 0,
+    'ALTER TABLE bi_workflow_metadata ADD COLUMN task_queue VARCHAR(255)', 'SELECT 1')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'bi_workflow_metadata' AND column_name = 'task_queue');
+PREPARE add_task_queue_stmt FROM @add_task_queue;
+EXECUTE add_task_queue_stmt;
+DEALLOCATE PREPARE add_task_queue_stmt;
