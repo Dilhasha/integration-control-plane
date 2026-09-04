@@ -37,6 +37,13 @@ isolated function extractClientIp(http:Request req) returns string? {
     return xri is string ? xri : ();
 }
 
+isolated function originOf(string url) returns string {
+    int schemeSep = <int>url.indexOf("://");
+    int authorityStart = schemeSep + 3;
+    int? pathSep = url.indexOf("/", authorityStart);
+    return pathSep is int ? url.substring(0, pathSep) : url;
+}
+
 @http:ServiceConfig {
     cors: {
         allowOrigins: normalizedCorsAllowedOrigins
@@ -471,7 +478,8 @@ service /auth on httpListener {
                 username: userInfo.username,
                 displayName: userDetails.displayName,
                 permissions: userPermissions,
-                isOidcUser: true
+                isOidcUser: true,
+                idToken: tokenResponse.id_token
             }
         };
     }
@@ -887,6 +895,35 @@ service /auth on httpListener {
         return <http:Ok>{
             body: {
                 authorizationUrl: authorizationUrl
+            }
+        };
+    }
+
+    // OIDC RP-initiated logout URL endpoint
+    isolated resource function get oidc/'logout\-url(string? idTokenHint) returns http:Ok|http:BadRequest|http:InternalServerError {
+        types:SSOConfig ssoConfig = getSSOConfig();
+
+        error? validationError = validateSSOConfig(ssoConfig);
+        if validationError is error {
+            log:printError("SSO configuration validation failed", validationError);
+            return utils:createBadRequestError(validationError.message());
+        }
+        if !ssoConfig.enabled {
+            return utils:createBadRequestError("SSO authentication is not enabled");
+        }
+
+        // Derived from the redirect URI's origin so it needs no extra config and cannot
+        // be an attacker-supplied open redirect.
+        string postLogoutRedirectUri = originOf(ssoConfig.redirectUri) + "/login";
+        string|error logoutUrl = auth:buildLogoutUrl(ssoConfig, postLogoutRedirectUri, idTokenHint);
+        if logoutUrl is error {
+            log:printError("Error building logout URL", logoutUrl);
+            return utils:createInternalServerError("Failed to generate logout URL");
+        }
+
+        return <http:Ok>{
+            body: {
+                logoutUrl: logoutUrl
             }
         };
     }

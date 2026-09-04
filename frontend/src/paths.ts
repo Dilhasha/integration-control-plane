@@ -205,7 +205,7 @@ export const support = {
 // Re-export from config/api for backward compatibility
 // ---------------------------------------------------------------------------
 
-export { loginApiUrl, refreshTokenApiUrl, revokeTokenApiUrl, oidcAuthorizeApiUrl, oidcCallbackApiUrl, changePasswordApiUrl, forceChangePasswordApiUrl } from './config/api';
+export { loginApiUrl, refreshTokenApiUrl, revokeTokenApiUrl, oidcAuthorizeApiUrl, oidcLogoutApiUrl, oidcCallbackApiUrl, changePasswordApiUrl, forceChangePasswordApiUrl } from './config/api';
 
 // Logs URL helper
 export const observabilityLogsApiUrl = (): string => window.API_CONFIG.observabilityUrl + '/logs?live=true';

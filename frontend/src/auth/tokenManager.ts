@@ -4,6 +4,7 @@ const ACCESS_TOKEN_KEY = 'icp_auth_token';
 const REFRESH_TOKEN_KEY = 'icp_refresh_token';
 const TOKEN_EXPIRES_AT_KEY = 'icp_token_expires_at';
 const REFRESH_TOKEN_EXPIRES_AT_KEY = 'icp_refresh_token_expires_at';
+const ID_TOKEN_KEY = 'icp_id_token';
 const REDIRECT_URL_KEY = 'icp_redirect_url';
 const OIDC_STATE_KEY = 'icp_oidc_state';
 const NOT_AUTHORIZED_KEY = 'icp_not_authorized';
@@ -20,6 +21,7 @@ interface TokenData {
   expiresIn: number;
   refreshToken: string;
   refreshTokenExpiresIn: number;
+  idToken?: string;
 }
 
 let refreshPromise: Promise<void> | null = null;
@@ -65,6 +67,12 @@ export function saveTokens(data: TokenData): void {
   localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken);
   localStorage.setItem(TOKEN_EXPIRES_AT_KEY, String(now + data.expiresIn * 1000));
   localStorage.setItem(REFRESH_TOKEN_EXPIRES_AT_KEY, String(now + data.refreshTokenExpiresIn * 1000));
+  // Refresh responses omit it, so keep the one saved at login for id_token_hint at logout.
+  if (data.idToken) localStorage.setItem(ID_TOKEN_KEY, data.idToken);
+}
+
+export function getIdToken(): string | null {
+  return localStorage.getItem(ID_TOKEN_KEY);
 }
 
 export function getAccessToken(): string | null {
@@ -80,6 +88,7 @@ export function clearTokens(): void {
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
   localStorage.removeItem(REFRESH_TOKEN_EXPIRES_AT_KEY);
+  localStorage.removeItem(ID_TOKEN_KEY);
 }
 
 export function isAccessTokenExpired(): boolean {
