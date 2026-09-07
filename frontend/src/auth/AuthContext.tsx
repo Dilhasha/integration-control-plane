@@ -2,8 +2,8 @@ import { createContext, useContext, useState, useCallback, useMemo, useEffect } 
 import type { JSX, ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { loginApiUrl, loginUrl, notAuthorizedUrl, oidcAuthorizeApiUrl, oidcCallbackApiUrl } from '../paths';
-import { saveTokens, clearTokens, getAccessToken, revokeToken, setOnAuthFailure, setOnAuthorizationFailure, saveRedirectUrl, generateAndSaveOIDCState } from './tokenManager';
+import { loginApiUrl, loginUrl, notAuthorizedUrl, oidcAuthorizeApiUrl, oidcLogoutApiUrl, oidcCallbackApiUrl } from '../paths';
+import { saveTokens, clearTokens, getAccessToken, getIdToken, revokeToken, setOnAuthFailure, setOnAuthorizationFailure, saveRedirectUrl, generateAndSaveOIDCState } from './tokenManager';
 
 const USER_KEY = 'icp_user';
 
@@ -139,8 +139,8 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       err.username = username;
       throw err;
     }
-    const data: { userId: string; token: string; expiresIn: number; refreshToken: string; refreshTokenExpiresIn: number; username: string; displayName: string; permissions: string[]; isOidcUser: boolean } = await res.json();
-    saveTokens({ token: data.token, expiresIn: data.expiresIn, refreshToken: data.refreshToken, refreshTokenExpiresIn: data.refreshTokenExpiresIn });
+    const data: { userId: string; token: string; expiresIn: number; refreshToken: string; refreshTokenExpiresIn: number; username: string; displayName: string; permissions: string[]; isOidcUser: boolean; idToken?: string } = await res.json();
+    saveTokens({ token: data.token, expiresIn: data.expiresIn, refreshToken: data.refreshToken, refreshTokenExpiresIn: data.refreshTokenExpiresIn, idToken: data.idToken });
     const user: UserInfo = { userId: data.userId, username: data.username, displayName: data.displayName, isOidcUser: data.isOidcUser, requirePasswordChange: false };
     localStorage.setItem(USER_KEY, JSON.stringify(user));
     setUserInfo(user);
@@ -157,13 +157,39 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   }, []);
 
   const logout = useCallback(async () => {
+    const wasOidc = userInfo?.isOidcUser ?? false;
+    const idToken = getIdToken();
     await revokeToken();
     clearTokens();
     localStorage.removeItem(USER_KEY);
     setUserInfo(null);
     setIsAuthenticated(false);
     queryClient.clear();
-  }, [queryClient]);
+
+    if (wasOidc) {
+      // The ID token goes in the body, not the query string: it is a bearer-grade
+      // credential that would otherwise be retained in access and proxy logs.
+      try {
+        const res = await fetch(oidcLogoutApiUrl(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(idToken ? { idTokenHint: idToken } : {}),
+        });
+        if (res.ok) {
+          const data: { logoutUrl?: string } = await res.json();
+          if (data.logoutUrl) {
+            window.location.href = data.logoutUrl;
+            return;
+          }
+        }
+      } catch {
+        // Fall through to the local login page below.
+      }
+      // The local session is already cleared, so never leave the user on a stale
+      // authenticated page when the provider logout cannot be reached.
+      window.location.href = loginUrl();
+    }
+  }, [queryClient, userInfo]);
 
   const value = useMemo<AuthContextValue>(
     () => ({

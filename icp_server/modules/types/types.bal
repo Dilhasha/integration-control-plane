@@ -2275,6 +2275,12 @@ public type OIDCCallbackRequest record {|
     string state?; // CSRF protection token
 |};
 
+// Request for the RP-initiated logout URL. The ID token travels in the body rather
+// than a query parameter so it is not retained in access logs or browser history.
+public type OIDCLogoutRequest record {|
+    string idTokenHint?; // Omitted when the client has no stored ID token
+|};
+
 // OIDC token response from provider
 public type OIDCTokenResponse record {|
     string access_token;

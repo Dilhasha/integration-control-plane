@@ -35,6 +35,29 @@ public isolated function buildAuthorizationUrl(types:SSOConfig config, string? s
     return authorizationUrl;
 }
 
+// Build OIDC RP-initiated logout URL. The id_token_hint lets the provider skip its
+// confirmation page and honour the post_logout_redirect_uri.
+public isolated function buildLogoutUrl(types:SSOConfig config, string postLogoutRedirectUri,
+        string? idTokenHint = ()) returns string|error {
+    map<string> params = {
+        "post_logout_redirect_uri": postLogoutRedirectUri,
+        "client_id": config.clientId
+    };
+    if idTokenHint is string && idTokenHint.trim().length() > 0 {
+        params["id_token_hint"] = idTokenHint;
+    }
+
+    string[] queryParts = [];
+    foreach var [key, value] in params.entries() {
+        string encodedKey = check url:encode(key, "UTF-8");
+        string encodedValue = check url:encode(value, "UTF-8");
+        queryParts.push(string `${encodedKey}=${encodedValue}`);
+    }
+
+    string queryString = string:'join("&", ...queryParts);
+    return string `${config.logoutEndpoint}?${queryString}`;
+}
+
 public isolated function exchangeCodeForTokens(string code, types:SSOConfig config)
     returns types:OIDCTokenResponse|http:Unauthorized|http:InternalServerError {
 

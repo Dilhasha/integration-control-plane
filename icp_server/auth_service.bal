@@ -37,6 +37,20 @@ isolated function extractClientIp(http:Request req) returns string? {
     return xri is string ? xri : ();
 }
 
+// Scheme + authority of a URL, used to derive the post-logout redirect from the
+// configured redirect URI. Returns the input unchanged when it carries no scheme:
+// `ssoRedirectUri` is only validated as non-empty, so a value without "://" must
+// not panic this request.
+isolated function originOf(string url) returns string {
+    int? schemeSep = url.indexOf("://");
+    if schemeSep is () {
+        return url;
+    }
+    int authorityStart = schemeSep + 3;
+    int? pathSep = url.indexOf("/", authorityStart);
+    return pathSep is int ? url.substring(0, pathSep) : url;
+}
+
 @http:ServiceConfig {
     cors: {
         allowOrigins: normalizedCorsAllowedOrigins
@@ -471,7 +485,8 @@ service /auth on httpListener {
                 username: userInfo.username,
                 displayName: userDetails.displayName,
                 permissions: userPermissions,
-                isOidcUser: true
+                isOidcUser: true,
+                idToken: tokenResponse.id_token
             }
         };
     }
@@ -887,6 +902,39 @@ service /auth on httpListener {
         return <http:Ok>{
             body: {
                 authorizationUrl: authorizationUrl
+            }
+        };
+    }
+
+    // OIDC RP-initiated logout URL endpoint
+    // POST rather than GET: the ID token is a bearer-grade credential and a query
+    // value would be retained in access logs, proxy logs and browser history, and can
+    // exceed request-line limits. It still travels as id_token_hint on the
+    // provider-directed redirect, where the spec requires it.
+    isolated resource function post oidc/'logout\-url(types:OIDCLogoutRequest request) returns http:Ok|http:BadRequest|http:InternalServerError {
+        types:SSOConfig ssoConfig = getSSOConfig();
+
+        error? validationError = validateSSOConfig(ssoConfig);
+        if validationError is error {
+            log:printError("SSO configuration validation failed", validationError);
+            return utils:createBadRequestError(validationError.message());
+        }
+        if !ssoConfig.enabled {
+            return utils:createBadRequestError("SSO authentication is not enabled");
+        }
+
+        // Derived from the redirect URI's origin so it needs no extra config and cannot
+        // be an attacker-supplied open redirect.
+        string postLogoutRedirectUri = originOf(ssoConfig.redirectUri) + "/login";
+        string|error logoutUrl = auth:buildLogoutUrl(ssoConfig, postLogoutRedirectUri, request?.idTokenHint);
+        if logoutUrl is error {
+            log:printError("Error building logout URL", logoutUrl);
+            return utils:createInternalServerError("Failed to generate logout URL");
+        }
+
+        return <http:Ok>{
+            body: {
+                logoutUrl: logoutUrl
             }
         };
     }
