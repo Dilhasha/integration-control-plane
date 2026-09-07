@@ -167,18 +167,27 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     queryClient.clear();
 
     if (wasOidc) {
+      // The ID token goes in the body, not the query string: it is a bearer-grade
+      // credential that would otherwise be retained in access and proxy logs.
       try {
-        const url = idToken ? `${oidcLogoutApiUrl()}?idTokenHint=${encodeURIComponent(idToken)}` : oidcLogoutApiUrl();
-        const res = await fetch(url);
+        const res = await fetch(oidcLogoutApiUrl(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(idToken ? { idTokenHint: idToken } : {}),
+        });
         if (res.ok) {
           const data: { logoutUrl?: string } = await res.json();
           if (data.logoutUrl) {
             window.location.href = data.logoutUrl;
+            return;
           }
         }
       } catch {
-        // ignore
+        // Fall through to the local login page below.
       }
+      // The local session is already cleared, so never leave the user on a stale
+      // authenticated page when the provider logout cannot be reached.
+      window.location.href = loginUrl();
     }
   }, [queryClient, userInfo]);
 
