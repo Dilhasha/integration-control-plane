@@ -4,11 +4,20 @@
       "_id": "6a96134bd5804668ebd643ca",
       "name": "Application Logs",
       "dashboard_ids": [],
-      "workspace_ids": [
-        [
-          "6a96136a0867306eb913c351"
+      "workspace_ids": [["6a96136a0867306eb913c351"]],
+      "filters": {
+        "context": [
+          {
+            "id": "runtimeId",
+            "label": "Runtime",
+            "field": "metadata.icp_runtimeId.raw",
+            "op": "contains",
+            "type": "parentOptions",
+            "visibility": "always",
+            "multi": true
+          }
         ]
-      ],
+      },
       "parent": null,
       "sort_order": 1
     }
@@ -22,9 +31,7 @@
       "es_query": {
         "post_filter": {
           "terms": {
-            "event_type.raw": [
-              "log"
-            ]
+            "event_type.raw": ["log"]
           }
         },
         "size": 50,
@@ -66,7 +73,8 @@
           "span.parent_id",
           "trace_id",
           "log.severity",
-          "resource"
+          "resource",
+          "metadata.icp_runtimeId"
         ],
         "sort": [
           {

@@ -69,8 +69,7 @@ const CREATE_MOESIF_DASHBOARDS_MUTATION = `
 export function useCreateMoesifDashboards() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { componentId: string; environmentId: string; managementApiKey: string }) =>
-      gql<{ createMoesifDashboards: MoesifMetricsConfigStatus }>(CREATE_MOESIF_DASHBOARDS_MUTATION, input).then((d) => d.createMoesifDashboards),
+    mutationFn: (input: { componentId: string; environmentId: string; managementApiKey: string }) => gql<{ createMoesifDashboards: MoesifMetricsConfigStatus }>(CREATE_MOESIF_DASHBOARDS_MUTATION, input).then((d) => d.createMoesifDashboards),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['moesif-metrics-config', variables.componentId, variables.environmentId] });
       qc.invalidateQueries({ queryKey: ['moesif-dashboard-embed', variables.componentId, variables.environmentId] });
@@ -102,7 +101,7 @@ export function useMoesifApplications() {
 // ── Moesif canvas embed (canvas iframe src + postMessage auth token) ──
 
 // A descriptor used to embed the Moesif metrics canvas in an iframe. `embedUrl`
-// is the fully-formed canvas iframe src (…/wrap/app/<org>-<app>/canvas#auth=post)
+// is the fully-formed canvas iframe src (…/embed/canvas#auth=post)
 // and `token` is the short-lived, restricted auth token the backend mints from
 // the stored Management API Key and delivers to the canvas over the postMessage
 // handshake (SET_TOKEN).

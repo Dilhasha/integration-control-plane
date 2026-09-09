@@ -379,24 +379,6 @@ public isolated function getComponentByProjectAndHandler(string projectId, strin
     return mapToComponent(componentRecords[0]);
 }
 
-// Retrieve whether the Moesif metrics dashboards have been created for a
-// specific environment. A Moesif application maps to a specific environment, so
-// the config (Management API key + org/app ids) is stored per environment and
-// shared by all integrations in that environment. Returns false when no row
-// exists or the flag is unset.
-public isolated function getComponentMoesifDashboardsCreated(string environmentId) returns boolean|error {
-    sql:ParameterizedQuery selectQuery =
-        `SELECT dashboards_created FROM environment_moesif_config WHERE environment_id = ${environmentId}`;
-    boolean|sql:Error result = dbClient->queryRow(selectQuery);
-    if result is sql:NoRowsError {
-        return false;
-    }
-    if result is sql:Error {
-        return result;
-    }
-    return result;
-}
-
 // Records whether the Moesif metrics dashboards have been created for a specific
 // environment. Upserts into environment_moesif_config keyed by environment_id.
 // Returns the number of affected rows.
@@ -445,105 +427,19 @@ public isolated function updateComponentMoesifDashboardsCreated(string environme
     return result.affectedRowCount ?: 0;
 }
 
-// Persist the Moesif canvas embed details for an environment after the metrics
-// dashboards are linked: the Moesif organization id + application id (used to
-// build the canvas iframe src) and the Management API key (kept so the app list
-// can be re-fetched when editing and so a short-lived canvas token can be minted
-// from it on demand). The key is shared by metrics and logs, so this flips BOTH
-// dashboards_created AND logs_configured to TRUE. Upserts into
-// environment_moesif_config keyed by environment_id. Returns the number of affected rows.
-public isolated function updateComponentMoesifDashboardDetails(string environmentId, string orgId, string appId,
-        string managementKey) returns int|error {
-    sql:ExecutionResult result;
-    if dbType == MSSQL {
-        result = check dbClient->execute(`
-            MERGE INTO environment_moesif_config AS target
-            USING (VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}, ${true}))
-                   AS source (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created, logs_configured)
-            ON (target.environment_id = source.environment_id)
-            WHEN MATCHED THEN
-                UPDATE SET canvas_org_id = source.canvas_org_id, canvas_app_id = source.canvas_app_id,
-                    management_key = source.management_key,
-                    dashboards_created = source.dashboards_created, logs_configured = source.logs_configured,
-                    updated_at = GETDATE()
-            WHEN NOT MATCHED THEN
-                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created, logs_configured)
-                VALUES (source.environment_id, source.canvas_org_id, source.canvas_app_id,
-                    source.management_key, source.dashboards_created, source.logs_configured);
-        `);
-    } else if dbType == ORACLE {
-        result = check dbClient->execute(`
-            MERGE INTO environment_moesif_config target
-            USING (SELECT ${environmentId} AS environment_id, ${orgId} AS canvas_org_id, ${appId} AS canvas_app_id,
-                          ${managementKey} AS management_key,
-                          ${true} AS dashboards_created, ${true} AS logs_configured FROM dual) source
-            ON (target.environment_id = source.environment_id)
-            WHEN MATCHED THEN
-                UPDATE SET canvas_org_id = source.canvas_org_id, canvas_app_id = source.canvas_app_id,
-                    management_key = source.management_key,
-                    dashboards_created = source.dashboards_created, logs_configured = source.logs_configured,
-                    updated_at = CURRENT_TIMESTAMP
-            WHEN NOT MATCHED THEN
-                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created, logs_configured)
-                VALUES (source.environment_id, source.canvas_org_id, source.canvas_app_id,
-                    source.management_key, source.dashboards_created, source.logs_configured)
-        `);
-    } else if dbType == POSTGRESQL {
-        result = check dbClient->execute(`
-            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created, logs_configured)
-            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}, ${true})
-            ON CONFLICT (environment_id) DO UPDATE SET
-                canvas_org_id = EXCLUDED.canvas_org_id,
-                canvas_app_id = EXCLUDED.canvas_app_id,
-                management_key = EXCLUDED.management_key,
-                dashboards_created = EXCLUDED.dashboards_created,
-                logs_configured = EXCLUDED.logs_configured,
-                updated_at = CURRENT_TIMESTAMP
-        `);
-    } else {
-        result = check dbClient->execute(`
-            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created, logs_configured)
-            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}, ${true})
-            ON DUPLICATE KEY UPDATE
-                canvas_org_id = VALUES(canvas_org_id),
-                canvas_app_id = VALUES(canvas_app_id),
-                management_key = VALUES(management_key),
-                dashboards_created = VALUES(dashboards_created),
-                logs_configured = VALUES(logs_configured),
-                updated_at = CURRENT_TIMESTAMP
-        `);
-    }
-    return result.affectedRowCount ?: 0;
-}
-
-// Retrieve the Moesif organization id + application id and the Management API key
-// stored for an environment so a caller can build the canvas iframe src and mint
-// a short-lived canvas token from the key. Returns () for any field when it has
-// not been set.
-public isolated function getComponentMoesifEmbedDetails(string environmentId)
-        returns record {|string? orgId; string? appId; string? managementKey;|}?|error {
+// Retrieve the Moesif Management API key stored for an environment. This key is
+// the only credential needed to load either canvas: the short-lived canvas token
+// is minted from it, and the canvas resolves the Moesif organization + application
+// from that token's claims. A Moesif application maps to a specific environment,
+// so the key is stored per environment and is shared by every integration in it
+// and by both the metrics and the logs view. Returns () when no row exists or no
+// key has been stored.
+public isolated function getEnvironmentMoesifManagementKey(string environmentId) returns string?|error {
     sql:ParameterizedQuery selectQuery =
-        `SELECT canvas_org_id, canvas_app_id, management_key FROM environment_moesif_config WHERE environment_id = ${environmentId}`;
-    record {|string? canvas_org_id; string? canvas_app_id; string? management_key;|}|sql:Error result = dbClient->queryRow(selectQuery);
+        `SELECT management_key FROM environment_moesif_config WHERE environment_id = ${environmentId}`;
+    string?|sql:Error result = dbClient->queryRow(selectQuery);
     if result is sql:NoRowsError {
         return ();
-    }
-    if result is sql:Error {
-        return result;
-    }
-    return {orgId: result.canvas_org_id, appId: result.canvas_app_id, managementKey: result.management_key};
-}
-
-// Retrieve whether the Moesif application logs dashboard/canvas has been linked
-// for a specific environment. Logs reuse the shared metrics canvas
-// org/app/token; this flag only records that the logs canvas has been configured.
-// Returns false when no row exists or the flag is unset.
-public isolated function getComponentMoesifLogsConfigured(string environmentId) returns boolean|error {
-    sql:ParameterizedQuery selectQuery =
-        `SELECT logs_configured FROM environment_moesif_config WHERE environment_id = ${environmentId}`;
-    boolean|sql:Error result = dbClient->queryRow(selectQuery);
-    if result is sql:NoRowsError {
-        return false;
     }
     if result is sql:Error {
         return result;
@@ -551,70 +447,71 @@ public isolated function getComponentMoesifLogsConfigured(string environmentId) 
     return result;
 }
 
-// Persist the Moesif canvas embed details for an environment after the logs
-// dashboard is linked: the Moesif organization id + application id (used to build
-// the canvas iframe src) and the Management API key (kept so the app list can be
-// re-fetched when editing and so a short-lived canvas token can be minted from it
-// on demand). The key is shared by metrics and logs, so this flips BOTH
-// logs_configured AND dashboards_created to TRUE. Upserts into
+
+// Persist the Moesif canvas embed details for an environment after the metrics
+// dashboards are linked: the Moesif organization id + application id (used to
+// build the canvas iframe src) and the Management API key (kept so the app list
+// can be re-fetched when editing and so a short-lived canvas token can be minted
+// from it on demand). The key is shared by metrics and logs, but metrics dashboard
+// creation and log ingestion are separate setup flows, so this flips ONLY
+// dashboards_created to TRUE and leaves logs_configured untouched (it defaults to
+// FALSE on first insert and is preserved on update). Upserts into
 // environment_moesif_config keyed by environment_id. Returns the number of affected rows.
-public isolated function updateComponentMoesifLogsDetails(string environmentId, string orgId, string appId,
+public isolated function updateComponentMoesifDashboardDetails(string environmentId, string orgId, string appId,
         string managementKey) returns int|error {
     sql:ExecutionResult result;
     if dbType == MSSQL {
         result = check dbClient->execute(`
             MERGE INTO environment_moesif_config AS target
-            USING (VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}, ${true}))
-                   AS source (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured, dashboards_created)
+            USING (VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}))
+                   AS source (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created)
             ON (target.environment_id = source.environment_id)
             WHEN MATCHED THEN
                 UPDATE SET canvas_org_id = source.canvas_org_id, canvas_app_id = source.canvas_app_id,
                     management_key = source.management_key,
-                    logs_configured = source.logs_configured, dashboards_created = source.dashboards_created,
+                    dashboards_created = source.dashboards_created,
                     updated_at = GETDATE()
             WHEN NOT MATCHED THEN
-                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured, dashboards_created)
+                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created)
                 VALUES (source.environment_id, source.canvas_org_id, source.canvas_app_id,
-                    source.management_key, source.logs_configured, source.dashboards_created);
+                    source.management_key, source.dashboards_created);
         `);
     } else if dbType == ORACLE {
         result = check dbClient->execute(`
             MERGE INTO environment_moesif_config target
             USING (SELECT ${environmentId} AS environment_id, ${orgId} AS canvas_org_id, ${appId} AS canvas_app_id,
                           ${managementKey} AS management_key,
-                          ${true} AS logs_configured, ${true} AS dashboards_created FROM dual) source
+                          ${true} AS dashboards_created FROM dual) source
             ON (target.environment_id = source.environment_id)
             WHEN MATCHED THEN
                 UPDATE SET canvas_org_id = source.canvas_org_id, canvas_app_id = source.canvas_app_id,
                     management_key = source.management_key,
-                    logs_configured = source.logs_configured, dashboards_created = source.dashboards_created,
+                    dashboards_created = source.dashboards_created,
                     updated_at = CURRENT_TIMESTAMP
             WHEN NOT MATCHED THEN
-                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured, dashboards_created)
+                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created)
                 VALUES (source.environment_id, source.canvas_org_id, source.canvas_app_id,
-                    source.management_key, source.logs_configured, source.dashboards_created)
+                    source.management_key, source.dashboards_created)
         `);
     } else if dbType == POSTGRESQL {
         result = check dbClient->execute(`
-            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured, dashboards_created)
-            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}, ${true})
+            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created)
+            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true})
             ON CONFLICT (environment_id) DO UPDATE SET
                 canvas_org_id = EXCLUDED.canvas_org_id,
                 canvas_app_id = EXCLUDED.canvas_app_id,
                 management_key = EXCLUDED.management_key,
-                logs_configured = EXCLUDED.logs_configured,
                 dashboards_created = EXCLUDED.dashboards_created,
                 updated_at = CURRENT_TIMESTAMP
         `);
     } else {
         result = check dbClient->execute(`
-            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured, dashboards_created)
-            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}, ${true})
+            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, dashboards_created)
+            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true})
             ON DUPLICATE KEY UPDATE
                 canvas_org_id = VALUES(canvas_org_id),
                 canvas_app_id = VALUES(canvas_app_id),
                 management_key = VALUES(management_key),
-                logs_configured = VALUES(logs_configured),
                 dashboards_created = VALUES(dashboards_created),
                 updated_at = CURRENT_TIMESTAMP
         `);
@@ -622,22 +519,75 @@ public isolated function updateComponentMoesifLogsDetails(string environmentId, 
     return result.affectedRowCount ?: 0;
 }
 
-// Retrieve the Moesif organization id + application id (shared with metrics) and
-// the Management API key stored for an environment so a caller can build the
-// logs canvas iframe src and mint a short-lived canvas token from the key.
-// Returns () for any field when it has not been set.
-public isolated function getComponentMoesifLogsEmbedDetails(string environmentId)
-        returns record {|string? orgId; string? appId; string? managementKey;|}?|error {
-    sql:ParameterizedQuery selectQuery =
-        `SELECT canvas_org_id, canvas_app_id, management_key FROM environment_moesif_config WHERE environment_id = ${environmentId}`;
-    record {|string? canvas_org_id; string? canvas_app_id; string? management_key;|}|sql:Error result = dbClient->queryRow(selectQuery);
-    if result is sql:NoRowsError {
-        return ();
+// Persist the Moesif canvas embed details for an environment after the logs
+// dashboard is linked: the Moesif organization id + application id (used to build
+// the canvas iframe src) and the Management API key (kept so the app list can be
+// re-fetched when editing and so a short-lived canvas token can be minted from it
+// on demand). The key is shared by metrics and logs, but log ingestion and metrics
+// dashboard creation are separate setup flows, so this flips ONLY logs_configured
+// to TRUE and leaves dashboards_created untouched (it defaults to FALSE on first
+// insert and is preserved on update). Upserts into environment_moesif_config keyed
+// by environment_id. Returns the number of affected rows.
+public isolated function updateComponentMoesifLogsDetails(string environmentId, string orgId, string appId,
+        string managementKey) returns int|error {
+    sql:ExecutionResult result;
+    if dbType == MSSQL {
+        result = check dbClient->execute(`
+            MERGE INTO environment_moesif_config AS target
+            USING (VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true}))
+                   AS source (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured)
+            ON (target.environment_id = source.environment_id)
+            WHEN MATCHED THEN
+                UPDATE SET canvas_org_id = source.canvas_org_id, canvas_app_id = source.canvas_app_id,
+                    management_key = source.management_key,
+                    logs_configured = source.logs_configured,
+                    updated_at = GETDATE()
+            WHEN NOT MATCHED THEN
+                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured)
+                VALUES (source.environment_id, source.canvas_org_id, source.canvas_app_id,
+                    source.management_key, source.logs_configured);
+        `);
+    } else if dbType == ORACLE {
+        result = check dbClient->execute(`
+            MERGE INTO environment_moesif_config target
+            USING (SELECT ${environmentId} AS environment_id, ${orgId} AS canvas_org_id, ${appId} AS canvas_app_id,
+                          ${managementKey} AS management_key,
+                          ${true} AS logs_configured FROM dual) source
+            ON (target.environment_id = source.environment_id)
+            WHEN MATCHED THEN
+                UPDATE SET canvas_org_id = source.canvas_org_id, canvas_app_id = source.canvas_app_id,
+                    management_key = source.management_key,
+                    logs_configured = source.logs_configured,
+                    updated_at = CURRENT_TIMESTAMP
+            WHEN NOT MATCHED THEN
+                INSERT (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured)
+                VALUES (source.environment_id, source.canvas_org_id, source.canvas_app_id,
+                    source.management_key, source.logs_configured)
+        `);
+    } else if dbType == POSTGRESQL {
+        result = check dbClient->execute(`
+            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured)
+            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true})
+            ON CONFLICT (environment_id) DO UPDATE SET
+                canvas_org_id = EXCLUDED.canvas_org_id,
+                canvas_app_id = EXCLUDED.canvas_app_id,
+                management_key = EXCLUDED.management_key,
+                logs_configured = EXCLUDED.logs_configured,
+                updated_at = CURRENT_TIMESTAMP
+        `);
+    } else {
+        result = check dbClient->execute(`
+            INSERT INTO environment_moesif_config (environment_id, canvas_org_id, canvas_app_id, management_key, logs_configured)
+            VALUES (${environmentId}, ${orgId}, ${appId}, ${managementKey}, ${true})
+            ON DUPLICATE KEY UPDATE
+                canvas_org_id = VALUES(canvas_org_id),
+                canvas_app_id = VALUES(canvas_app_id),
+                management_key = VALUES(management_key),
+                logs_configured = VALUES(logs_configured),
+                updated_at = CURRENT_TIMESTAMP
+        `);
     }
-    if result is sql:Error {
-        return result;
-    }
-    return {orgId: result.canvas_org_id, appId: result.canvas_app_id, managementKey: result.management_key};
+    return result.affectedRowCount ?: 0;
 }
 
 // Delete a component by ID

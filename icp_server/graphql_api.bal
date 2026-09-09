@@ -2673,22 +2673,28 @@ service /graphql on graphqlListener {
         }
 
         // Users with view, edit or manage permissions can read the configuration status.
-        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = component.id);
+        // The config is environment-keyed, so scope the check to the environment too.
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = component.id, envId = environmentId.trim());
         if !check auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_INTEGRATION_VIEW, auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
             log:printWarn("Attempt to read Moesif metrics config without permission", userId = userContext.userId, componentId = component.id);
             return error("Insufficient permissions to view this integration");
         }
 
-        boolean dashboardsCreated = check storage:getComponentMoesifDashboardsCreated(environmentId.trim());
+        // The stored Management API key is what the canvas is loaded with, so its
+        // presence is what "configured" means. The key is environment-wide, so a
+        // key supplied from either the metrics or the logs setup flow configures
+        // both views and the user is never asked for it twice.
+        string? managementKey = check storage:getEnvironmentMoesifManagementKey(environmentId.trim());
+        boolean dashboardsCreated = managementKey is string && managementKey.trim().length() > 0;
         return {dashboardsCreated};
     }
 
     // Build the Moesif canvas embed descriptor so the UI can render the metrics
-    // canvas in an iframe. Reads the stored Moesif org id + app id for the
-    // integration and returns the canvas iframe src plus the auth token the UI
-    // delivers to the canvas over postMessage (SET_TOKEN). Requires view, edit or
-    // manage permission.
+    // canvas in an iframe. Reads the environment's stored Management API key and
+    // returns the canvas iframe src plus the short-lived auth token minted from
+    // that key, which the UI delivers to the canvas over postMessage (SET_TOKEN).
+    // Requires view, edit or manage permission.
     isolated resource function get moesifDashboardEmbed(graphql:Context context, string componentId, string environmentId) returns types:MoesifDashboardEmbed|error {
         if !moesifEnabled {
             return error("Moesif metrics integration is disabled");
@@ -2704,30 +2710,23 @@ service /graphql on graphqlListener {
             return error("Integration not found");
         }
 
-        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId);
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId, envId = environmentId.trim());
         if !check auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_INTEGRATION_VIEW, auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
             return error("Insufficient permissions to view Moesif metrics for this integration");
         }
 
-        record {|string? orgId; string? appId; string? managementKey;|}? embedDetails = check storage:getComponentMoesifEmbedDetails(environmentId.trim());
-        if embedDetails is () {
-            return error("Moesif metrics dashboard has not been created for this integration yet");
-        }
-        string? orgId = embedDetails.orgId;
-        string? appId = embedDetails.appId;
-        if orgId is () || orgId.trim().length() == 0
-                || appId is () || appId.trim().length() == 0 {
-            return error("Moesif metrics dashboard has not been created for this integration yet");
-        }
-        string? managementKey = embedDetails.managementKey;
+        // The environment's Management API key is the only stored credential the
+        // canvas needs: the canvas resolves the Moesif organization + application
+        // from the claims of the token minted from it.
+        string? managementKey = check storage:getEnvironmentMoesifManagementKey(environmentId.trim());
         if managementKey is () || managementKey.trim().length() == 0 {
-            return error("Moesif Management API key has not been configured for this integration yet");
+            return error("Moesif Management API key has not been configured for this environment yet");
         }
 
         // Mint a short-lived, restricted canvas token from the stored Management
         // API key for this embed rather than serving a long-lived stored token.
-        types:MoesifDashboardEmbed|error embed = buildMoesifCanvasEmbed(orgId, appId, managementKey);
+        types:MoesifDashboardEmbed|error embed = buildMoesifCanvasEmbed(managementKey);
         if embed is error {
             log:printError("Failed to build Moesif canvas embed", 'error = embed, componentId = componentId);
             return error(string `Failed to generate Moesif dashboard embed: ${embed.message()}`);
@@ -2762,23 +2761,28 @@ service /graphql on graphqlListener {
         }
 
         // Users with view, edit or manage permissions can read the configuration status.
-        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = component.id);
+        // The config is environment-keyed, so scope the check to the environment too.
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = component.id, envId = environmentId.trim());
         if !check auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_INTEGRATION_VIEW, auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
             log:printWarn("Attempt to read Moesif logs config without permission", userId = userContext.userId, componentId = component.id);
             return error("Insufficient permissions to view this integration");
         }
 
-        boolean logsConfigured = check storage:getComponentMoesifLogsConfigured(environmentId.trim());
+        // Same rule as the metrics view: the environment's stored Management API
+        // key is the only credential the logs canvas needs, so a key supplied from
+        // either setup flow configures this view too.
+        string? managementKey = check storage:getEnvironmentMoesifManagementKey(environmentId.trim());
+        boolean logsConfigured = managementKey is string && managementKey.trim().length() > 0;
         return {logsConfigured};
     }
 
     // Build the Moesif canvas embed descriptor so the UI can render the application
-    // logs canvas in an iframe. Reads the stored (shared with metrics) Moesif org id +
-    // app id for the integration and returns the canvas iframe src plus the auth token
-    // the UI delivers to the canvas over postMessage (SET_TOKEN). The frontend posts
-    // the logs canvas layout separately as the CANVAS_INIT template. Requires view,
-    // edit or manage permission.
+    // logs canvas in an iframe. Reads the environment's stored Management API key
+    // (shared with metrics) and returns the canvas iframe src plus the short-lived
+    // auth token minted from it, which the UI delivers to the canvas over
+    // postMessage (SET_TOKEN). The frontend posts the logs canvas layout separately
+    // as the CANVAS_INIT template. Requires view, edit or manage permission.
     isolated resource function get moesifLogsEmbed(graphql:Context context, string componentId, string environmentId) returns types:MoesifDashboardEmbed|error {
         if !moesifEnabled {
             return error("Moesif logs integration is disabled");
@@ -2794,30 +2798,23 @@ service /graphql on graphqlListener {
             return error("Integration not found");
         }
 
-        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId);
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId, envId = environmentId.trim());
         if !check auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_INTEGRATION_VIEW, auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
             return error("Insufficient permissions to view Moesif logs for this integration");
         }
 
-        record {|string? orgId; string? appId; string? managementKey;|}? embedDetails = check storage:getComponentMoesifLogsEmbedDetails(environmentId.trim());
-        if embedDetails is () {
-            return error("Moesif logs dashboard has not been configured for this integration yet");
-        }
-        string? orgId = embedDetails.orgId;
-        string? appId = embedDetails.appId;
-        if orgId is () || orgId.trim().length() == 0
-                || appId is () || appId.trim().length() == 0 {
-            return error("Moesif logs dashboard has not been configured for this integration yet");
-        }
-        string? managementKey = embedDetails.managementKey;
+        // Shares the environment's Management API key with the metrics view; the
+        // logs canvas differs only in the template the frontend posts at
+        // CANVAS_INIT.
+        string? managementKey = check storage:getEnvironmentMoesifManagementKey(environmentId.trim());
         if managementKey is () || managementKey.trim().length() == 0 {
-            return error("Moesif Management API key has not been configured for this integration yet");
+            return error("Moesif Management API key has not been configured for this environment yet");
         }
 
         // Mint a short-lived, restricted canvas token from the stored Management
         // API key for this embed rather than serving a long-lived stored token.
-        types:MoesifDashboardEmbed|error embed = buildMoesifCanvasEmbed(orgId, appId, managementKey);
+        types:MoesifDashboardEmbed|error embed = buildMoesifCanvasEmbed(managementKey);
         if embed is error {
             log:printError("Failed to build Moesif logs canvas embed", 'error = embed, componentId = componentId);
             return error(string `Failed to generate Moesif logs embed: ${embed.message()}`);
@@ -2882,7 +2879,7 @@ service /graphql on graphqlListener {
             return error("Integration not found");
         }
 
-        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId);
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId, envId = environmentId.trim());
         if !check auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
             return error("Insufficient permissions to create Moesif dashboards for this component");
@@ -2944,7 +2941,7 @@ service /graphql on graphqlListener {
             return error("Integration not found");
         }
 
-        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId);
+        types:AccessScope scope = auth:buildScopeFromContext(component.projectId, integrationId = componentId, envId = environmentId.trim());
         if !check auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_INTEGRATION_EDIT, auth:PERMISSION_INTEGRATION_MANAGE], scope) {
             return error("Insufficient permissions to configure Moesif logs for this component");

@@ -26,11 +26,20 @@
 //   - docker-compose.yaml: runs the fluent/fluent-bit container, mounting the
 //                          BI log directory and the config above
 //   - .env               : the values the user fills in (Collector Application
-//                          ID, service name, environment, log dir)
+//                          ID, ICP runtime id, service name, environment,
+//                          log dir)
+//
+// Every shipped record is tagged with the ICP runtime id as an OTLP log
+// attribute (icp_runtimeid). Moesif stores log attributes that have no dedicated
+// mapping under `metadata`, so the embedded logs canvas can scope itself to an
+// integration's runtimes through its `runtimeId` context filter on
+// `metadata.icp_runtimeid.raw` (see moesifBiLogsCanvas.json). A sidecar tails a
+// single runtime's log directory, so the id is a per-sidecar .env value.
 
 // docker-compose.yaml: runs the Fluent Bit sidecar. Mounts the BI log directory
 // (BALLERINA_LOG_DIR) read-only into the container and passes the Moesif app id,
-// service name and environment through as environment variables.
+// ICP runtime id, service name and environment through as environment
+// variables.
 const BI_LOGS_DOCKER_COMPOSE_YAML = `services:
   fluent-bit:
     image: fluent/fluent-bit:3.2
@@ -44,16 +53,16 @@ const BI_LOGS_DOCKER_COMPOSE_YAML = `services:
       - MOESIF_APPLICATION_ID=\${MOESIF_APPLICATION_ID}
       - LOG_FILE_PATH=\${LOG_FILE_PATH:-/app/logs/app.log}
       - MOESIF_HOST=\${MOESIF_HOST:-api.moesif.net}
+      - ICP_RUNTIME_ID=\${ICP_RUNTIME_ID:-}
       - OTEL_SERVICE_NAME=\${OTEL_SERVICE_NAME:-ballerina-service}
       - DEPLOYMENT_ENVIRONMENT=\${DEPLOYMENT_ENVIRONMENT:-prod}
+    # Fluent Bit's HTTP server (health endpoint) is exposed on 2020. The
+    # fluent/fluent-bit image is distroless and ships no HTTP client (curl/wget),
+    # so a container-level healthcheck can't be run inside it. Monitor health
+    # externally, e.g. curl -f http://localhost:2020/api/v1/health
     ports:
       - "2020:2020"
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2020/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
 volumes:
   fluent-bit-otel-bi-db:
@@ -61,8 +70,9 @@ volumes:
 
 // fluent-bit.yaml: tails the BI JSON log file, derives the OTLP severity from
 // the JSON "level" field, wraps records in the OpenTelemetry log schema with the
-// service.name / deployment.environment resource attributes, and ships them to
-// Moesif's OTLP logs endpoint using the Collector Application ID header.
+// service.name / deployment.environment resource attributes and the
+// icp_runtimeid log attribute (which the logs canvas filters by), and ships them
+// to Moesif's OTLP logs endpoint using the Collector Application ID header.
 const BI_LOGS_FLUENT_BIT_YAML = `service:
   flush: 5
   log_level: info
@@ -136,6 +146,16 @@ pipeline:
             key: deployment.environment
             value: \${DEPLOYMENT_ENVIRONMENT}
 
+          # Tag every record with the ICP runtime id this sidecar ships logs for.
+          # Moesif keeps unmapped log attributes under \`metadata\`, so this lands
+          # as metadata.icp_runtimeid — the field the logs canvas' Runtime filter
+          # matches on. Must be the runtime id as ICP knows it.
+          - name: content_modifier
+            action: upsert
+            context: otel_log_attributes
+            key: icp_runtimeid
+            value: \${ICP_RUNTIME_ID}
+
   outputs:
     # == OTel Collector \`otlphttp/logs\` exporter -> https://<host>/v1/logs
     - name: opentelemetry
@@ -164,8 +184,8 @@ parsers:
 `;
 
 // Builds the Fluent Bit .env file, injecting the selected Moesif Collector
-// Application ID. The service name, environment and BI log directory are left as
-// placeholders for the user to fill in.
+// Application ID. The ICP runtime id, service name, environment and BI log
+// directory are left as placeholders for the user to fill in.
 export function biLogsFluentBitEnv(applicationId: string): string {
   return `# Moesif Collector Application Id (Account -> API Keys -> Collector Application Id)
 # Sent as the X-Moesif-Application-Id header on the OTLP /v1/logs requests.
@@ -180,6 +200,12 @@ LOG_FILE_PATH=/app/logs/app.log
 
 # Moesif collector host (api.moesif.net for production)
 MOESIF_HOST=api.moesif.net
+
+# The ICP runtime id whose logs this sidecar ships, copied from the runtime's
+# details in ICP. Sent on every record as the icp_runtimeid log attribute and
+# matched by the Runtime filter on the ICP logs dashboard, so logs stay
+# attributed to the right runtime. Run one sidecar per runtime.
+ICP_RUNTIME_ID=<RUNTIME_ID>
 
 # OTLP resource attribute service.name — set to your integration's service name
 OTEL_SERVICE_NAME=<SERVICE_NAME>
@@ -313,8 +339,8 @@ function createZip(files: Record<string, string>): Blob {
 
 // Downloads all Fluent Bit sidecar files (including a .env with the supplied
 // Collector Application ID) as a single zip. The user unzips it, fills in the
-// .env (Collector Application ID, service name, environment, BI log dir), then
-// runs `docker compose up -d`.
+// .env (Collector Application ID, ICP runtime id, service name, environment, BI
+// log dir), then runs `docker compose up -d`.
 export function downloadMoesifBiLogsFluentBitFiles(applicationId: string): void {
   const entries: Record<string, string> = { ...BI_LOGS_FLUENT_BIT_FILES, '.env': biLogsFluentBitEnv(applicationId) };
   // Nest every file under a single folder inside the archive.

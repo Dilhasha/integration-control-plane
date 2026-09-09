@@ -15,14 +15,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Button, Card, CardContent, CircularProgress, Divider, IconButton, MenuItem, PageContent, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
+import { Accordion, AccordionDetails, AccordionSummary, Alert, Button, CircularProgress, Divider, IconButton, MenuItem, PageContent, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { BarChart3, ChevronDown, Download, RefreshCw } from '@wso2/oxygen-ui-icons-react';
 import { useMemo, useState, type JSX } from 'react';
-import { useProjectByHandler, useComponentByHandler, useComponents, useEnvironments, useComponentRuntimes, useComponentRuntimesByEnvironments } from '../api/queries';
+import { useProjectByHandler, useComponentByHandler, useComponents, useEnvironments, useComponentRuntimes, useComponentRuntimesByEnvironments, useProjectRuntimesByEnvironments, type GqlRuntime } from '../api/queries';
 import { useMoesifMetricsConfig, useCreateMoesifDashboards, useMoesifDashboardEmbed } from '../api/metricsMoesif';
 import { MI_DEPLOYMENT_TOML_SNIPPET, MI_LOG4J2_SNIPPET, miFluentBitEnv, downloadMoesifMiFluentBitFiles } from '../assets/moesifMiMetrics';
 import CodeBoxWithCopy from '../components/CodeBoxWithCopy';
 import MoesifCanvas from '../components/MoesifCanvas';
+import { runtimeOptionLabel } from '../utils/moesifRuntimeOptions';
 import EmptyListing from '../components/EmptyListing';
 import NotFound from '../components/NotFound';
 import { resourceUrl, broaden, hasComponent } from '../nav';
@@ -44,6 +45,10 @@ const MOESIF_SETUP_GUIDE = 'https://wso2.com/integration-platform/docs/manage/ic
 // use the general ICP observability setup guide.
 const OPENSEARCH_SETUP_GUIDE_DEFAULT = 'https://wso2.com/integration-platform/docs/manage/icp/observability-setup';
 const OPENSEARCH_SETUP_GUIDE_MI = 'https://mi.docs.wso2.com/en/latest/install-and-setup/install/adding-observability-for-icp/';
+
+// WSO2 MI Moesif metrics setup guide, linked from the MI runtime instructions
+// for further guidance (the MI flow enables analytics + a Fluent Bit sidecar).
+const MI_MOESIF_METRICS_GUIDE = 'https://mi.docs.wso2.com/en/latest/observe-and-manage/classic-observability-metrics/moesif-metrics/setup/';
 
 // Build the metrics-only Config.toml snippet for publishing metrics to Moesif.
 // Based on https://ballerina.io/learn/supported-observability-tools-and-platforms/moesif/
@@ -101,7 +106,7 @@ function MoesifBiRuntimeInstructions({ applicationId }: { applicationId: string 
       <CodeBoxWithCopy code={MOESIF_MAIN_BAL_IMPORT} />
 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1, mt: 2 }}>
-        Add the metrics configuration to <strong>Config.toml</strong>:
+        Add the metrics configuration to <strong>Config.toml</strong>, replacing <strong>&lt;MOESIF_COLLECTOR_APPLICATION_ID&gt;</strong> with the <strong>Collector Application ID</strong> from Step 01 before running the runtime:
       </Typography>
       <CodeBoxWithCopy code={moesifConfigToml(applicationId)} />
     </>
@@ -149,6 +154,14 @@ function MoesifMiRuntimeInstructions({ applicationId }: { applicationId: string 
         The generated <strong>.env</strong> looks like this:
       </Typography>
       <CodeBoxWithCopy code={miFluentBitEnv(applicationId)} />
+
+      <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+        For further guidance, refer the{' '}
+        <a href={MI_MOESIF_METRICS_GUIDE} target="_blank" rel="noreferrer">
+          WSO2 MI Moesif metrics documentation
+        </a>
+        .
+      </Typography>
     </>
   );
 }
@@ -170,21 +183,7 @@ function MoesifMiRuntimeInstructions({ applicationId }: { applicationId: string 
 // When `isEdit` is set the card is in update mode for an already-linked
 // dashboard: the user supplies a new Management API Key to re-link (overwriting
 // the stored value). An optional Cancel action returns to the metrics view.
-function MoesifDashboardCard({
-  onCreate,
-  creating,
-  error,
-  isEdit,
-  isMI,
-  onCancel,
-}: {
-  onCreate: (managementApiKey: string) => void;
-  creating: boolean;
-  error: unknown;
-  isEdit?: boolean;
-  isMI?: boolean;
-  onCancel?: () => void;
-}): JSX.Element {
+function MoesifDashboardCard({ onCreate, creating, error, isEdit, isMI, onCancel }: { onCreate: (managementApiKey: string) => void; creating: boolean; error: unknown; isEdit?: boolean; isMI?: boolean; onCancel?: () => void }): JSX.Element {
   const [managementApiKey, setManagementApiKey] = useState('');
 
   // The Collector Application ID is derived on the backend from the Management
@@ -208,7 +207,8 @@ function MoesifDashboardCard({
           Using{' '}
           <a href="https://www.moesif.com/wrap/basic" target="_blank" rel="noreferrer">
             Moesif Basic
-          </a>, create one application per ICP environment you want to track and copy its <strong>Collector Application ID</strong>.
+          </a>
+          , create one application per ICP environment you want to track and copy its <strong>Collector Application ID</strong>.
         </Typography>
       </MoesifStep>
 
@@ -220,20 +220,11 @@ function MoesifDashboardCard({
       {/* Step 3: link the canvas with a Management API Key. */}
       <MoesifStep title="Step 03: Load the dashboard">
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Once metrics are flowing to Moesif, create a <strong>Management API Key</strong> with the <strong>access_tokens: create</strong> and <strong>events: read</strong> scopes, then paste it below to load the metrics dashboard. The Organization ID, Application ID and a short-lived canvas token are derived from it. Treated as a secret; never stored in the browser.
+          Once metrics are flowing to Moesif, create a <strong>Management API Key</strong> with the <strong>access_tokens: create</strong> and <strong>events: read</strong> scopes, then paste it below to load the metrics dashboard. The Organization ID,
+          Application ID and a short-lived canvas token are derived from it. Treated as a secret; never stored in the browser.
         </Typography>
 
-        <TextField
-          label="Management API Key"
-          placeholder="Paste your Moesif Management API Key"
-          value={managementApiKey}
-          onChange={(e) => setManagementApiKey(e.target.value)}
-          type="password"
-          fullWidth
-          size="small"
-          sx={{ mb: 2 }}
-          autoComplete="off"
-        />
+        <TextField label="Management API Key" placeholder="Paste your Moesif Management API Key" value={managementApiKey} onChange={(e) => setManagementApiKey(e.target.value)} type="password" fullWidth size="small" sx={{ mb: 2 }} autoComplete="off" />
 
         {!!error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -268,7 +259,18 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
   // MoesifInstructionsContent).
   const moesifComponents = components.filter((component) => component.componentType === 'BI' || component.componentType === 'MI');
 
-  const [integrationFilter, setIntegrationFilter] = useState('all');
+  // The technologies present among the project's Moesif-capable integrations, in
+  // a stable order. BI and MI publish different metrics and therefore have
+  // separate canvas templates, so an "all integrations" view can only aggregate
+  // integrations of one technology at a time.
+  const technologies = useMemo(() => ['BI', 'MI'].filter((technology) => moesifComponents.some((component) => component.componentType === technology)), [moesifComponents]);
+
+  // Project-scope integration selection. `all:BI` / `all:MI` aggregate every
+  // integration of that technology (the canvas is then filtered by the runtime
+  // ids of all of them); any other value is a single integration's id. Empty
+  // until the user picks, so the default below can follow the technologies that
+  // are actually present.
+  const [integrationFilter, setIntegrationFilter] = useState('');
   // A Moesif application maps to a specific environment of an integration, so
   // the Moesif configuration is stored per (integration, environment). The
   // environment selector picks which environment's config is viewed/linked;
@@ -281,34 +283,76 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
 
   const componentId = isComponent ? (singleComponent?.id ?? '') : '';
 
+  // Default to aggregating the first technology present, so project scope opens
+  // on data like the OpenSearch views' "All Integrations" default instead of on
+  // an integration picker. A stale or unsupported selection falls back to it.
+  const defaultIntegrationFilter = technologies.length > 0 ? `all:${technologies[0]}` : '';
+  const filterIsKnown = integrationFilter.startsWith('all:') ? technologies.includes(integrationFilter.slice(4)) : moesifComponents.some((component) => component.id === integrationFilter);
+  const effectiveIntegrationFilter = filterIsKnown ? integrationFilter : defaultIntegrationFilter;
+
+  // The technology being aggregated at project scope ('' when a single
+  // integration is selected or at component scope).
+  const aggregateTechnology = !isComponent && effectiveIntegrationFilter.startsWith('all:') ? effectiveIntegrationFilter.slice(4) : '';
+  const isAggregate = aggregateTechnology !== '';
+
   // The integration (project + component combo) whose Moesif configuration is
   // being viewed/configured. Component scope targets the single component;
   // project scope targets a Moesif-capable integration chosen via the filter.
   // Re-check the selected ID against the filtered list so a stale or manually
   // supplied unsupported value can never be used for Moesif requests.
-  const selectedProjectComponentId = moesifComponents.some((component) => component.id === integrationFilter) ? integrationFilter : '';
-  const targetComponentId = isComponent ? componentId : selectedProjectComponentId;
+  const selectedProjectComponentId = moesifComponents.some((component) => component.id === effectiveIntegrationFilter) ? effectiveIntegrationFilter : '';
+
+  // In aggregate mode there is no single target integration, but the config,
+  // embed and link resolvers all take an integration id to authorize the request
+  // against. The stored Moesif credentials are keyed by environment and shared by
+  // every integration in it, so any integration of the aggregated technology
+  // resolves the same canvas: the first one stands in for the group.
+  const aggregateComponentId = isAggregate ? (moesifComponents.find((component) => component.componentType === aggregateTechnology)?.id ?? '') : '';
+  const targetComponentId = isComponent ? componentId : selectedProjectComponentId || aggregateComponentId;
 
   // A Moesif application maps to a specific environment, but an integration is
   // only deployed to (has runtimes in) a subset of the project's environments.
   // It is misleading to offer environments where the integration has no runtime
   // publishing data to Moesif, so the environment selector is filtered to only
-  // the environments where this integration actually has runtimes.
+  // the environments that have runtimes: this integration's runtimes when one is
+  // targeted, or any project runtime of the aggregated technology otherwise.
   const environmentIds = useMemo(() => environments.map((e) => e.id), [environments]);
-  const { envsWithRuntimes, isLoading: loadingRuntimesByEnv } = useComponentRuntimesByEnvironments(projectId, targetComponentId, environmentIds, !!targetComponentId);
-  const availableEnvironments = environments.filter((e) => envsWithRuntimes.has(e.id));
+  const {
+    envsWithRuntimes,
+    isLoading: loadingComponentRuntimesByEnv,
+    isError: componentRuntimesByEnvError,
+    refetch: refetchComponentRuntimesByEnv,
+  } = useComponentRuntimesByEnvironments(projectId, targetComponentId, environmentIds, !isAggregate && !!targetComponentId);
+  const { runtimesByEnv: projectRuntimesByEnv, isLoading: loadingProjectRuntimesByEnv, isError: projectRuntimesByEnvError, refetch: refetchProjectRuntimesByEnv } = useProjectRuntimesByEnvironments(projectId, environmentIds, isAggregate);
+
+  // The aggregated runtimes per environment: every project runtime whose
+  // technology matches the canvas template being rendered.
+  const aggregateRuntimesByEnv = useMemo(() => {
+    if (!isAggregate) return {} as Record<string, GqlRuntime[]>;
+    const byEnv: Record<string, GqlRuntime[]> = {};
+    for (const [envId, envRuntimes] of Object.entries(projectRuntimesByEnv)) {
+      byEnv[envId] = envRuntimes.filter((runtime) => runtime.runtimeType === aggregateTechnology);
+    }
+    return byEnv;
+  }, [isAggregate, projectRuntimesByEnv, aggregateTechnology]);
+
+  const loadingRuntimesByEnv = isAggregate ? loadingProjectRuntimesByEnv : loadingComponentRuntimesByEnv;
+  const runtimesByEnvError = isAggregate ? projectRuntimesByEnvError : componentRuntimesByEnvError;
+  const refetchRuntimesByEnv = isAggregate ? refetchProjectRuntimesByEnv : refetchComponentRuntimesByEnv;
+  const availableEnvironments = environments.filter((e) => (isAggregate ? (aggregateRuntimesByEnv[e.id]?.length ?? 0) > 0 : envsWithRuntimes.has(e.id)));
 
   // Default to the first environment that has runtimes; ignore a stale/explicit
   // selection that no longer has runtimes so we never load config/dashboards for
   // an environment the integration isn't deployed to.
   const effectiveEnvId = (envFilter && availableEnvironments.some((e) => e.id === envFilter) ? envFilter : availableEnvironments[0]?.id) || '';
 
-  // The technology of the targeted integration drives which runtime setup
-  // instructions are shown (MI uses the Fluent Bit sidecar flow; BI uses the
-  // built-in reporter). Resolved from the single component at component scope, or
-  // the selected integration at project scope.
+  // The technology in view drives which canvas template is rendered and which
+  // runtime setup instructions are shown (MI uses the Fluent Bit sidecar flow; BI
+  // uses the built-in reporter). Resolved from the single component at component
+  // scope, and from the selected integration or aggregated technology at project
+  // scope.
   const targetComponent = isComponent ? singleComponent : moesifComponents.find((component) => component.id === targetComponentId);
-  const isMI = targetComponent?.componentType === 'MI';
+  const isMI = isAggregate ? aggregateTechnology === 'MI' : targetComponent?.componentType === 'MI';
 
   // Whether this integration's Moesif metrics dashboard has been created/linked.
   // This single flag comes from the backend and drives the setup vs. dashboard
@@ -321,15 +365,19 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
   // build the iframe embed URL. The hook refetches before the token expires.
   const { data: embed, isLoading: loadingEmbed, isFetching: fetchingEmbed, error: embedError, refetch: refetchEmbed } = useMoesifDashboardEmbed(targetComponentId || undefined, effectiveEnvId || undefined, dashboardsCreated);
 
-  // The canvas is scoped to this integration's runtimes: their ids are passed to
-  // the canvas as the `runtimeId` context filter (see MoesifCanvas CANVAS_INIT)
-  // so charts only show metrics tagged with these runtimes. Fetched only once the
-  // dashboard is linked and an integration + environment are selected.
-  const { data: runtimes = [] } = useComponentRuntimes(effectiveEnvId, projectId, targetComponentId, dashboardsCreated);
+  // The canvas is scoped to the runtimes in view: their ids are passed to the
+  // canvas as the `runtimeId` context filter (see MoesifCanvas CANVAS_INIT) so
+  // charts only show metrics tagged with these runtimes. Fetched only once the
+  // dashboard is linked and an integration + environment are selected; in
+  // aggregate mode the runtimes already come from the per-environment project
+  // queries, so no extra request is made.
+  const { data: runtimes = [] } = useComponentRuntimes(effectiveEnvId, projectId, targetComponentId, dashboardsCreated && !isAggregate);
   // Runtime filter options for the canvas' `runtimeId` context filter: `value` is
-  // the actual runtime id (matched against the metric tag) and `label` is the
-  // user-facing runtime name (falling back to the id when unnamed).
-  const runtimeOptions = useMemo(() => runtimes.map((r) => ({ label: r.runtimeName ?? r.runtimeId, value: r.runtimeId })), [runtimes]);
+  // the actual runtime id (matched against the metric tag) and `label` names the
+  // owning integration alongside the runtime — "integration1 (runtime1)" — in
+  // both scopes, so a runtime reads the same whether the list covers one
+  // integration or every integration of the aggregated technology.
+  const runtimeOptions = useMemo(() => (isAggregate ? (aggregateRuntimesByEnv[effectiveEnvId] ?? []) : runtimes).map((r) => ({ label: runtimeOptionLabel(r), value: r.runtimeId })), [isAggregate, aggregateRuntimesByEnv, effectiveEnvId, runtimes]);
 
   const header = (
     <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
@@ -365,6 +413,26 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
       </Select>
     ) : null;
 
+  // Project-scope integration selector. Like the OpenSearch metrics view it opens
+  // on all integrations rather than forcing a choice; the aggregate entries come
+  // first, one per technology present (BI and MI have separate canvas templates,
+  // so they cannot be shown together), followed by the individual integrations.
+  const integrationSelector =
+    !isComponent && moesifComponents.length > 0 ? (
+      <Select value={effectiveIntegrationFilter} onChange={(e) => setIntegrationFilter(e.target.value as string)} size="small" sx={{ minWidth: 200 }} inputProps={{ 'aria-label': 'Integration' }}>
+        {technologies.map((technology) => (
+          <MenuItem key={technology} value={`all:${technology}`}>
+            {technologies.length > 1 ? `All ${technology} Integrations` : 'All Integrations'}
+          </MenuItem>
+        ))}
+        {moesifComponents.map((c) => (
+          <MenuItem key={c.id} value={c.id}>
+            {c.displayName}
+          </MenuItem>
+        ))}
+      </Select>
+    ) : null;
+
   // Early returns
   const loadingContext = isComponent ? loadingComponent : loadingComponents;
   if (loadingProject || loadingContext || loadingEnvironments) {
@@ -389,34 +457,13 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
     );
   }
 
-  // Project scope: an integration must be selected before we can check or set
-  // its Moesif configuration (config is stored per project + integration combo).
+  // Project scope with nothing Moesif can report on: no integration selection
+  // (or aggregate view) is possible until a BI/MI integration exists.
   if (!isComponent && !targetComponentId) {
     return (
       <PageContent>
         {header}
-        <Card variant="outlined" sx={{ maxWidth: 720, mx: 'auto', mt: 2 }}>
-          <CardContent>
-            <Typography variant="h6" sx={{ mb: 1 }}>
-              Select an integration
-            </Typography>
-            <Typography color="text.secondary" sx={{ mb: 2 }}>
-              Moesif metrics are configured per integration. Select an integration to configure or view its metrics.
-            </Typography>
-            {moesifComponents.length > 0 ? (
-              <Select value={integrationFilter} onChange={(e) => setIntegrationFilter(e.target.value as string)} size="small" sx={{ minWidth: 240 }} inputProps={{ 'aria-label': 'Integration' }}>
-                <MenuItem value="all">Select an integration…</MenuItem>
-                {moesifComponents.map((c) => (
-                  <MenuItem key={c.id} value={c.id}>
-                    {c.displayName}
-                  </MenuItem>
-                ))}
-              </Select>
-            ) : (
-              <EmptyListing icon={<BarChart3 size={48} />} title="No integrations" description="Create a BI or MI integration to configure Moesif metrics." />
-            )}
-          </CardContent>
-        </Card>
+        <EmptyListing icon={<BarChart3 size={48} />} title="No integrations" description="Create a BI or MI integration to configure Moesif metrics." />
       </PageContent>
     );
   }
@@ -432,27 +479,52 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
     );
   }
 
-  // The integration has no runtimes in any environment: there is nothing
-  // publishing metrics to Moesif, so we don't offer any environment or load a
-  // dashboard. Keep the integration selector (project scope) so another
-  // integration can be chosen.
+  // A per-environment runtimes request failed. We can't tell whether the
+  // integration has runtimes, so surface the error with a retry rather than
+  // falling through to the "No runtimes" empty state (which would mask the
+  // failure and offer no way to recover).
+  if (runtimesByEnvError) {
+    return (
+      <PageContent>
+        {header}
+        <Stack alignItems="center" gap={2} sx={{ py: 6 }}>
+          <Alert
+            severity="error"
+            sx={{ width: '100%', maxWidth: 720 }}
+            action={
+              <Button color="inherit" size="small" onClick={() => refetchRuntimesByEnv()} disabled={loadingRuntimesByEnv}>
+                Retry
+              </Button>
+            }>
+            Failed to check which environments have runtimes for this integration.
+          </Alert>
+        </Stack>
+      </PageContent>
+    );
+  }
+
+  // Nothing in view has runtimes in any environment: there is nothing publishing
+  // metrics to Moesif, so we don't offer any environment or load a dashboard.
+  // Keep the integration selector (project scope) so another integration or
+  // technology can be chosen.
   if (availableEnvironments.length === 0) {
     return (
       <PageContent>
         {header}
-        {!isComponent && moesifComponents.length > 0 && (
+        {integrationSelector && (
           <Stack direction="row" gap={2} sx={{ mb: 3 }} flexWrap="wrap" alignItems="center">
-            <Select value={integrationFilter} onChange={(e) => setIntegrationFilter(e.target.value as string)} size="small" sx={{ minWidth: 160 }} inputProps={{ 'aria-label': 'Integration' }}>
-              <MenuItem value="all">Select an integration…</MenuItem>
-              {moesifComponents.map((c) => (
-                <MenuItem key={c.id} value={c.id}>
-                  {c.displayName}
-                </MenuItem>
-              ))}
-            </Select>
+            {integrationSelector}
           </Stack>
         )}
-        <EmptyListing icon={<BarChart3 size={48} />} title="No runtimes" description="This integration has no runtimes in any environment. Deploy the integration to a runtime to view its Moesif metrics." />
+        <EmptyListing
+          icon={<BarChart3 size={48} />}
+          title="No runtimes"
+          description={
+            isAggregate
+              ? `No ${aggregateTechnology} integration in this project has runtimes in any environment. Deploy an integration to a runtime to view its Moesif metrics.`
+              : 'This integration has no runtimes in any environment. Deploy the integration to a runtime to view its Moesif metrics.'
+          }
+        />
       </PageContent>
     );
   }
@@ -482,6 +554,13 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
           </Stack>
         )}
         {header}
+        {/* Keep the integration/technology selector available during setup: the
+            runtime instructions below are technology-specific (BI vs MI). */}
+        {integrationSelector && (
+          <Stack direction="row" gap={2} sx={{ mb: 3 }} flexWrap="wrap" alignItems="center">
+            {integrationSelector}
+          </Stack>
+        )}
         {/* Neither backend configured for this integration (no OpenSearch and no
             linked Moesif dashboard): explain that observability must be set up
             with either provider before the metrics view is available. */}
@@ -505,12 +584,7 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
           </a>{' '}
           for details.
         </Typography>
-        <MoesifDashboardCard
-          isMI={isMI}
-          creating={createDashboards.isPending}
-          error={createDashboards.error}
-          onCreate={(managementApiKey) => createDashboards.mutate({ componentId: targetComponentId, environmentId: effectiveEnvId, managementApiKey })}
-        />
+        <MoesifDashboardCard isMI={isMI} creating={createDashboards.isPending} error={createDashboards.error} onCreate={(managementApiKey) => createDashboards.mutate({ componentId: targetComponentId, environmentId: effectiveEnvId, managementApiKey })} />
 
         {/* Nothing configured yet (no OpenSearch backend and no Moesif dashboard
             linked): offer OpenSearch as an alternative. The setup guide depends
@@ -567,16 +641,9 @@ export default function MetricsMoesif({ scope, backendSelector, opensearchConfig
       )}
       {header}
 
-      {!isComponent && moesifComponents.length > 0 && (
+      {integrationSelector && (
         <Stack direction="row" gap={2} sx={{ mb: 3 }} flexWrap="wrap" alignItems="center">
-          <Select value={integrationFilter} onChange={(e) => setIntegrationFilter(e.target.value as string)} size="small" sx={{ minWidth: 160 }} inputProps={{ 'aria-label': 'Integration' }}>
-            <MenuItem value="all">Select an integration…</MenuItem>
-            {moesifComponents.map((c) => (
-              <MenuItem key={c.id} value={c.id}>
-                {c.displayName}
-              </MenuItem>
-            ))}
-          </Select>
+          {integrationSelector}
           <Button variant="outlined" size="small" sx={{ ml: 'auto' }} onClick={() => setEditingDashboard(true)}>
             Edit dashboard credentials
           </Button>

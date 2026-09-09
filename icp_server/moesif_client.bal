@@ -49,17 +49,21 @@ final string effectiveMoesifManagementBaseUrl = moesifIsDev ? moesifDevManagemen
 
 // ── Canvas embed configuration ────────────────────────────────────────────
 // The canvas embed uses a postMessage handshake instead of a URL-fragment
-// token: the frontend loads `/wrap/app/<orgId>-<appId>/canvas#auth=post` and
-// posts the auth token to the iframe over postMessage (SET_TOKEN). The
-// per-integration org id and app id are derived from the Management API key the
-// user supplies during setup (stored in the database). The canvas auth token is
-// no longer supplied by the user: it is minted on demand from the stored
-// Management API key as a short-lived, restricted token (see
-// `mintMoesifCanvasToken`).
+// token: the frontend loads `/embed/canvas#auth=post` and posts the auth token
+// to the iframe over postMessage (SET_TOKEN). The canvas resolves the
+// organization + application from the `org`/`app` claims of that token, so the
+// ids are not part of the URL. `/embed/canvas` is Moesif's API-key canvas route:
+// it accepts tokens minted from a Management API key and does not restrict the
+// embedding page's origin. The portal route (`/wrap/app/<org>-<app>/canvas`)
+// must NOT be used: it only answers parent origins on Moesif's build-time
+// allowlist and rejects Management-API-key-derived tokens, so the handshake
+// silently never completes. The canvas auth token is not supplied by the user:
+// it is minted on demand from the stored Management API key as a short-lived,
+// restricted token (see `mintMoesifCanvasToken`).
 
 // Host for the embedded canvas viewer, selected by `moesifIsDev` (production vs
 // Moesif dev). The iframe src is
-// `${effectiveMoesifCanvasEmbedBaseUrl}/wrap/app/${orgId}-${appId}/canvas#auth=post`.
+// `${effectiveMoesifCanvasEmbedBaseUrl}/embed/canvas#auth=post`.
 final string effectiveMoesifCanvasEmbedBaseUrl = moesifIsDev ? "https://web-dev.moesif.com" : "https://www.moesif.com";
 
 // Request timeout (seconds) for Moesif Management API calls.
@@ -187,34 +191,28 @@ public isolated function mintMoesifCanvasToken(string managementApiKey) returns 
     string encodedTarget = check url:encode(MOESIF_CANVAS_TOKEN_TARGET, "UTF-8");
     string path = string `/~/oauth/access_tokens?target=${encodedTarget}&scope=${encodedScope}&expiration=${encodedExpiration}`;
 
-    // DEBUG: log the request context. The Management API key is a secret, so only
-    // its length + a short prefix are logged (never the full key).
-    string keyPreview = trimmedKey.length() > 6 ? trimmedKey.substring(0, 6) : trimmedKey;
-    log:printInfo("Minting Moesif canvas token",
+    // Log only non-sensitive request context. The Management API key, its prefix,
+    // and the full URL (which carries query parameters) are secrets/PII and must
+    // never be logged. Kept at DEBUG so it is off by default.
+    log:printDebug("Minting Moesif canvas token",
             baseUrl = effectiveMoesifManagementBaseUrl,
-            fullUrl = string `${effectiveMoesifManagementBaseUrl}${path}`,
-            path = path,
             target = MOESIF_CANVAS_TOKEN_TARGET,
             scope = MOESIF_CANVAS_TOKEN_SCOPE,
-            expiration = expiration,
-            keyLength = trimmedKey.length(),
-            keyPrefix = keyPreview);
+            expiration = expiration);
 
     map<string|string[]> headers = {"Authorization": string `Bearer ${trimmedKey}`};
     http:Response response = check moesifClient->get(path, headers);
     int status = response.statusCode;
 
-    // DEBUG: always log the status + raw body so a non-2xx (e.g. 404) or an
-    // unexpected 2xx payload shape can be diagnosed from the logs.
+    // The success response body carries the minted canvas token (a bearer
+    // credential), so it must never be logged or echoed to callers. Read it for
+    // parsing only, and surface just the status code on failure.
     string|error rawBody = response.getTextPayload();
     string rawBodyStr = rawBody is string ? rawBody : "<no response body>";
-    log:printInfo("Moesif canvas token response", status = status, body = rawBodyStr);
 
     if status < 200 || status >= 300 {
-        log:printError("Moesif canvas token minting failed",
-                status = status, body = rawBodyStr,
-                fullUrl = string `${effectiveMoesifManagementBaseUrl}${path}`);
-        return error(string `Moesif API request to mint a canvas token failed with status ${status}: ${rawBodyStr}`);
+        log:printError("Moesif canvas token minting failed", status = status);
+        return error(string `Moesif API request to mint a canvas token failed with status ${status}`);
     }
 
     // The response body was already consumed above via getTextPayload(), so parse
@@ -222,8 +220,7 @@ public isolated function mintMoesifCanvasToken(string managementApiKey) returns 
     json payload = check rawBodyStr.fromJsonString();
     string|error minted = extractMintedToken(payload);
     if minted is error {
-        log:printError("Moesif canvas token response had no usable token",
-                body = rawBodyStr, 'error = minted);
+        log:printError("Moesif canvas token response had no usable token", 'error = minted);
     }
     return minted;
 }
@@ -248,22 +245,16 @@ isolated function extractMintedToken(json payload) returns string|error {
     return error("Moesif OAuth response did not contain a canvas token");
 }
 
-// Builds the canvas embed descriptor for the given org + app: the iframe src the
-// frontend loads and the auth token it delivers to the canvas over postMessage
-// (SET_TOKEN). The `#auth=post` fragment tells the canvas to expect its token
-// over postMessage. The token is minted on demand from the integration's stored
-// Management API key as a short-lived, restricted token (see
-// `mintMoesifCanvasToken`). Returns an error when the org/app/management key are
+// Builds the canvas embed descriptor: the iframe src the frontend loads and the
+// auth token it delivers to the canvas over postMessage (SET_TOKEN). The
+// `#auth=post` fragment tells the canvas to expect its token over postMessage.
+// The organization and application are not part of the URL: the canvas derives
+// them from the `org`/`app` claims of the token, which is minted on demand from
+// the integration's stored Management API key as a short-lived, restricted token
+// (see `mintMoesifCanvasToken`). Returns an error when the management key is
 // unset or the token cannot be minted.
-public isolated function buildMoesifCanvasEmbed(string orgId, string appId, string managementApiKey) returns types:MoesifDashboardEmbed|error {
-    string trimmedOrgId = orgId.trim();
-    string trimmedAppId = appId.trim();
-    if trimmedOrgId.length() == 0 || trimmedAppId.length() == 0 {
-        return error("Moesif canvas embed requires both an organization id and an application id");
-    }
+public isolated function buildMoesifCanvasEmbed(string managementApiKey) returns types:MoesifDashboardEmbed|error {
     string token = check mintMoesifCanvasToken(managementApiKey);
-    string encodedOrgId = check url:encode(trimmedOrgId, "UTF-8");
-    string encodedAppId = check url:encode(trimmedAppId, "UTF-8");
     string embedUrl = string `${effectiveMoesifCanvasEmbedBaseUrl}/embed/canvas#auth=post`;
     return {embedUrl, token};
 }

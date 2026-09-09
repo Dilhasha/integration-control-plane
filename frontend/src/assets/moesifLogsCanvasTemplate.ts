@@ -23,7 +23,10 @@ import biLogsCanvas from './moesifBiLogsCanvas.json';
 // Moesif account to persist the log charts), this canvas template is posted to
 // the embedded Moesif canvas via the CANVAS_INIT postMessage during the handshake
 // so the iframe renders the logs without the user having to open Moesif. The
-// payload carries the `dashboards` + `workspaces` definitions the canvas renders.
+// payload carries the `dashboards` + `workspaces` definitions the canvas renders,
+// including the `runtimeId` context filter (on the `metadata.icp_runtimeId` log
+// attribute the Fluent Bit sidecar tags records with) whose options MoesifCanvas
+// fills in with the integration's runtimes.
 
 // Canvas template for the application logs canvas.
 export const MOESIF_LOGS_CANVAS_TEMPLATE = biLogsCanvas;

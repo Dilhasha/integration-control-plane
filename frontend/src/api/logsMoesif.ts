@@ -71,8 +71,7 @@ const CREATE_MOESIF_LOGS_DASHBOARDS_MUTATION = `
 export function useCreateMoesifLogsDashboards() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { componentId: string; environmentId: string; managementApiKey: string }) =>
-      gql<{ createMoesifLogsDashboards: MoesifLogsConfigStatus }>(CREATE_MOESIF_LOGS_DASHBOARDS_MUTATION, input).then((d) => d.createMoesifLogsDashboards),
+    mutationFn: (input: { componentId: string; environmentId: string; managementApiKey: string }) => gql<{ createMoesifLogsDashboards: MoesifLogsConfigStatus }>(CREATE_MOESIF_LOGS_DASHBOARDS_MUTATION, input).then((d) => d.createMoesifLogsDashboards),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['moesif-logs-config', variables.componentId, variables.environmentId] });
       qc.invalidateQueries({ queryKey: ['moesif-logs-embed', variables.componentId, variables.environmentId] });

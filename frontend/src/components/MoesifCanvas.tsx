@@ -49,7 +49,9 @@ const debug = (...args: unknown[]): void => {
 // CANVAS_INIT (the dashboard template + theme). The canvas reports its content
 // height via CANVAS_RESIZE, and may ask for a fresh token via REFRESH_TOKEN.
 // A single runtime the canvas can be filtered by: `value` is the actual runtime
-// id (matched against the metric tag) and `label` is the user-facing name.
+// id (matched against the metric tag / log attribute) and `label` is the
+// user-facing name, always qualified by the owning integration (see
+// runtimeOptionLabel in utils/moesifRuntimeOptions).
 export interface RuntimeOption {
   label: string;
   value: string;
@@ -150,14 +152,17 @@ export default function MoesifCanvas({
   // both the org has loaded and the canvas is ready.
   useEffect(() => {
     if (orgLoaded && canvasReady) {
-      // Scope the canvas to this integration's runtimes via the dashboard's
-      // `runtimeId` context filter (declared in the canvas template's
-      // dashboards[].filters.context). The filter is a `parentOptions` dropdown:
-      // `options` lists every runtime (user-facing `label` + actual runtime id
-      // `value`) and `value` pre-selects the first runtime. Only sent when
-      // runtimes are known so the canvas falls back to its unfiltered view
-      // otherwise.
-      const context = runtimeIds.length > 0 ? { runtimeId: { value: runtimeIds[0].value, options: runtimeIds.map((r) => ({ label: r.label, value: r.value })) } } : {};
+      // Scope the canvas to the runtimes in view via the dashboard's `runtimeId`
+      // context filter (declared in the canvas template's
+      // dashboards[].filters.context). The filter is a multi-select
+      // `parentOptions` dropdown: `options` lists every runtime (user-facing
+      // `label` + actual runtime id `value`) and `value` carries the
+      // pre-selection. Every runtime is pre-selected so the canvas opens on all
+      // the data in scope (matching the OpenSearch views, which default to all
+      // integrations) rather than on one arbitrary runtime; narrowing is then
+      // done in the dropdown. Only sent when runtimes are known so the canvas
+      // falls back to its unfiltered view otherwise.
+      const context = runtimeIds.length > 0 ? { runtimeId: { value: runtimeIds.map((r) => r.value), options: runtimeIds.map((r) => ({ label: r.label, value: r.value })) } } : {};
       if (import.meta.env.DEV) {
         console.log('[MoesifCanvas] CANVAS_INIT context', { runtimeIds, runtimeIdsKey, context });
       }
