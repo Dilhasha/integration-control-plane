@@ -118,17 +118,7 @@ public isolated function stripBearerPrefix(string apiKey) returns string {
 // Returns an error when the key is not a decodable JWT or lacks a usable `org`
 // claim.
 public isolated function decodeMoesifOrgId(string managementApiKey) returns string|error {
-    string token = stripBearerPrefix(managementApiKey);
-    [jwt:Header, jwt:Payload]|jwt:Error decoded = jwt:decode(token);
-    if decoded is jwt:Error {
-        return error("Could not read the organization id from the Moesif Management API key: the key is not a valid token");
-    }
-    jwt:Payload payload = decoded[1];
-    anydata orgClaim = payload["org"];
-    if orgClaim is string && orgClaim.trim().length() > 0 {
-        return orgClaim.trim();
-    }
-    return error("The Moesif Management API key does not contain an organization id");
+    return decodeMoesifClaim(managementApiKey, "org", "organization id");
 }
 
 // Extracts the Moesif Collector Application id from a Management API key. Moesif
@@ -140,17 +130,24 @@ public isolated function decodeMoesifOrgId(string managementApiKey) returns stri
 // cryptographically validated) purely to read this claim. Returns an error when
 // the key is not a decodable JWT or lacks a usable `app` claim.
 public isolated function decodeMoesifAppId(string managementApiKey) returns string|error {
+    return decodeMoesifClaim(managementApiKey, "app", "application id");
+}
+
+// Reads a single non-empty string claim from a Moesif Management API key, shared
+// by the org/app id decoders above. `claimName` is the JWT claim to read and
+// `label` names it in the error messages surfaced to the user.
+isolated function decodeMoesifClaim(string managementApiKey, string claimName, string label) returns string|error {
     string token = stripBearerPrefix(managementApiKey);
     [jwt:Header, jwt:Payload]|jwt:Error decoded = jwt:decode(token);
     if decoded is jwt:Error {
-        return error("Could not read the application id from the Moesif Management API key: the key is not a valid token");
+        return error(string `Could not read the ${label} from the Moesif Management API key: the key is not a valid token`);
     }
     jwt:Payload payload = decoded[1];
-    anydata appClaim = payload["app"];
-    if appClaim is string && appClaim.trim().length() > 0 {
-        return appClaim.trim();
+    anydata claim = payload[claimName];
+    if claim is string && claim.trim().length() > 0 {
+        return claim.trim();
     }
-    return error("The Moesif Management API key does not contain an application id");
+    return error(string `The Moesif Management API key does not contain an ${label}`);
 }
 
 // Lists the Moesif applications the given Management API key can access, so the
@@ -259,9 +256,10 @@ public isolated function buildMoesifCanvasEmbed(string managementApiKey) returns
     return {embedUrl, token};
 }
 
-// GETs from the Moesif Management API, surfacing status + response body on a
-// non-2xx status so callers see exactly why a request failed (e.g. an invalid
-// token or a missing scope) instead of just the bare HTTP status reason.
+// GETs from the Moesif Management API, surfacing the resource and the HTTP status
+// on a non-2xx response so callers know which request failed. The response body
+// may echo back credentials or other upstream detail, so it is logged at DEBUG for
+// diagnostics and kept out of the returned (client-visible) error message.
 isolated function getFromMoesif(http:Client moesifClient, string path,
         map<string|string[]> headers, string resourceLabel) returns json|error {
     http:Response response = check moesifClient->get(path, headers);
@@ -269,7 +267,8 @@ isolated function getFromMoesif(http:Client moesifClient, string path,
     if status < 200 || status >= 300 {
         string|error textBody = response.getTextPayload();
         string detail = textBody is string ? textBody : "<no response body>";
-        return error(string `Moesif API request to list ${resourceLabel} failed with status ${status}: ${detail}`);
+        log:printDebug(string `Moesif API request to list ${resourceLabel} failed with status ${status}: ${detail}`);
+        return error(string `Moesif API request to list ${resourceLabel} failed with status ${status}`);
     }
     return response.getJsonPayload();
 }

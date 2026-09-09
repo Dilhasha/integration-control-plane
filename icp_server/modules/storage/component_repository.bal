@@ -448,6 +448,47 @@ public isolated function getEnvironmentMoesifManagementKey(string environmentId)
 }
 
 
+// The Moesif organization + Collector Application ids stored for an environment.
+// Both metrics and logs share the one application per environment, so a setup
+// flow must never repoint one feature at a different application while the other
+// stays configured against the old one.
+type EnvironmentMoesifApplication record {|
+    string? canvas_org_id;
+    string? canvas_app_id;
+|};
+
+// Guards the shared Moesif application identifiers for an environment. The
+// metrics canvas and the logs canvas are configured through separate flows but
+// resolve against the same Moesif organization + application (and the same
+// Management API key), so configuring one feature with a key issued for a
+// different application would leave the other feature pointing at credentials
+// that no longer match. Rejects such an update; the environment must be
+// reconfigured from scratch to move to another Moesif application. Returns () when
+// no identifiers are stored yet or when they match the incoming ones.
+isolated function assertMoesifApplicationMatches(string environmentId, string orgId, string appId) returns error? {
+    sql:ParameterizedQuery selectQuery =
+        `SELECT canvas_org_id, canvas_app_id FROM environment_moesif_config WHERE environment_id = ${environmentId}`;
+    EnvironmentMoesifApplication|sql:Error existing = dbClient->queryRow(selectQuery);
+    if existing is sql:NoRowsError {
+        return ();
+    }
+    if existing is sql:Error {
+        return existing;
+    }
+    string storedOrgId = (existing.canvas_org_id ?: "").trim();
+    string storedAppId = (existing.canvas_app_id ?: "").trim();
+    if storedOrgId.length() == 0 && storedAppId.length() == 0 {
+        return ();
+    }
+    if storedOrgId == orgId.trim() && storedAppId == appId.trim() {
+        return ();
+    }
+    return error(string `This environment is already configured with a different Moesif application `
+        + string `(organization '${storedOrgId}', application '${storedAppId}'). Moesif metrics and logs `
+        + string `share one application per environment, so use a Management API key issued for that `
+        + string `application, or reset the environment's Moesif configuration before switching.`);
+}
+
 // Persist the Moesif canvas embed details for an environment after the metrics
 // dashboards are linked: the Moesif organization id + application id (used to
 // build the canvas iframe src) and the Management API key (kept so the app list
@@ -459,6 +500,9 @@ public isolated function getEnvironmentMoesifManagementKey(string environmentId)
 // environment_moesif_config keyed by environment_id. Returns the number of affected rows.
 public isolated function updateComponentMoesifDashboardDetails(string environmentId, string orgId, string appId,
         string managementKey) returns int|error {
+    // Metrics and logs share one Moesif application per environment; refuse to
+    // repoint this environment at a different one behind the other feature's back.
+    check assertMoesifApplicationMatches(environmentId, orgId, appId);
     sql:ExecutionResult result;
     if dbType == MSSQL {
         result = check dbClient->execute(`
@@ -530,6 +574,9 @@ public isolated function updateComponentMoesifDashboardDetails(string environmen
 // by environment_id. Returns the number of affected rows.
 public isolated function updateComponentMoesifLogsDetails(string environmentId, string orgId, string appId,
         string managementKey) returns int|error {
+    // Metrics and logs share one Moesif application per environment; refuse to
+    // repoint this environment at a different one behind the other feature's back.
+    check assertMoesifApplicationMatches(environmentId, orgId, appId);
     sql:ExecutionResult result;
     if dbType == MSSQL {
         result = check dbClient->execute(`

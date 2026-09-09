@@ -145,7 +145,7 @@ function MoesifMiRuntimeInstructions({ applicationId }: { applicationId: string 
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
         <br />
         Download the Fluent Bit configuration bundle and unzip it first. In the generated <strong>.env</strong> file, set <strong>MI_HOME</strong> to your MI installation path. Set the <strong>Collector Application ID</strong> to the one you obtained from
-        Moesif. Then, run <strong>`docker compose up -d`</strong> to start Fluent Bit to publish metrics to Moesif.
+        Moesif. Then, run <strong>docker compose up -d</strong> to start Fluent Bit to publish metrics to Moesif.
       </Typography>
       <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={() => downloadMoesifMiFluentBitFiles(applicationId)} sx={{ mb: 1, alignSelf: 'flex-start', py: 0.25, px: 1, fontSize: 12 }}>
         Download Fluent Bit config

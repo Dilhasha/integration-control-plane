@@ -2910,7 +2910,7 @@ service /graphql on graphqlListener {
 
         storage:logAuditEvent(storage:AUDIT_COMPONENT_UPDATE, userId = userContext.userId,
                 resourceType = storage:AUDIT_RESOURCE_COMPONENT, resourceId = componentId,
-                details = string `Moesif metrics dashboards created for component '${component.name}' by '${userContext.username}'`,
+                details = string `Moesif metrics dashboards created for component '${component.name}' for environment '${environmentId.trim()}' by '${userContext.username}'`,
                 clientIp = userContext.clientIp, userAgent = userContext.userAgent);
 
         return {dashboardsCreated: true};
@@ -2972,7 +2972,7 @@ service /graphql on graphqlListener {
 
         storage:logAuditEvent(storage:AUDIT_COMPONENT_UPDATE, userId = userContext.userId,
                 resourceType = storage:AUDIT_RESOURCE_COMPONENT, resourceId = componentId,
-                details = string `Moesif logs canvas configured for component '${component.name}' by '${userContext.username}'`,
+                details = string `Moesif logs canvas configured for component '${component.name}' for environment '${environmentId.trim()}' by '${userContext.username}'`,
                 clientIp = userContext.clientIp, userAgent = userContext.userAgent);
 
         return {logsConfigured: true};

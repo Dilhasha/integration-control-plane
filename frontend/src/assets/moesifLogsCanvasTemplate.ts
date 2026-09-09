@@ -24,7 +24,7 @@ import biLogsCanvas from './moesifBiLogsCanvas.json';
 // the embedded Moesif canvas via the CANVAS_INIT postMessage during the handshake
 // so the iframe renders the logs without the user having to open Moesif. The
 // payload carries the `dashboards` + `workspaces` definitions the canvas renders,
-// including the `runtimeId` context filter (on the `metadata.icp_runtimeId` log
+// including the `runtimeId` context filter (on the `metadata.icp_runtimeid` log
 // attribute the Fluent Bit sidecar tags records with) whose options MoesifCanvas
 // fills in with the integration's runtimes.
 

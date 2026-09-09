@@ -611,7 +611,7 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
   // environments since runtimes may span several integrations.
   const runtimeCheckComponentId = hasComponent(scope) ? (singleComponent?.id ?? '') : integrationFilter !== 'all' ? integrationFilter : '';
   const environmentIds = useMemo(() => environments.map((e) => e.id), [environments]);
-  const { envsWithRuntimes, isLoading: loadingEnvRuntimes } = useComponentRuntimesByEnvironments(projectId, runtimeCheckComponentId, environmentIds, !!runtimeCheckComponentId);
+  const { envsWithRuntimes, isLoading: loadingEnvRuntimes, isError: envRuntimesError, refetch: refetchEnvRuntimes } = useComponentRuntimesByEnvironments(projectId, runtimeCheckComponentId, environmentIds, !!runtimeCheckComponentId);
   // Only narrow the environment list once the runtime lookup has resolved with a
   // result. While the lookup is pending (loadingEnvRuntimes) or if it failed
   // (envsWithRuntimes stays empty), keep all environments so we don't hide every
@@ -834,6 +834,25 @@ export default function RuntimeLogs(scope: ProjectScope | ComponentScope): JSX.E
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
         <Typography variant="h1">Runtime Logs</Typography>
       </Stack>
+
+      {/* The per-environment runtime lookup failed, so we cannot tell which
+          environments this integration is actually deployed to. The selector
+          falls back to every environment (see availableEnvironments) and logs
+          are still queried, so this is a non-blocking warning rather than the
+          blocking error the metrics view shows: the results may include
+          environments the integration has no runtimes in. */}
+      {envRuntimesError && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => refetchEnvRuntimes()} disabled={loadingEnvRuntimes}>
+              Retry
+            </Button>
+          }>
+          Could not verify which environments have runtimes for this integration. Showing all environments — logs may cover environments it isn't deployed to.
+        </Alert>
+      )}
 
       {/* Moesif state: the integration filter sits on its own row under the
           title, as on the Moesif metrics view. With the OpenSearch backend
