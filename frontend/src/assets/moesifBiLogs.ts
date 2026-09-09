@@ -16,6 +16,8 @@
  * under the License.
  */
 
+import { downloadConfigBundle } from './moesifConfigBundle';
+
 // Runtime-side configuration for publishing WSO2 Integrator: BI (Ballerina)
 // logs to Moesif. BI is configured to write its logs to a file (see the
 // [ballerina.log] Config.toml block in the logs setup view); a Fluent Bit
@@ -229,133 +231,11 @@ const BI_LOGS_FLUENT_BIT_ZIP_FOLDER = 'moesif-fluent-bit-logs';
 // Suggested filename when the user downloads the Fluent Bit config bundle.
 export const BI_LOGS_FLUENT_BIT_ZIP_FILENAME = 'moesif-fluent-bit-logs.zip';
 
-// ── Minimal ZIP writer (store / no compression) ──
-// A tiny self-contained ZIP builder so the Fluent Bit files can be delivered as
-// a single archive without pulling in a zip dependency. Uses the STORE method
-// (no compression), which keeps the implementation to a CRC32 plus the local
-// file headers, central directory and end-of-central-directory record.
-
-function crc32(bytes: Uint8Array): number {
-  let crc = ~0;
-  for (let i = 0; i < bytes.length; i++) {
-    crc ^= bytes[i];
-    for (let j = 0; j < 8; j++) {
-      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
-    }
-  }
-  return ~crc >>> 0;
-}
-
-function u16(value: number): Uint8Array {
-  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff]);
-}
-
-function u32(value: number): Uint8Array {
-  return new Uint8Array([value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff]);
-}
-
-function concatBytes(parts: Uint8Array[]): Uint8Array {
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-// Builds an uncompressed ZIP archive from a map of path -> text contents.
-function createZip(files: Record<string, string>): Blob {
-  const encoder = new TextEncoder();
-  const localParts: Uint8Array[] = [];
-  const centralParts: Uint8Array[] = [];
-  let offset = 0;
-
-  for (const [name, contents] of Object.entries(files)) {
-    const nameBytes = encoder.encode(name);
-    const data = encoder.encode(contents);
-    const crc = crc32(data);
-    const size = data.length;
-
-    const localHeader = concatBytes([
-      u32(0x04034b50), // local file header signature
-      u16(20), // version needed to extract
-      u16(0), // general purpose bit flag
-      u16(0), // compression method: 0 = store
-      u16(0), // last mod file time
-      u16(0), // last mod file date
-      u32(crc),
-      u32(size), // compressed size
-      u32(size), // uncompressed size
-      u16(nameBytes.length),
-      u16(0), // extra field length
-      nameBytes,
-      data,
-    ]);
-    localParts.push(localHeader);
-
-    centralParts.push(
-      concatBytes([
-        u32(0x02014b50), // central directory header signature
-        u16(20), // version made by
-        u16(20), // version needed to extract
-        u16(0), // general purpose bit flag
-        u16(0), // compression method
-        u16(0), // last mod file time
-        u16(0), // last mod file date
-        u32(crc),
-        u32(size), // compressed size
-        u32(size), // uncompressed size
-        u16(nameBytes.length),
-        u16(0), // extra field length
-        u16(0), // file comment length
-        u16(0), // disk number start
-        u16(0), // internal file attributes
-        u32(0), // external file attributes
-        u32(offset), // relative offset of local header
-        nameBytes,
-      ]),
-    );
-
-    offset += localHeader.length;
-  }
-
-  const centralDirectory = concatBytes(centralParts);
-  const end = concatBytes([
-    u32(0x06054b50), // end of central directory signature
-    u16(0), // number of this disk
-    u16(0), // disk where central directory starts
-    u16(centralParts.length), // number of central directory records on this disk
-    u16(centralParts.length), // total number of central directory records
-    u32(centralDirectory.length), // size of central directory
-    u32(offset), // offset of start of central directory
-    u16(0), // comment length
-  ]);
-
-  const archive = concatBytes([...localParts, centralDirectory, end]);
-  return new Blob([archive.buffer as ArrayBuffer], { type: 'application/zip' });
-}
-
 // Downloads all Fluent Bit sidecar files (including a .env with the supplied
 // Collector Application ID) as a single zip. The user unzips it, fills in the
 // .env (Collector Application ID, ICP runtime id, service name, environment, BI
 // log dir), then runs `docker compose up -d`.
 export function downloadMoesifBiLogsFluentBitFiles(applicationId: string): void {
   const entries: Record<string, string> = { ...BI_LOGS_FLUENT_BIT_FILES, '.env': biLogsFluentBitEnv(applicationId) };
-  // Nest every file under a single folder inside the archive.
-  const zipContents: Record<string, string> = {};
-  for (const [name, contents] of Object.entries(entries)) {
-    zipContents[`${BI_LOGS_FLUENT_BIT_ZIP_FOLDER}/${name}`] = contents;
-  }
-
-  const blob = createZip(zipContents);
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = BI_LOGS_FLUENT_BIT_ZIP_FILENAME;
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  URL.revokeObjectURL(url);
+  downloadConfigBundle(entries, BI_LOGS_FLUENT_BIT_ZIP_FOLDER, BI_LOGS_FLUENT_BIT_ZIP_FILENAME);
 }

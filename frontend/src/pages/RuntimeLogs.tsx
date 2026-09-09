@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Button, Checkbox, Chip, CircularProgress, Divider, FormControlLabel, IconButton, ListItemText, MenuItem, PageContent, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
+import { Alert, Button, Checkbox, Chip, CircularProgress, Divider, FormControlLabel, IconButton, ListItemText, MenuItem, PageContent, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
 import { ChevronDown, ChevronRight, Copy, Download, RefreshCw, ScrollText, X } from '@wso2/oxygen-ui-icons-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { Link } from 'react-router';
@@ -34,6 +34,7 @@ import EmptyListing from '../components/EmptyListing';
 import NotFound from '../components/NotFound';
 import SearchField from '../components/SearchField';
 import { resourceUrl, broaden, hasComponent, type ProjectScope, type ComponentScope } from '../nav';
+import { MOESIF_DESCRIPTION, MOESIF_SETUP_GUIDE, OPENSEARCH_SETUP_GUIDE_DEFAULT, OPENSEARCH_SETUP_GUIDE_MI, MoesifStep } from '../components/MoesifSetup';
 
 const LOG_LEVELS = ['INFO', 'WARN', 'ERROR', 'DEBUG'] as const;
 
@@ -52,22 +53,6 @@ const PAGE_SIZE = 500;
 
 const LEVEL_COLORS: Record<string, string> = { ERROR: '#e53935', WARN: '#f9a825', INFO: '#1e88e5', DEBUG: '#78909c' };
 
-// Short description shown when introducing Moesif on the logs setup view. The
-// leading "Moesif" is rendered in bold at the call site. Kept in sync with the
-// metrics setup wording (see MetricsMoesif).
-const MOESIF_DESCRIPTION = ' (a WSO2 company) allows you to observe your service integrations with real-time monitoring, behavioral analytics, and AI-powered insights into API adoption and usage.';
-
-// Documentation guide for setting up Moesif-backed observability, referenced
-// from the Moesif intro on the logs setup view.
-const MOESIF_SETUP_GUIDE = 'https://wso2.com/integration-platform/docs/manage/icp/observability-setup';
-
-// Documentation guides for setting up OpenSearch-backed observability, offered
-// as an alternative. The guide differs by runtime technology: MI (Micro
-// Integrator) has its own docs, while other runtimes (BI) use the general ICP
-// observability setup guide.
-const OPENSEARCH_SETUP_GUIDE_DEFAULT = 'https://wso2.com/integration-platform/docs/manage/icp/observability-setup';
-const OPENSEARCH_SETUP_GUIDE_MI = 'https://mi.docs.wso2.com/en/latest/install-and-setup/install/adding-observability-for-icp/';
-
 // WSO2 MI Moesif logs setup guide, linked from the MI logs setup instructions
 // for further guidance (the MI flow uses an OpenTelemetry Collector to ship
 // wso2carbon.log to Moesif's OTLP endpoint).
@@ -82,22 +67,6 @@ format = "json"
 [[ballerina.log.destinations]]
 # Replace /path/to/your/bi/logs with the absolute path to the BI application's log directory
 path = "/path/to/your/bi/logs/app.log"`;
-
-// A collapsible step section. Each main step from the observability user story is
-// rendered as an accordion so the setup flow stays compact; the first step is
-// expanded by default.
-function MoesifStep({ title, defaultExpanded, children }: { title: string; defaultExpanded?: boolean; children: React.ReactNode }): JSX.Element {
-  return (
-    <Accordion defaultExpanded={defaultExpanded} disableGutters sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1.5, '&:before': { display: 'none' } }}>
-      <AccordionSummary expandIcon={<ChevronDown size={18} />} sx={{ bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-          {title}
-        </Typography>
-      </AccordionSummary>
-      <AccordionDetails sx={{ pt: 2 }}>{children}</AccordionDetails>
-    </Accordion>
-  );
-}
 
 // BI (Ballerina) "publish logs" instructions: write JSON logs to a file via
 // Config.toml, then run the Fluent Bit sidecar that tails that file and ships

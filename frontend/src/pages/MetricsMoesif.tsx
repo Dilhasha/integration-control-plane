@@ -15,8 +15,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { Accordion, AccordionDetails, AccordionSummary, Alert, Button, CircularProgress, Divider, IconButton, MenuItem, PageContent, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
-import { BarChart3, ChevronDown, Download, RefreshCw } from '@wso2/oxygen-ui-icons-react';
+import { Alert, Button, CircularProgress, Divider, IconButton, MenuItem, PageContent, Select, Stack, TextField, Tooltip, Typography } from '@wso2/oxygen-ui';
+import { BarChart3, Download, RefreshCw } from '@wso2/oxygen-ui-icons-react';
 import { useMemo, useState, type JSX } from 'react';
 import { useProjectByHandler, useComponentByHandler, useComponents, useEnvironments, useComponentRuntimes, useComponentRuntimesByEnvironments, useProjectRuntimesByEnvironments, type GqlRuntime } from '../api/queries';
 import { useMoesifMetricsConfig, useCreateMoesifDashboards, useMoesifDashboardEmbed } from '../api/metricsMoesif';
@@ -28,23 +28,9 @@ import EmptyListing from '../components/EmptyListing';
 import NotFound from '../components/NotFound';
 import { resourceUrl, broaden, hasComponent } from '../nav';
 import type { MetricsPageProps } from './MetricsOpenSearch';
+import { MOESIF_DESCRIPTION, MOESIF_SETUP_GUIDE, OPENSEARCH_SETUP_GUIDE_DEFAULT, OPENSEARCH_SETUP_GUIDE_MI, MoesifStep } from '../components/MoesifSetup';
 
 const MOESIF_MAIN_BAL_IMPORT = 'import ballerinax/moesif as _;';
-
-// Short description shown when introducing Moesif on the landing/config view.
-// The leading "Moesif" is rendered in bold at the call site.
-const MOESIF_DESCRIPTION = ' (a WSO2 company) allows you to observe your service integrations with real-time monitoring, behavioral analytics, and AI-powered insights into API adoption and usage.';
-
-// Documentation guide for setting up Moesif-backed observability, referenced from
-// the Moesif intro on the landing/config view.
-const MOESIF_SETUP_GUIDE = 'https://wso2.com/integration-platform/docs/manage/icp/observability-setup';
-
-// Documentation guides for setting up OpenSearch-backed observability, offered
-// as an alternative when nothing is configured yet. The guide differs by runtime
-// technology: MI (Micro Integrator) has its own docs, while other runtimes (BI)
-// use the general ICP observability setup guide.
-const OPENSEARCH_SETUP_GUIDE_DEFAULT = 'https://wso2.com/integration-platform/docs/manage/icp/observability-setup';
-const OPENSEARCH_SETUP_GUIDE_MI = 'https://mi.docs.wso2.com/en/latest/install-and-setup/install/adding-observability-for-icp/';
 
 // WSO2 MI Moesif metrics setup guide, linked from the MI runtime instructions
 // for further guidance (the MI flow enables analytics + a Fluent Bit sidecar).
@@ -59,22 +45,6 @@ metricsReporter = "moesif"
 
 [ballerinax.moesif]
 applicationId = "${applicationId}"`;
-}
-
-// A collapsible step section. Each main step from the observability user story is
-// rendered as an accordion so the setup flow stays compact; the first step is
-// expanded by default.
-function MoesifStep({ title, defaultExpanded, children }: { title: string; defaultExpanded?: boolean; children: React.ReactNode }): JSX.Element {
-  return (
-    <Accordion defaultExpanded={defaultExpanded} disableGutters sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, mb: 1.5, '&:before': { display: 'none' } }}>
-      <AccordionSummary expandIcon={<ChevronDown size={18} />} sx={{ bgcolor: 'action.hover', '&:hover': { bgcolor: 'action.selected' } }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-          {title}
-        </Typography>
-      </AccordionSummary>
-      <AccordionDetails sx={{ pt: 2 }}>{children}</AccordionDetails>
-    </Accordion>
-  );
 }
 
 // Runtime configuration instructions for publishing metrics to Moesif. Rendered
