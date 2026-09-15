@@ -1,10 +1,15 @@
 {
   "dashboards": [
     {
-      "_id": "6a86d18cfe2ee823422e1bb2",
+      "_id": "6aa8d792ee1ccc4e18868c3f",
       "name": "Application Metrics",
       "dashboard_ids": [],
-      "workspace_ids": [["6a86d18cc36c38256f94a30c", "6a86d18dfe2ee823422e1bb6"]],
+      "workspace_ids": [
+        ["6aa8d792ee1ccc4e18868c40", "6aa8ea615fdc0966f80648c8"],
+        ["6aa8d793ee1ccc4e18868c41", "6aa8f9605fdc0966f80648f5"]
+      ],
+      "parent": null,
+      "sort_order": 2,
       "filters": {
         "context": [
           {
@@ -17,14 +22,12 @@
             "multi": true
           }
         ]
-      },
-      "parent": null,
-      "sort_order": 1
+      }
     }
   ],
   "workspaces": [
     {
-      "_id": "6a86d18cc36c38256f94a30c",
+      "_id": "6aa8d792ee1ccc4e18868c40",
       "type": "events",
       "name": "Total Request Summary",
       "args": "",
@@ -35,6 +38,146 @@
               {
                 "terms": {
                   "metadata.metric_name.raw": ["requests_total"]
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "wildcard": {
+                      "metadata.metric_tags.entrypoint_function_module.raw": {
+                        "value": "*wso2/icp.runtime.bridge*"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "entTmSrs": {
+            "filter": {
+              "bool": {
+                "must": [
+                  {
+                    "terms": {
+                      "metadata.metric_name.raw": ["requests_total"]
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "wildcard": {
+                          "metadata.metric_tags.entrypoint_function_module.raw": {
+                            "value": "*wso2/icp.runtime.bridge*"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "metadata.metric_tags.entrypoint_function_name.raw": {
+                "terms": {
+                  "field": "metadata.metric_tags.entrypoint_function_name.raw",
+                  "size": "5",
+                  "min_doc_count": 1,
+                  "order": {
+                    "metadata__metric_value|max": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "request.time": {
+                    "date_histogram": {
+                      "field": "request.time",
+                      "interval": "1m",
+                      "time_zone": "Asia/Colombo"
+                    },
+                    "aggs": {
+                      "metadata__metric_value|max": {
+                        "max": {
+                          "field": "metadata.metric_value"
+                        }
+                      }
+                    }
+                  },
+                  "metadata__metric_value|max": {
+                    "max": {
+                      "field": "metadata.metric_value"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "track_total_hits": false
+      },
+      "dateRange": {
+        "from": "-15m",
+        "to": "now"
+      },
+      "view": "time",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][1][op]=not_include&evtcf[filtersGroups][0][filters][1][value]=wso2%2Ficp.runtime.bridge&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_name.raw&evtcf[filtersGroups][0][filters][2][op]=not_contain&evtcf[filtersGroups][0][filters][2][value][0]=interceptResponseError&evt_ts[groups][0][field]=metadata.metric_tags.entrypoint_function_name.raw&evt_ts[groups][0][func]=terms&evt_ts[groups][0][buckets]=5&evt_ts[groups][0][by]=metric&evt_ts[metrics][0][id]=dde52dcf&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=max&evt_ts[interval]=1m&evt_ts[logScale]=true&evt_ts[stacked]=true",
+      "viewerFilters": [],
+      "analyticType": "entTmSrs",
+      "chartType": "line",
+      "settings": {
+        "groups": [
+          {
+            "field": "metadata.metric_tags.entrypoint_function_name.raw",
+            "func": "terms",
+            "buckets": "5",
+            "by": "metric"
+          }
+        ],
+        "metrics": [
+          {
+            "id": "dde52dcf",
+            "field": "metadata.metric_value",
+            "func": "max"
+          }
+        ],
+        "interval": "1m",
+        "logScale": "true",
+        "stacked": "true"
+      }
+    },
+    {
+      "_id": "6aa8ea615fdc0966f80648c8",
+      "type": "events",
+      "name": "Response Time Overview",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "must": [
+              {
+                "terms": {
+                  "metadata.metric_name.raw": ["response_time_seconds"]
                 }
               },
               {
@@ -77,7 +220,7 @@
                 "must": [
                   {
                     "terms": {
-                      "metadata.metric_name.raw": ["requests_total"]
+                      "metadata.metric_name.raw": ["response_time_seconds"]
                     }
                   },
                   {
@@ -127,7 +270,7 @@
                   "request.time": {
                     "date_histogram": {
                       "field": "request.time",
-                      "interval": "1s",
+                      "interval": "15m",
                       "time_zone": "Asia/Colombo"
                     },
                     "aggs": {
@@ -155,15 +298,15 @@
         "track_total_hits": false
       },
       "dateRange": {
-        "from": "-15m",
+        "from": "-2h",
         "to": "now"
       },
       "view": "time",
       "funnel_query": {},
-      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_include&evtcf[filtersGroups][0][filters][2][value]=wso2%2Ficp.runtime.bridge&evtcf[filtersGroups][0][filters][3][field]=metadata.metric_tags.entrypoint_function_name.raw&evtcf[filtersGroups][0][filters][3][op]=not_contain&evtcf[filtersGroups][0][filters][3][value][0]=interceptResponseError&evt_ts[groups][0][field]=metadata.metric_tags.entrypoint_function_name.raw&evt_ts[groups][0][func]=terms&evt_ts[groups][0][buckets]=5&evt_ts[groups][0][by]=metric&evt_ts[metrics][0][id]=dde52dcf&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=weighted_sum&evt_ts[interval]=1s&evt_ts[logScale]=true&evt_ts[stacked]=true",
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=response_time_seconds&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_include&evtcf[filtersGroups][0][filters][2][value]=wso2%2Ficp.runtime.bridge&evtcf[filtersGroups][0][filters][3][field]=metadata.metric_tags.entrypoint_function_name.raw&evtcf[filtersGroups][0][filters][3][op]=not_contain&evtcf[filtersGroups][0][filters][3][value][0]=interceptResponseError&evt_ts[groups][0][field]=metadata.metric_tags.entrypoint_function_name.raw&evt_ts[groups][0][func]=terms&evt_ts[groups][0][buckets]=5&evt_ts[groups][0][by]=metric&evt_ts[metrics][0][id]=dde52dcf&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=weighted_sum&evt_ts[interval]=15m&evt_ts[logScale]=true&evt_ts[stacked]=true&evt_ts[chartType]=bar",
       "viewerFilters": [],
       "analyticType": "entTmSrs",
-      "chartType": "line",
+      "chartType": "bar",
       "settings": {
         "groups": [
           {
@@ -180,15 +323,16 @@
             "func": "weighted_sum"
           }
         ],
-        "interval": "1s",
+        "interval": "15m",
         "logScale": "true",
-        "stacked": "true"
+        "stacked": "true",
+        "chartType": "bar"
       }
     },
     {
-      "_id": "6a86d18dfe2ee823422e1bb6",
+      "_id": "6aa8d793ee1ccc4e18868c41",
       "type": "events",
-      "name": "Total Request Count",
+      "name": "Total Traffic",
       "args": "",
       "es_query": {
         "post_filter": {
@@ -218,13 +362,22 @@
                     }
                   }
                 }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                    }
+                  }
+                }
               }
             ]
           }
         },
         "size": 0,
         "aggs": {
-          "entTmSrs": {
+          "seg": {
             "filter": {
               "bool": {
                 "must": [
@@ -252,29 +405,41 @@
                         }
                       }
                     }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                        }
+                      }
+                    }
                   }
                 ]
               }
             },
             "aggs": {
-              "request.time": {
-                "date_histogram": {
-                  "field": "request.time",
-                  "interval": "1s",
-                  "time_zone": "Asia/Colombo"
+              "metadata.metric_tags.entrypoint_function_name.raw": {
+                "terms": {
+                  "field": "metadata.metric_tags.entrypoint_function_name.raw",
+                  "size": 5,
+                  "min_doc_count": 1,
+                  "order": {
+                    "metadata__metric_value|max": "desc"
+                  },
+                  "missing": "(none)"
                 },
                 "aggs": {
-                  "metadata__metric_value|weighted_avg": {
-                    "weighted_avg": {
-                      "value": {
-                        "field": "metadata.metric_value"
-                      },
-                      "weight": {
-                        "field": "weight",
-                        "missing": 1
-                      }
+                  "metadata__metric_value|max": {
+                    "max": {
+                      "field": "metadata.metric_value"
                     }
                   }
+                }
+              },
+              "metadata__metric_value|max": {
+                "max": {
+                  "field": "metadata.metric_value"
                 }
               }
             }
@@ -283,23 +448,191 @@
         "track_total_hits": false
       },
       "dateRange": {
-        "from": "-1h",
+        "from": "-2h",
         "to": "now"
       },
-      "view": "time",
+      "view": "segment",
       "funnel_query": {},
-      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_include&evtcf[filtersGroups][0][filters][2][value]=wso2%2Ficp.runtime.bridge&evt_ts[metrics][0][field]=metadata.metric_value&evt_ts[metrics][0][func]=weighted_avg&evt_ts[interval]=1s",
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][1][op]=not_contain&evtcf[filtersGroups][0][filters][1][value][0]=true&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][2][op]=not_include&evtcf[filtersGroups][0][filters][2][value]=wso2%2Ficp.runtime.bridge&evtcf[filtersGroups][0][filters][3][id]=6fae9fc9&evtcf[filtersGroups][0][filters][3][field]=metadata.metric_tags.entrypoint_function_name.raw&evtcf[filtersGroups][0][filters][3][name]=&evtcf[filtersGroups][0][filters][3][op]=not_contain&evtcf[filtersGroups][0][filters][3][value][0]=interceptResponseError&seg[metrics][0][i]=37099fe5&seg[metrics][0][field]=metadata.metric_value&seg[metrics][0][func]=max&seg[groups][0][field]=metadata.metric_tags.entrypoint_function_name.raw&seg[groups][0][func]=terms&seg[groups][0][by]=metric&seg[chartType]=table&seg[columnSettings][0][label]=metadata.metric_tags.entrypoint_function_name.raw&seg[columnSettings][0][augmentation]=label&seg[columnSettings][0][rename]=Function%20Name&seg[columnSettings][1][label]=max%28metadata.metric_value%29&seg[columnSettings][1][rename]=Total%20Traffic",
       "viewerFilters": [],
-      "analyticType": "entTmSrs",
-      "chartType": "line",
+      "analyticType": "seg",
+      "chartType": "table",
       "settings": {
         "metrics": [
           {
+            "i": "37099fe5",
             "field": "metadata.metric_value",
-            "func": "weighted_avg"
+            "func": "max"
           }
         ],
-        "interval": "1s"
+        "groups": [
+          {
+            "field": "metadata.metric_tags.entrypoint_function_name.raw",
+            "func": "terms",
+            "by": "metric"
+          }
+        ],
+        "chartType": "table",
+        "columnSettings": [
+          {
+            "label": "metadata.metric_tags.entrypoint_function_name.raw",
+            "augmentation": "label",
+            "rename": "Function Name"
+          },
+          {
+            "label": "max(metadata.metric_value)",
+            "rename": "Total Traffic"
+          }
+        ]
+      }
+    },
+    {
+      "_id": "6aa8f9605fdc0966f80648f5",
+      "type": "events",
+      "name": "Total Error Count",
+      "args": "",
+      "es_query": {
+        "post_filter": {
+          "bool": {
+            "must": [
+              {
+                "terms": {
+                  "metadata.metric_name.raw": ["requests_total"]
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "wildcard": {
+                      "metadata.metric_tags.entrypoint_function_module.raw": {
+                        "value": "*wso2/icp.runtime.bridge*"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "terms": {
+                      "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                    }
+                  }
+                }
+              },
+              {
+                "terms": {
+                  "metadata.metric_tags.error.raw": ["true"]
+                }
+              }
+            ]
+          }
+        },
+        "size": 0,
+        "aggs": {
+          "seg": {
+            "filter": {
+              "bool": {
+                "must": [
+                  {
+                    "terms": {
+                      "metadata.metric_name.raw": ["requests_total"]
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "wildcard": {
+                          "metadata.metric_tags.entrypoint_function_module.raw": {
+                            "value": "*wso2/icp.runtime.bridge*"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "bool": {
+                      "must_not": {
+                        "terms": {
+                          "metadata.metric_tags.entrypoint_function_name.raw": ["interceptResponseError"]
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "terms": {
+                      "metadata.metric_tags.error.raw": ["true"]
+                    }
+                  }
+                ]
+              }
+            },
+            "aggs": {
+              "metadata.metric_tags.entrypoint_function_name.raw": {
+                "terms": {
+                  "field": "metadata.metric_tags.entrypoint_function_name.raw",
+                  "size": 5,
+                  "min_doc_count": 1,
+                  "order": {
+                    "metadata__metric_value|max": "desc"
+                  },
+                  "missing": "(none)"
+                },
+                "aggs": {
+                  "metadata__metric_value|max": {
+                    "max": {
+                      "field": "metadata.metric_value"
+                    }
+                  }
+                }
+              },
+              "metadata__metric_value|max": {
+                "max": {
+                  "field": "metadata.metric_value"
+                }
+              }
+            }
+          }
+        },
+        "track_total_hits": false
+      },
+      "dateRange": {
+        "from": "-2h",
+        "to": "now"
+      },
+      "view": "segment",
+      "funnel_query": {},
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][field]=metadata.metric_name.raw&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=requests_total&evtcf[filtersGroups][0][filters][1][field]=metadata.metric_tags.entrypoint_function_module.raw&evtcf[filtersGroups][0][filters][1][op]=not_include&evtcf[filtersGroups][0][filters][1][value]=wso2%2Ficp.runtime.bridge&evtcf[filtersGroups][0][filters][2][id]=6fae9fc9&evtcf[filtersGroups][0][filters][2][field]=metadata.metric_tags.entrypoint_function_name.raw&evtcf[filtersGroups][0][filters][2][name]=&evtcf[filtersGroups][0][filters][2][op]=not_contain&evtcf[filtersGroups][0][filters][2][value][0]=interceptResponseError&evtcf[filtersGroups][0][filters][3][id]=756e3167&evtcf[filtersGroups][0][filters][3][field]=metadata.metric_tags.error.raw&evtcf[filtersGroups][0][filters][3][name]=&evtcf[filtersGroups][0][filters][3][op]=contains&evtcf[filtersGroups][0][filters][3][value][0]=true&seg[metrics][0][i]=37099fe5&seg[metrics][0][field]=metadata.metric_value&seg[metrics][0][func]=max&seg[groups][0][field]=metadata.metric_tags.entrypoint_function_name.raw&seg[groups][0][func]=terms&seg[groups][0][by]=metric&seg[chartType]=table&seg[columnSettings][0][label]=metadata.metric_tags.entrypoint_function_name.raw&seg[columnSettings][0][augmentation]=label&seg[columnSettings][0][rename]=Function%20Name&seg[columnSettings][1][label]=max%28metadata.metric_value%29&seg[columnSettings][1][rename]=Total%20Traffic",
+      "viewerFilters": [],
+      "analyticType": "seg",
+      "chartType": "table",
+      "settings": {
+        "metrics": [
+          {
+            "i": "37099fe5",
+            "field": "metadata.metric_value",
+            "func": "max"
+          }
+        ],
+        "groups": [
+          {
+            "field": "metadata.metric_tags.entrypoint_function_name.raw",
+            "func": "terms",
+            "by": "metric"
+          }
+        ],
+        "chartType": "table",
+        "columnSettings": [
+          {
+            "label": "metadata.metric_tags.entrypoint_function_name.raw",
+            "augmentation": "label",
+            "rename": "Function Name"
+          },
+          {
+            "label": "max(metadata.metric_value)",
+            "rename": "Total Traffic"
+          }
+        ]
       }
     }
   ]
