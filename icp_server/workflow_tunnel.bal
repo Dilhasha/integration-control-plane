@@ -207,12 +207,14 @@ const int WF_STALE_SERVE_SECONDS = 1800;
 # + params - Its parameters
 # + roles - The caller's roles, which are part of the cache key: a role-filtered listing
 #           must never be shared across role sets
+# + userId - The caller's user id, part of the key for the same reason: a task assigned to
+#            users, or excluding some, answers differently per user
 # + return - What to serve, or an error only when the database itself failed
 isolated function ensureWorkflowRead(string componentId, string environmentId, string operation,
-        map<json> params, string[] roles, boolean forceRefresh = false)
+        map<json> params, string[] roles, string? userId = (), boolean forceRefresh = false)
         returns WorkflowReadOutcome|error {
     string scopeKey = workflowScopeKey(componentId, environmentId);
-    string cacheKey = workflowCacheKey(scopeKey, operation, params, roles);
+    string cacheKey = workflowCacheKey(scopeKey, operation, params, roles, userId);
     int now = nowUnixSeconds();
     if forceRefresh {
         // The user demanded certainty. Expiring the entry (never deleting it) drops this call
@@ -273,7 +275,7 @@ isolated function ensureWorkflowRead(string componentId, string environmentId, s
     check storage:boostCacheOwner(componentId, environmentId, now + WORKFLOW_BOOST_WINDOW_SECONDS,
             now + WORKFLOW_BOOST_WINDOW_SECONDS / 2);
 
-    string request = workflowRequestDocument(operation, params, roles);
+    string request = workflowRequestDocument(operation, params, roles, userId);
     boolean owns = check storage:startCacheFetch(cacheKey, CACHE_KIND_WORKFLOW_READ, scopeKey,
             request, newFetchId(), now + WF_READ_FETCH_DEADLINE_SECONDS);
     if !owns {
@@ -496,10 +498,10 @@ isolated function workflowRequestDocument(string operation, map<json> params, st
 # + roles - The caller's roles
 # + return - A hex digest
 isolated function workflowCacheKey(string scopeKey, string operation, map<json> params,
-        string[] roles) returns string {
+        string[] roles, string? userId = ()) returns string {
     string[] sortedRoles = roles.clone().sort();
     string canonical = scopeKey + "|" + operation + "|" + canonicalJson(params) + "|"
-        + string:'join(",", ...sortedRoles);
+        + string:'join(",", ...sortedRoles) + "|" + (userId ?: "");
     byte[] digest = crypto:hashSha256(canonical.toBytes());
     return digest.toBase16();
 }

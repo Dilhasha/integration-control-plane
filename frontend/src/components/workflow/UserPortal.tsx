@@ -53,6 +53,18 @@ const emptySx = { py: 4, textAlign: 'center', color: 'text.secondary' } as const
 // A pending task's child workflow reports RUNNING at runtime; the queue shows that as PENDING.
 const taskDisplayStatus = (s?: string) => (s === 'RUNNING' ? 'PENDING' : s);
 
+// Who a task is open to, for the person who finds it read-only: roles, named users, and who is excluded.
+function audienceSummary(task: { userRoles?: string[]; users?: string[]; excludedUsers?: string[]; excludedRoles?: string[] }): string | undefined {
+  const parts: string[] = [];
+  if (task.userRoles?.length) parts.push(`roles ${task.userRoles.map(unescapeRoleName).join(', ')}`);
+  if (task.users?.length) parts.push(`users ${task.users.join(', ')}`);
+  const excluded: string[] = [];
+  if (task.excludedRoles?.length) excluded.push(`roles ${task.excludedRoles.map(unescapeRoleName).join(', ')}`);
+  if (task.excludedUsers?.length) excluded.push(`users ${task.excludedUsers.join(', ')}`);
+  if (parts.length === 0) return undefined;
+  return parts.join(' or ') + (excluded.length ? `, except ${excluded.join(' and ')}` : '');
+}
+
 // Task names arrive qualified as `<workflowType>.<taskName>`; the display name drops the qualifier.
 function taskDisplayName(t?: HumanTask): string {
   if (!t) return '';
@@ -537,6 +549,7 @@ export function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }
   const busy = complete.isPending || fail.isPending;
   const canComplete = task?.canComplete !== false;
   const eligibleRoles = task?.eligibleRoles ?? (Array.isArray(task?.roles) ? (task.roles as string[]) : undefined) ?? task?.userRoles;
+  const audience = task ? audienceSummary(task) : undefined;
   const formFields = parseFormSchema(task?.formSchema);
   const taskInputJson = task?.taskInput !== undefined && task?.taskInput !== null ? jsonPretty(task.taskInput) : null;
 
@@ -686,7 +699,7 @@ export function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }
                       subtitle="Submit a result; the waiting workflow resumes with it."
                       selected={mode === 'complete'}
                       disabled={busy || !canComplete}
-                      disabledReason={canComplete ? undefined : 'You do not have a matching role to complete this task'}
+                      disabledReason={canComplete ? undefined : `You are not eligible to complete this task${audience ? ` — it is open to ${audience}` : ''}`}
                       onClick={() => (mode === 'complete' ? closeComplete() : setMode('complete'))}
                     />
                     <ActionCard
