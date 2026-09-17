@@ -16,7 +16,7 @@
  * under the License.
  */
 import { Alert, Button, Chip, Stack, TextField, Typography } from '@wso2/oxygen-ui';
-import { useState } from 'react';
+import { useState, type JSX } from 'react';
 import { escapeRoleName, unescapeRoleName } from './helpers';
 import { ActionCard, DetailRow, IdText, NotProvided, SectionCard, type WorkflowScope } from './shared';
 import { useExtendTaskDeadline, useReassignTask, type TaskAudience, type TaskSummary } from '../../api/workflows';
