@@ -84,7 +84,9 @@ export default function TaskAdministerCard({
   const [users, setUsers] = useState(linesOf(task.users));
   const [excludedRoles, setExcludedRoles] = useState(linesOf(task.excludedRoles));
   const [excludedUsers, setExcludedUsers] = useState(linesOf(task.excludedUsers));
-  const [minutes, setMinutes] = useState('60');
+  const [days, setDays] = useState('0');
+  const [hours, setHours] = useState('1');
+  const [minutes, setMinutes] = useState('0');
   const [err, setErr] = useState('');
 
   if (task.canAdminister !== true) return null;
@@ -117,9 +119,9 @@ export default function TaskAdministerCard({
   };
 
   const submitDeadline = (clear: boolean) => {
-    const timeoutMillis = Math.round(Number(minutes) * 60_000);
+    const timeoutMillis = Math.round(((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60_000);
     if (!clear && (!Number.isSafeInteger(timeoutMillis) || timeoutMillis <= 0)) {
-      setErr('Enter the minutes from now, greater than zero.');
+      setErr('Enter a deadline from now: days, hours and minutes adding up to more than zero.');
       return;
     }
     setErr('');
@@ -187,7 +189,14 @@ export default function TaskAdministerCard({
         )}
         {mode === 'deadline' && (
           <Stack gap={1.5} sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 2 }}>
-            <TextField id="deadline-minutes" label="Minutes from now" type="number" value={minutes} onChange={(e) => setMinutes(e.target.value)} size="small" sx={{ maxWidth: 240 }} />
+            <Typography variant="body2" color="text.secondary">
+              The new deadline, counted from now.
+            </Typography>
+            <Stack direction="row" gap={1.5} flexWrap="wrap">
+              <TextField id="deadline-days" label="Days" type="number" value={days} onChange={(e) => setDays(e.target.value)} size="small" sx={{ width: 120 }} slotProps={{ htmlInput: { min: 0 } }} />
+              <TextField id="deadline-hours" label="Hours" type="number" value={hours} onChange={(e) => setHours(e.target.value)} size="small" sx={{ width: 120 }} slotProps={{ htmlInput: { min: 0, max: 23 } }} />
+              <TextField id="deadline-minutes" label="Minutes" type="number" value={minutes} onChange={(e) => setMinutes(e.target.value)} size="small" sx={{ width: 120 }} slotProps={{ htmlInput: { min: 0, max: 59 } }} />
+            </Stack>
             <Stack direction="row" justifyContent="flex-end" gap={1}>
               <Button disabled={busy} onClick={() => setMode('none')}>
                 Cancel
