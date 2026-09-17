@@ -50,11 +50,15 @@ export function completedAsLabel(completedAs?: string): string | undefined {
   return undefined;
 }
 
+// One entry per line: a role name may itself contain a comma, so commas never separate entries.
 const listOf = (text: string): string[] =>
   text
-    .split(',')
+    .split('\n')
     .map((part) => part.trim())
     .filter(Boolean);
+
+// The runtime's stored form, one per line, exactly as it will be sent back when left unchanged.
+const linesOf = (values?: string[]): string => (values ?? []).join('\n');
 
 // What an administrator may do to a pending task besides deciding it: hand it to a new
 // audience, or move or clear its deadline. Every act is recorded in the task's history.
@@ -76,10 +80,10 @@ export default function TaskAdministerCard({
   const reassign = useReassignTask(scope, kind);
   const extend = useExtendTaskDeadline(scope, kind);
   const [mode, setMode] = useState<'none' | 'reassign' | 'deadline'>('none');
-  const [userRoles, setUserRoles] = useState((task.userRoles ?? []).map(unescapeRoleName).join(', '));
-  const [users, setUsers] = useState((task.users ?? []).join(', '));
-  const [excludedRoles, setExcludedRoles] = useState((task.excludedRoles ?? []).map(unescapeRoleName).join(', '));
-  const [excludedUsers, setExcludedUsers] = useState((task.excludedUsers ?? []).join(', '));
+  const [userRoles, setUserRoles] = useState(linesOf(task.userRoles));
+  const [users, setUsers] = useState(linesOf(task.users));
+  const [excludedRoles, setExcludedRoles] = useState(linesOf(task.excludedRoles));
+  const [excludedUsers, setExcludedUsers] = useState(linesOf(task.excludedUsers));
   const [minutes, setMinutes] = useState('60');
   const [err, setErr] = useState('');
 
@@ -113,14 +117,14 @@ export default function TaskAdministerCard({
   };
 
   const submitDeadline = (clear: boolean) => {
-    const value = Number(minutes);
-    if (!clear && (!Number.isFinite(value) || value <= 0)) {
+    const timeoutMillis = Math.round(Number(minutes) * 60_000);
+    if (!clear && (!Number.isSafeInteger(timeoutMillis) || timeoutMillis <= 0)) {
       setErr('Enter the minutes from now, greater than zero.');
       return;
     }
     setErr('');
     extend.mutate(
-      { taskId: task.taskId, timeoutMillis: clear ? null : Math.round(value * 60_000) },
+      { taskId: task.taskId, timeoutMillis: clear ? null : timeoutMillis },
       {
         onSuccess: () => {
           onDone();
@@ -167,10 +171,10 @@ export default function TaskAdministerCard({
         )}
         {mode === 'reassign' && (
           <Stack gap={1.5} sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 2 }}>
-            <TextField id="reassign-roles" label="Roles" helperText="Comma-separated. Anyone holding one of these may complete the task." value={userRoles} onChange={(e) => setUserRoles(e.target.value)} fullWidth size="small" />
-            <TextField id="reassign-users" label="Users" helperText="Comma-separated user ids." value={users} onChange={(e) => setUsers(e.target.value)} fullWidth size="small" />
-            <TextField id="reassign-excluded-roles" label="Excluded roles" value={excludedRoles} onChange={(e) => setExcludedRoles(e.target.value)} fullWidth size="small" />
-            <TextField id="reassign-excluded-users" label="Excluded users" value={excludedUsers} onChange={(e) => setExcludedUsers(e.target.value)} fullWidth size="small" />
+            <TextField id="reassign-roles" label="Roles" helperText="One per line. Anyone holding one of these may complete the task." value={userRoles} onChange={(e) => setUserRoles(e.target.value)} fullWidth size="small" multiline minRows={2} />
+            <TextField id="reassign-users" label="Users" helperText="One user id per line." value={users} onChange={(e) => setUsers(e.target.value)} fullWidth size="small" multiline minRows={2} />
+            <TextField id="reassign-excluded-roles" label="Excluded roles" value={excludedRoles} onChange={(e) => setExcludedRoles(e.target.value)} fullWidth size="small" multiline minRows={1} />
+            <TextField id="reassign-excluded-users" label="Excluded users" value={excludedUsers} onChange={(e) => setExcludedUsers(e.target.value)} fullWidth size="small" multiline minRows={1} />
             <Stack direction="row" justifyContent="flex-end" gap={1}>
               <Button disabled={busy} onClick={() => setMode('none')}>
                 Cancel

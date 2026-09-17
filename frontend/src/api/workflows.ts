@@ -700,8 +700,7 @@ export interface TaskAudience {
 export function useReassignTask(s: Scope, kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY') {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ taskId, audience }: { taskId: string; audience: TaskAudience }) =>
-      wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/reassign`, jsonBody({ method: 'POST' }, audience)),
+    mutationFn: ({ taskId, audience }: { taskId: string; audience: TaskAudience }) => wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/reassign`, jsonBody({ method: 'POST' }, audience)),
     onSuccess: () => invalidateHumanTasks(qc, s),
   });
 }
@@ -710,8 +709,7 @@ export function useReassignTask(s: Scope, kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY'
 export function useExtendTaskDeadline(s: Scope, kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY') {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ taskId, timeoutMillis }: { taskId: string; timeoutMillis: number | null }) =>
-      wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/deadline`, jsonBody({ method: 'POST' }, { timeoutMillis })),
+    mutationFn: ({ taskId, timeoutMillis }: { taskId: string; timeoutMillis: number | null }) => wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/deadline`, jsonBody({ method: 'POST' }, { timeoutMillis })),
     onSuccess: () => invalidateHumanTasks(qc, s),
   });
 }

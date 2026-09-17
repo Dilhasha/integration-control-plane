@@ -461,7 +461,10 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
     if wantTotal && method == http:GET && totalCapablePath {
         boolean|error mayTotal = auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_WORKFLOW_VIEW_WORKFLOWS, auth:PERMISSION_WORKFLOW_MANAGE_WORKFLOWS], scope);
-        countAll = mayTotal is boolean && mayTotal;
+        if mayTotal is error {
+            return workflowErrorResponse(500, "Authorization check failed: " + mayTotal.message());
+        }
+        countAll = mayTotal;
     }
 
     // The instance graph composes the stored model with the runtime's history, so it is handled
@@ -486,6 +489,10 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
             // normal — several operations take none — and still goes through.
             return workflowErrorResponse(400, "Request body must be a JSON object");
         }
+    }
+    // A deadline is an integer or null; anything else must not read as "clear the deadline".
+    if method == http:POST && wfPath.length() == 3 && wfPath[2] == "deadline" && body["timeoutMillis"] !is int? {
+        return workflowErrorResponse(400, "timeoutMillis must be an integer or null");
     }
     // Mutates the map above rather than re-reading the query: a fresh copy would carry `refresh` into the key.
     if firstSeg == "work-items" {
