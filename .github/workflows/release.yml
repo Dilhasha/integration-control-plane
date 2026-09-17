@@ -116,6 +116,19 @@ jobs:
             echo "Detected stable release version"
           fi
 
+      - name: Refuse an existing release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = `v${{ steps.version.outputs.version }}`;
+            try {
+              await github.rest.repos.getReleaseByTag({ ...context.repo, tag });
+            } catch (error) {
+              if (error.status === 404) return;
+              throw error;
+            }
+            core.setFailed(`Release ${tag} already exists; refusing to modify it.`);
+
       - name: Update version in gradle.properties
         run: |
           VERSION="${{ steps.version.outputs.version }}"
