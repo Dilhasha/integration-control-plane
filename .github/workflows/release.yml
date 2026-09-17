@@ -336,6 +336,52 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check Product Integrator token
+        if: ${{ !inputs.dry_run }}
+        id: product_integrator_token
+        env:
+          TOKEN: ${{ secrets.PRODUCT_INTEGRATOR_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Set PRODUCT_INTEGRATOR_TOKEN to enable Product Integrator version syncs."
+          fi
+
+      - name: Checkout Product Integrator
+        if: ${{ steps.product_integrator_token.outputs.available == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: wso2/product-integrator
+          ref: staging/5.1.0
+          token: ${{ secrets.PRODUCT_INTEGRATOR_TOKEN }}
+          path: product-integrator
+          persist-credentials: false
+
+      - name: Update Product Integrator ICP version
+        if: ${{ steps.product_integrator_token.outputs.available == 'true' }}
+        working-directory: product-integrator
+        run: |
+          sed -i "s/^icp\.version=.*/icp.version=${{ steps.version.outputs.version }}/" ci/build/component-versions.properties
+          grep '^icp.version=' ci/build/component-versions.properties
+
+      - name: Create Product Integrator pull request
+        if: ${{ steps.product_integrator_token.outputs.available == 'true' }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PRODUCT_INTEGRATOR_TOKEN }}
+          path: product-integrator
+          base: staging/5.1.0
+          branch: update-icp-${{ steps.version.outputs.version }}
+          commit-message: Update ICP version to ${{ steps.version.outputs.version }}
+          title: Update ICP version to ${{ steps.version.outputs.version }}
+          body: |
+            ## Purpose
+            Update Product Integrator to use ICP ${{ steps.version.outputs.version }}.
+
+            Release: ${{ github.server_url }}/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.version }}
+
       - name: Release summary
         if: ${{ !inputs.dry_run }}
         run: |
