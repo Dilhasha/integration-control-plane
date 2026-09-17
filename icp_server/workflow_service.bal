@@ -160,9 +160,10 @@ const string WF_STALE_HEADER = "x-workflow-stale";
 # recently; the console polls the same URL. A stale entry is served with its age instead,
 # while a refresh runs behind it.
 isolated function serveWorkflowRead(string componentId, string environmentId, string operation,
-        map<json> params, string[] roles, boolean forceRefresh = false) returns http:Response {
+        map<json> params, string[] roles, string? userId = (), boolean forceRefresh = false)
+        returns http:Response {
     WorkflowReadOutcome|error outcome = ensureWorkflowRead(componentId, environmentId, operation,
-            params, roles, forceRefresh);
+            params, roles, userId, forceRefresh);
     if outcome is error {
         log:printError("Failed to serve a workflow read", outcome, operation = operation);
         return workflowErrorResponse(500, "Failed to read workflow data: " + outcome.message());
@@ -454,21 +455,16 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
     boolean wantTotal = queryParams.removeIfHasKey("all") == "true";
     boolean totalCapablePath = (wfPath.length() == 2 && wfPath[0] == "human-tasks" && wfPath[1] == "pending-count")
             || (wfPath.length() == 1 && wfPath[0] == "work-items");
+    // The project-wide total is the runtime's caller-independent count, not a listing under every
+    // organization role: a task that excludes a role is closed to a caller holding every role.
+    boolean countAll = false;
     if wantTotal && method == http:GET && totalCapablePath {
         boolean|error mayTotal = auth:hasAnyPermission(userContext.userId,
                 [auth:PERMISSION_WORKFLOW_VIEW_WORKFLOWS, auth:PERMISSION_WORKFLOW_MANAGE_WORKFLOWS], scope);
-        if mayTotal is boolean && mayTotal {
-            string[]|error allRoles = storage:getAllRoleNames();
-            if allRoles is error {
-                return workflowErrorResponse(500, "Failed to resolve organization roles: " + allRoles.message());
-            }
-            // Added to the caller's own roles: the synthetic "admin" role is not in roles_v2.
-            foreach string role in allRoles.map(escapeRoleName) {
-                if escapedRoles.indexOf(role) is () {
-                    escapedRoles.push(role);
-                }
-            }
+        if mayTotal is error {
+            return workflowErrorResponse(500, "Authorization check failed: " + mayTotal.message());
         }
+        countAll = mayTotal;
     }
 
     // The instance graph composes the stored model with the runtime's history, so it is handled
@@ -493,6 +489,10 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
             // normal — several operations take none — and still goes through.
             return workflowErrorResponse(400, "Request body must be a JSON object");
         }
+    }
+    // A deadline is an integer or null; anything else must not read as "clear the deadline".
+    if method == http:POST && wfPath.length() == 3 && wfPath[2] == "deadline" && body["timeoutMillis"] !is int? {
+        return workflowErrorResponse(400, "timeoutMillis must be an integer or null");
     }
     // Mutates the map above rather than re-reading the query: a fresh copy would carry `refresh` into the key.
     if firstSeg == "work-items" {
@@ -519,16 +519,21 @@ function handleWorkflowRequest(string componentId, string environmentId, string[
     // filter is part of the question: the cache key covers it, and the request stored for the
     // heartbeat to deliver is exactly what was asked.
     map<json> operationParams = withTaskQueueScope(operation[0], operation[1], tunnelTarget.taskQueue);
+    if countAll {
+        operationParams["all"] = true;
+    }
 
     // Nothing is held open from here on. A read is answered from the cache, or accepted with
     // 202 while a runtime materializes it; a mutation is queued and answered with the id the
     // console polls. Whichever ICP node receives the runtime's next heartbeat delivers the
     // work — usually not this one.
+    // The username is the identity the runtime checks eligibility against — it is what a workflow
+    // names in `users` and records as completedBy — so reads carry it as the mutations do.
     if method == http:GET {
         return serveWorkflowRead(componentId, environmentId, operation[0], operationParams,
-                escapedRoles, forceRefresh);
+                escapedRoles, userContext.username, forceRefresh);
     }
-    // The runtime records the username as completedBy/decidedBy; the stable id is for the audit trail.
+    // The runtime records the username as completedBy; the stable id is for the audit trail.
     return acceptWorkflowMutation(req, componentId, environmentId, operation[0], operationParams,
             userContext.username, userContext.userId, escapedRoles);
 }

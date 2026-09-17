@@ -49,22 +49,32 @@ export interface Page<T> {
   hasMore?: boolean;
 }
 
-export interface HumanTask {
+// What every task reports, whichever kind (workflow 0.10 `TaskSummary`). Who may act is the
+// audience — roles or named users, minus the excluded — and who did act is the completer.
+export interface TaskSummary {
+  kind?: 'HUMAN_TASK' | 'REVIEW_ACTIVITY';
   taskId: string;
   taskName?: string;
   title?: string;
   description?: string;
-  taskInput?: Record<string, unknown>;
-  formSchema?: Record<string, unknown> | string;
   parentWorkflowId?: string;
   parentWorkflowType?: string;
+  // The call site in the workflow that created the task, when it named one.
+  stepId?: string;
   status?: string;
   startTime?: string;
   closeTime?: string;
   userRoles?: string[];
-  eligibleRoles?: string[];
+  users?: string[];
+  excludedUsers?: string[];
+  excludedRoles?: string[];
+  // Administrators stand beside the audience: they see the task, may reassign it, move its
+  // deadline, fail it, or complete it — a completion by one is stamped `administrator`.
+  administratorRoles?: string[];
+  administratorUsers?: string[];
   canComplete?: boolean;
-  result?: unknown;
+  canAdminister?: boolean;
+  completedAs?: 'audience' | 'administrator';
   // Absent while pending, and for tasks decided before the runtime began stamping the completer into the memo.
   completedBy?: string;
   completedAt?: string;
@@ -73,31 +83,46 @@ export interface HumanTask {
   [key: string]: unknown;
 }
 
-export interface ReviewActivity {
-  taskId: string;
-  taskName?: string;
+export interface HumanTask extends TaskSummary {
+  taskInput?: Record<string, unknown>;
+  formSchema?: Record<string, unknown> | string;
+  eligibleRoles?: string[];
+  result?: unknown;
+}
+
+export interface ReviewActivity extends TaskSummary {
   activityName?: string;
-  parentWorkflowId?: string;
-  parentWorkflowType?: string;
-  status?: string;
   trigger?: string;
-  startTime?: string;
-  namespace?: string;
-  taskQueue?: string;
-  [key: string]: unknown;
+}
+
+// The decision a review received, as the runtime recorded it.
+export interface ReviewDecisionRecord {
+  action?: ReviewDecision;
+  input?: Record<string, unknown>;
+  feedback?: string;
 }
 
 export interface ReviewActivityDetail extends ReviewActivity {
-  title?: string;
-  description?: string;
   formSchema?: Record<string, unknown> | string;
   // The arguments the gated/failed activity would run with; always conforms to formSchema.
+  taskInput?: Record<string, unknown>;
+  // A runtime before 0.10 reports the same under this name.
   activityArgs?: Record<string, unknown>;
-  userRoles?: string[];
   errorMessage?: string;
-  closeTime?: string;
+  decision?: ReviewDecisionRecord | null;
+  // Runtimes before 0.10 report the completer under these names.
   decidedBy?: string;
   decidedAt?: string;
+}
+
+// The arguments a review holds, whichever name the runtime reports them under.
+export function reviewTaskInput(activity: ReviewActivityDetail): Record<string, unknown> | undefined {
+  return activity.taskInput ?? activity.activityArgs;
+}
+
+// Who completed a task and when, whichever name the runtime reports them under.
+export function taskCompleter(task: { completedBy?: string; completedAt?: string; decidedBy?: string; decidedAt?: string }): { by?: string; at?: string } {
+  return { by: task.completedBy ?? task.decidedBy, at: task.completedAt ?? task.decidedAt };
 }
 
 export interface HistoryEvent {
@@ -663,27 +688,46 @@ export function useFailHumanTask(s: Scope) {
   });
 }
 
+// The task's new audience; a field left out keeps its current value on the runtime.
+export interface TaskAudience {
+  userRoles?: string[];
+  users?: string[];
+  excludedUsers?: string[];
+  excludedRoles?: string[];
+}
+
+// Administrator verbs; both task kinds accept them and the runtime records each in the task's history.
+export function useReassignTask(s: Scope, kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, audience }: { taskId: string; audience: TaskAudience }) => wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/reassign`, jsonBody({ method: 'POST' }, audience)),
+    onSuccess: () => invalidateHumanTasks(qc, s),
+  });
+}
+
+// `timeoutMillis` null clears the deadline; a number restarts it from now.
+export function useExtendTaskDeadline(s: Scope, kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, timeoutMillis }: { taskId: string; timeoutMillis: number | null }) => wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/deadline`, jsonBody({ method: 'POST' }, { timeoutMillis })),
+    onSuccess: () => invalidateHumanTasks(qc, s),
+  });
+}
+
+function taskRoute(kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY'): string {
+  return kind === 'REVIEW_ACTIVITY' ? 'review-activities' : 'human-tasks';
+}
+
 // ── Review activities ──
 // (Replaces the deprecated retry-tasks routes; the runtime still exposes /retry-tasks
 // for pre-0.7.0 clients but the UI uses /review-activities.)
 
 // ── The unified work queue ──
 
-export interface WorkItemRow {
+export interface WorkItemRow extends TaskSummary {
   kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY';
-  taskId: string;
-  taskName?: string;
-  title?: string;
   // Reviews only: PRE_RUN (approval gate) | ON_FAILURE (rerun decision).
   trigger?: string;
-  parentWorkflowId?: string;
-  parentWorkflowType?: string;
-  taskQueue?: string;
-  status?: string;
-  startTime?: string;
-  closeTime?: string;
-  canComplete?: boolean;
-  [key: string]: unknown;
 }
 
 export interface WorkItemFilters {

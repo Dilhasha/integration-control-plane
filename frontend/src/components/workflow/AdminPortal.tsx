@@ -25,6 +25,7 @@ import SearchField from '../SearchField';
 import SchemaFormFields from './SchemaFormFields';
 import WorkflowDetailDrawer from './WorkflowDetailDrawer';
 import StructuredValue from './StructuredValue';
+import TaskAdministerCard, { AdministratorsRow, completedAsLabel } from './TaskAdministerCard';
 import {
   buildFormResult,
   diffFormValues,
@@ -52,6 +53,8 @@ import {
   isPreparing,
   isRefreshing,
   useReviewActivity,
+  reviewTaskInput,
+  taskCompleter,
   useReviewDecision,
   useStartWorkflow,
   useWorkflowDefinitionsAcross,
@@ -608,12 +611,16 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
   const canDecide = activity?.status === 'PENDING';
   const { workflow } = splitQualifiedName(activity?.taskName ?? activity?.activityName);
   const heading = activity?.title || reviewActivityDisplayName(activity?.taskName, activity?.activityName, taskId);
-  const argsJson = activity?.activityArgs ? jsonPretty(activity.activityArgs) : null;
+  const taskInput = activity ? reviewTaskInput(activity) : undefined;
+  const argsJson = taskInput ? jsonPretty(taskInput) : null;
+  const completer = activity ? taskCompleter(activity) : {};
 
-  // The decision is not in the activity detail: a review IS a workflow (id = taskId), so read its own result.
+  // A 0.10 runtime reports the decision on the detail. Before that it was only in the review's
+  // own history — a review IS a workflow (id = taskId) — so that stays as the fallback.
   const isCompleted = (activity?.status ?? '').toUpperCase() === 'COMPLETED';
-  const { data: decisionHistory } = useWorkflowHistory(scope, isCompleted ? taskId : null);
-  const decision = useMemo<Record<string, unknown> | null>(() => {
+  const reportedDecision = activity?.decision ?? null;
+  const { data: decisionHistory } = useWorkflowHistory(scope, isCompleted && !reportedDecision ? taskId : null);
+  const historyDecision = useMemo<Record<string, unknown> | null>(() => {
     const events = valueOf(decisionHistory) ?? [];
     if (!Array.isArray(events) || events.length === 0) return null;
     const raw = extractNodeExecutionDetail({ id: '', type: 'WORKFLOW' }, events as Array<Record<string, unknown>>).result;
@@ -625,14 +632,15 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
       return null;
     }
   }, [decisionHistory]);
+  const decision: Record<string, unknown> | null = reportedDecision ? (reportedDecision as Record<string, unknown>) : historyDecision;
 
   useEffect(() => {
     if (!activity) return;
     const fields = parseFormSchema(activity.formSchema);
-    const seeded = fields ? formValuesFromObject(fields, activity.activityArgs ?? {}) : {};
+    const seeded = fields ? formValuesFromObject(fields, reviewTaskInput(activity) ?? {}) : {};
     setFormValues(seeded);
     setOriginalValues(seeded);
-    setRawText(jsonPretty(activity.activityArgs ?? {}) || '{}');
+    setRawText(jsonPretty(reviewTaskInput(activity) ?? {}) || '{}');
   }, [activity]);
 
   const setFormValue = (name: string, value: string | boolean) => {
@@ -732,17 +740,19 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
                 <DateTime value={activity.startTime} />
               </DetailRow>
               {activity.errorMessage && <DetailRow label="Error">{activity.errorMessage}</DetailRow>}
+              <AdministratorsRow task={activity} />
             </Stack>
           </SectionCard>
 
           {mode !== 'edit' && argsJson && <StructuredValue title="Activity Arguments" readOnly raw={argsJson} environmentId={scope.environmentId} collapsible />}
 
-          {isCompleted && (activity.decidedBy || activity.decidedAt || decision) && (
+          {isCompleted && (completer.by || completer.at || decision) && (
             <SectionCard title="Decision">
               <Stack gap={1.25}>
                 <DetailRow label="Decision">{reviewDecisionLabel(decision?.['action']) ?? <NotProvided />}</DetailRow>
-                <DetailRow label="Decided By">{activity.decidedBy ? <IdText id={activity.decidedBy} /> : <NotProvided />}</DetailRow>
-                <DetailRow label="Decided At">{activity.decidedAt ? formatTime(activity.decidedAt) : <NotProvided />}</DetailRow>
+                <DetailRow label="Decided By">{completer.by ? <IdText id={completer.by} /> : <NotProvided />}</DetailRow>
+                {completedAsLabel(activity.completedAs) && <DetailRow label="Decided As">{completedAsLabel(activity.completedAs)}</DetailRow>}
+                <DetailRow label="Decided At">{completer.at ? formatTime(completer.at) : <NotProvided />}</DetailRow>
                 {typeof decision?.['feedback'] === 'string' && decision['feedback'] ? <DetailRow label="Feedback">{decision['feedback'] as string}</DetailRow> : null}
               </Stack>
             </SectionCard>
@@ -826,6 +836,7 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
                   )}
                 </Stack>
               </SectionCard>
+              <TaskAdministerCard scope={scope} task={activity} kind="REVIEW_ACTIVITY" disabled={busy} onDone={onClose} onToast={onToast} />
             </Authorized>
           )}
 
@@ -841,7 +852,7 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
               <Button disabled={busy} onClick={() => setConfirmProceedOpen(false)}>
                 Back
               </Button>
-              <Button variant="contained" disabled={busy} onClick={() => runDecision('proceed-with-input', activity?.activityArgs ?? {})}>
+              <Button variant="contained" disabled={busy} onClick={() => runDecision('proceed-with-input', (activity && reviewTaskInput(activity)) ?? {})}>
                 {busy ? 'Submitting…' : 'Proceed'}
               </Button>
             </DialogActions>

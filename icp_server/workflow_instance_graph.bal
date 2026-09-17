@@ -81,7 +81,7 @@ isolated function handleInstanceGraphRequest(string componentId, string environm
     // composes them, or reports that they are still being fetched. Nothing is remembered
     // between polls, so any ICP node can answer any of them.
     WorkflowReadOutcome|error infoOutcome = ensureWorkflowRead(componentId, environmentId,
-            "instances.get", {workflowId: workflowId}, roles, forceRefresh);
+            "instances.get", {workflowId: workflowId}, roles, forceRefresh = forceRefresh);
     http:Response|map<json> info = instanceGraphHalf(infoOutcome, "instance");
     if info is http:Response {
         return info;
@@ -92,7 +92,7 @@ isolated function handleInstanceGraphRequest(string componentId, string environm
     }
 
     WorkflowReadOutcome|error treeOutcome = ensureWorkflowRead(componentId, environmentId,
-            "instances.activityTree", {workflowId: workflowId}, roles, forceRefresh);
+            "instances.activityTree", {workflowId: workflowId}, roles, forceRefresh = forceRefresh);
     http:Response|map<json> treeBody = instanceGraphHalf(treeOutcome, "activity tree");
     if treeBody is http:Response {
         return treeBody;
