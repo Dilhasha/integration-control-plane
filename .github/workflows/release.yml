@@ -40,6 +40,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   build-and-release:
     name: Build and Release ICP Distribution
