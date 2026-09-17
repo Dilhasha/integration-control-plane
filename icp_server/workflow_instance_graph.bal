@@ -112,10 +112,31 @@ isolated function handleInstanceGraphRequest(string componentId, string environm
         // No runtime of this component has published a descriptor describing this type — an older
         // integration, or an instance of a workflow this component no longer declares. The history
         // is still worth returning; the console can draw it as a chain.
-        return instanceGraphResponse(workflowType, info, (), (), "workflow", executedNodes, []);
+        return stampAge(instanceGraphResponse(workflowType, info, (), (), "workflow", executedNodes, []),
+                infoOutcome, treeOutcome);
     }
-    return instanceGraphResponse(workflowType, info, model[0], model[1], model[2], executedNodes,
-            graphNodesOf(model[0]));
+    return stampAge(instanceGraphResponse(workflowType, info, model[0], model[1], model[2], executedNodes,
+            graphNodesOf(model[0])), infoOutcome, treeOutcome);
+}
+
+// A composition is only as fresh as its oldest half, and stale if either half is. Without these headers
+// the console reads a composed answer as permanently fresh and never polls for the refresh already running.
+isolated function stampAge(http:Response response, WorkflowReadOutcome|error... halves) returns http:Response {
+    int fetchedAt = int:MAX_VALUE;
+    boolean stale = false;
+    foreach WorkflowReadOutcome|error half in halves {
+        if half is WorkflowReadOutcome {
+            fetchedAt = int:min(fetchedAt, half.fetchedAt);
+            stale = stale || half.stale;
+        }
+    }
+    if fetchedAt < int:MAX_VALUE {
+        response.setHeader(WF_FETCHED_AT_HEADER, fetchedAt.toString());
+    }
+    if stale {
+        response.setHeader(WF_STALE_HEADER, "true");
+    }
+    return response;
 }
 
 // One half of the composed graph: the body when it is ready, or the response to return
