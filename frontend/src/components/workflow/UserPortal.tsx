@@ -23,6 +23,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
 import SchemaFormFields from './SchemaFormFields';
 import StructuredValue from './StructuredValue';
+import TaskAdministerCard, { AdministratorsRow, completedAsLabel } from './TaskAdministerCard';
 import { buildFormResult, displayWorkflowId, formatTime, gatewayScope, jsonPretty, ownerLabel, ownerScope, parseFormSchema, sortByStartTimeDesc, splitQualifiedName, unescapeRoleName, type PortalScope } from './helpers';
 import { ActionCard, DetailDrawer, DetailRow, HeaderCell, IdText, ListFooter, NotProvided, RefreshingNote, SectionCard, StatusChip, SubmitError, WorkflowIdLink, type WorkflowScope, rowOpenProps } from './shared';
 import { IntegrationFilter, ReviewActivityDetailDialog, StatusFilter, useTimeRangeFilter, WorkflowNameFilter } from './AdminPortal';
@@ -124,7 +125,7 @@ export function toWorkItem(t: WorkItemRow): WorkItem {
     status: t.status,
     startTime: t.startTime,
     trigger: t.trigger,
-    readOnly: kind === 'task' && t.status === 'PENDING' && t.canComplete === false,
+    readOnly: kind === 'task' && t.status === 'PENDING' && t.canComplete === false && t.canAdminister !== true,
   };
 }
 
@@ -548,6 +549,8 @@ export function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }
 
   const busy = complete.isPending || fail.isPending;
   const canComplete = task?.canComplete !== false;
+  // Failing is a decision too: the audience or an administrator may take it.
+  const canFail = canComplete || task?.canAdminister === true;
   const eligibleRoles = task?.eligibleRoles ?? (Array.isArray(task?.roles) ? (task.roles as string[]) : undefined) ?? task?.userRoles;
   const audience = task ? audienceSummary(task) : undefined;
   const formFields = parseFormSchema(task?.formSchema);
@@ -673,6 +676,7 @@ export function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }
                   <NotProvided />
                 )}
               </DetailRow>
+              <AdministratorsRow task={task} />
             </Stack>
           </SectionCard>
 
@@ -683,6 +687,7 @@ export function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }
             <SectionCard title="Decision">
               <Stack gap={1.25}>
                 <DetailRow label="Completed By">{task.completedBy ? <IdText id={task.completedBy} /> : <NotProvided />}</DetailRow>
+                {completedAsLabel(task.completedAs) && <DetailRow label="Completed As">{completedAsLabel(task.completedAs)}</DetailRow>}
                 <DetailRow label="Completed At">{task.completedAt ? formatTime(task.completedAt) : <NotProvided />}</DetailRow>
               </Stack>
             </SectionCard>
@@ -707,7 +712,8 @@ export function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }
                       subtitle="Fail the task instead."
                       info="Records the task as FAILED and propagates the failure to the workflow, which decides what happens next. This cannot be undone."
                       selected={failOpen}
-                      disabled={busy}
+                      disabled={busy || !canFail}
+                      disabledReason={canFail ? undefined : 'You are neither in this task\u2019s audience nor one of its administrators'}
                       onClick={() => {
                         // Only one decision open at a time: close the completion editor first.
                         closeComplete();
@@ -769,6 +775,7 @@ export function TaskDetailDialog({ scope, taskId, actionable, onClose, onToast }
                   )}
                 </Stack>
               </SectionCard>
+              {taskDisplayStatus(task.status) === 'PENDING' && <TaskAdministerCard scope={scope} task={task} kind="HUMAN_TASK" disabled={busy} onDone={onClose} onToast={onToast} />}
             </Authorized>
           )}
 

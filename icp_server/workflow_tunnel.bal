@@ -1140,6 +1140,7 @@ isolated function mapWorkflowRequestToOperation(string method, string[] wfPath,
                 }
                 return ["humanTasks.fail", params];
             }
+            return taskAdministrationOperation(taskId, wfPath[2], body);
         }
         "review-activities" if segments == 2 && wfPath[1] == "bulk-retry" => {
             map<json> params = {};
@@ -1162,7 +1163,28 @@ isolated function mapWorkflowRequestToOperation(string method, string[] wfPath,
                 }
                 return ["reviewActivities.decide", params];
             }
+            return taskAdministrationOperation(wfPath[1], action, body);
         }
+    }
+    return ();
+}
+
+// The administrator verbs a task of either kind accepts (workflow 0.10 `tasks.*`): a new audience,
+// or a new deadline where a missing or null `timeoutMillis` clears it.
+isolated function taskAdministrationOperation(string taskId, string action, map<json> body)
+        returns [string, map<json>]? {
+    if action == "reassign" {
+        map<json> params = {taskId: taskId};
+        foreach string key in ["userRoles", "users", "excludedUsers", "excludedRoles"] {
+            if body[key] is json[] {
+                params[key] = body[key];
+            }
+        }
+        return ["tasks.reassign", params];
+    }
+    if action == "deadline" {
+        json millis = body["timeoutMillis"];
+        return ["tasks.extendDeadline", {taskId: taskId, timeoutMillis: millis is int ? millis : ()}];
     }
     return ();
 }

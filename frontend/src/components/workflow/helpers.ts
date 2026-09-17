@@ -70,6 +70,11 @@ export function jsonPretty(value: unknown): string {
 }
 
 // Reverses the ICP proxy's role-name escaping for display (`%2C` → `,`).
+// The inverse of unescapeRoleName, for a role name a person typed that travels in a command.
+export function escapeRoleName(role: string): string {
+  return role.replaceAll(',', '%2C');
+}
+
 export function unescapeRoleName(role: string): string {
   return role.replace(/%2C/gi, ',');
 }

@@ -25,6 +25,7 @@ import SearchField from '../SearchField';
 import SchemaFormFields from './SchemaFormFields';
 import WorkflowDetailDrawer from './WorkflowDetailDrawer';
 import StructuredValue from './StructuredValue';
+import TaskAdministerCard, { AdministratorsRow, completedAsLabel } from './TaskAdministerCard';
 import {
   buildFormResult,
   diffFormValues,
@@ -739,6 +740,7 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
                 <DateTime value={activity.startTime} />
               </DetailRow>
               {activity.errorMessage && <DetailRow label="Error">{activity.errorMessage}</DetailRow>}
+              <AdministratorsRow task={activity} />
             </Stack>
           </SectionCard>
 
@@ -749,6 +751,7 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
               <Stack gap={1.25}>
                 <DetailRow label="Decision">{reviewDecisionLabel(decision?.['action']) ?? <NotProvided />}</DetailRow>
                 <DetailRow label="Decided By">{completer.by ? <IdText id={completer.by} /> : <NotProvided />}</DetailRow>
+                {completedAsLabel(activity.completedAs) && <DetailRow label="Decided As">{completedAsLabel(activity.completedAs)}</DetailRow>}
                 <DetailRow label="Decided At">{completer.at ? formatTime(completer.at) : <NotProvided />}</DetailRow>
                 {typeof decision?.['feedback'] === 'string' && decision['feedback'] ? <DetailRow label="Feedback">{decision['feedback'] as string}</DetailRow> : null}
               </Stack>
@@ -833,6 +836,7 @@ export function ReviewActivityDetailDialog({ scope, taskId, onClose, onToast }: 
                   )}
                 </Stack>
               </SectionCard>
+              <TaskAdministerCard scope={scope} task={activity} kind="REVIEW_ACTIVITY" disabled={busy} onDone={onClose} onToast={onToast} />
             </Authorized>
           )}
 

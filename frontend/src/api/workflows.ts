@@ -68,7 +68,13 @@ export interface TaskSummary {
   users?: string[];
   excludedUsers?: string[];
   excludedRoles?: string[];
+  // Administrators stand beside the audience: they see the task, may reassign it, move its
+  // deadline, fail it, or complete it — a completion by one is stamped `administrator`.
+  administratorRoles?: string[];
+  administratorUsers?: string[];
   canComplete?: boolean;
+  canAdminister?: boolean;
+  completedAs?: 'audience' | 'administrator';
   // Absent while pending, and for tasks decided before the runtime began stamping the completer into the memo.
   completedBy?: string;
   completedAt?: string;
@@ -680,6 +686,38 @@ export function useFailHumanTask(s: Scope) {
     mutationFn: ({ taskId, reason, details }: { taskId: string; reason: string; details?: unknown }) => wfRequest<unknown>(s.componentId, s.environmentId, `human-tasks/${encodeURIComponent(taskId)}/fail`, jsonBody({ method: 'POST' }, { reason, details })),
     onSuccess: () => invalidateHumanTasks(qc, s),
   });
+}
+
+// The task's new audience; a field left out keeps its current value on the runtime.
+export interface TaskAudience {
+  userRoles?: string[];
+  users?: string[];
+  excludedUsers?: string[];
+  excludedRoles?: string[];
+}
+
+// Administrator verbs; both task kinds accept them and the runtime records each in the task's history.
+export function useReassignTask(s: Scope, kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, audience }: { taskId: string; audience: TaskAudience }) =>
+      wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/reassign`, jsonBody({ method: 'POST' }, audience)),
+    onSuccess: () => invalidateHumanTasks(qc, s),
+  });
+}
+
+// `timeoutMillis` null clears the deadline; a number restarts it from now.
+export function useExtendTaskDeadline(s: Scope, kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, timeoutMillis }: { taskId: string; timeoutMillis: number | null }) =>
+      wfRequest<unknown>(s.componentId, s.environmentId, `${taskRoute(kind)}/${encodeURIComponent(taskId)}/deadline`, jsonBody({ method: 'POST' }, { timeoutMillis })),
+    onSuccess: () => invalidateHumanTasks(qc, s),
+  });
+}
+
+function taskRoute(kind: 'HUMAN_TASK' | 'REVIEW_ACTIVITY'): string {
+  return kind === 'REVIEW_ACTIVITY' ? 'review-activities' : 'human-tasks';
 }
 
 // ── Review activities ──
