@@ -3,6 +3,20 @@
 -- ============================================================================
 
 -- ============================================================================
+-- SESSION SETTINGS
+-- ============================================================================
+-- QUOTED_IDENTIFIER must be ON to create the persisted computed column on
+-- bi_service_resource_artifacts; SQL Server rejects it otherwise with
+-- "Msg 1934 ... CREATE TABLE failed because the following SET options have
+-- incorrect settings: 'QUOTED_IDENTIFIER'". Clients differ on the default --
+-- go-sqlcmd and SSMS have it ON, the ODBC sqlcmd has it OFF -- so set it here
+-- rather than relying on how the script happens to be invoked.
+
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+-- ============================================================================
 -- ORGANIZATIONS
 -- ============================================================================
 
