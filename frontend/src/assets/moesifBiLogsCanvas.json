@@ -10,7 +10,7 @@
           {
             "id": "runtimeId",
             "label": "Runtime",
-            "field": "metadata.icp_runtimeId.raw",
+            "field": "resource.icp.runtimeId.raw",
             "op": "contains",
             "type": "parentOptions",
             "visibility": "always",
@@ -74,7 +74,10 @@
           "trace_id",
           "log.severity",
           "resource",
-          "metadata.icp_runtimeId"
+          "resource.icp.runtimeId",
+          "metadata.module",
+          "metadata.error",
+          "request.body"
         ],
         "sort": [
           {
@@ -89,14 +92,51 @@
         "from": "-7d",
         "to": "now"
       },
-      "view": "events",
+      "view": "table",
       "funnel_query": {},
-      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=event_type.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=log",
+      "urlQuery": "?evtcf[filtersGroups][0][filters][0][id]=f0&evtcf[filtersGroups][0][filters][0][field]=event_type.raw&evtcf[filtersGroups][0][filters][0][name]=&evtcf[filtersGroups][0][filters][0][op]=contains&evtcf[filtersGroups][0][filters][0][value][0]=log&shown_fields[0]=request.time&shown_fields[1]=log.severity.text&shown_fields[2]=request.body._raw&shown_fields[3]=metadata.module&shown_fields[4]=resource.icp.runtimeId&column_settings[fieldNames][0]=request.time&column_settings[fieldNames][1]=log.severity.text&column_settings[fieldNames][2]=request.body._raw&column_settings[fieldNames][3]=metadata.module&column_settings[fieldNames][4]=resource.icp.runtimeId&column_settings[renames][0][label]=request.time&column_settings[renames][0][rename]=Time&column_settings[renames][1][label]=log.severity.text&column_settings[renames][1][rename]=Log%20Severity&column_settings[renames][2][label]=request.body._raw&column_settings[renames][2][rename]=Message&column_settings[renames][3][label]=metadata.module&column_settings[renames][3][rename]=Module&column_settings[renames][4][label]=resource.icp.runtimeId&column_settings[renames][4][rename]=Runtime",
       "viewerFilters": [],
       "analyticType": "evt_log",
-      "chartType": "log",
+      "chartType": "table",
       "settings": {
-        "shownFields": []
+        "shownFields": [
+          "request.time",
+          "log.severity.text",
+          "request.body._raw",
+          "metadata.module",
+          "resource.icp.runtimeId"
+        ],
+        "columnSettings": {
+          "fieldNames": [
+            "request.time",
+            "log.severity.text",
+            "request.body._raw",
+            "metadata.module",
+            "resource.icp.runtimeId"
+          ],
+          "renames": [
+            {
+              "label": "request.time",
+              "rename": "Time"
+            },
+            {
+              "label": "log.severity.text",
+              "rename": "Log Severity"
+            },
+            {
+              "label": "request.body._raw",
+              "rename": "Message"
+            },
+            {
+              "label": "metadata.module",
+              "rename": "Module"
+            },
+            {
+              "label": "resource.icp.runtimeId",
+              "rename": "Runtime"
+            }
+          ]
+        }
       }
     }
   ]
