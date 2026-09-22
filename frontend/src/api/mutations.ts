@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { gql } from './graphql';
 import type { GqlArtifact, GqlComponent, GqlEnvironment, GqlProject } from './queries';
-import { toBackendArtifactType } from './artifactToggleMutations';
+import { toBackendArtifactType, toggleStateValue, type ArtifactState } from './artifactToggleMutations';
 
 export interface CreateProjectInput {
   name: string;
@@ -187,7 +187,7 @@ export interface ArtifactStatusInput {
   componentId: string;
   artifactType: string;
   artifactName: string;
-  status: 'active' | 'inactive';
+  status: ArtifactState;
 }
 
 export interface ListenerStateInput {
@@ -306,7 +306,7 @@ export function useUpdateArtifactStatus() {
     onMutate: async (input) => {
       const scope = (q: { queryKey: readonly unknown[] }) => q.queryKey[2] === input.envId && q.queryKey[3] === input.componentId;
       await qc.cancelQueries({ queryKey: ['artifacts', input.artifactType], predicate: scope });
-      const newState = input.status === 'active' ? 'enabled' : 'disabled';
+      const newState = toggleStateValue(input.status);
       qc.setQueriesData<GqlArtifact[]>({ queryKey: ['artifacts', input.artifactType], predicate: scope }, (old) => old?.map((a) => (a.name === input.artifactName ? { ...a, state: newState } : a)));
     },
   });

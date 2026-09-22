@@ -1411,7 +1411,7 @@ input ArtifactStatusChangeInput {
   componentId: String!
   artifactType: String!
   artifactName: String!
-  status: String!
+  status: ArtifactState!
 }
 
 # Response for artifact status change
@@ -1429,7 +1429,7 @@ input ArtifactTracingChangeInput {
   environmentId: String!
   artifactType: String!
   artifactName: String!
-  trace: String!
+  trace: ArtifactState!
 }
 
 # Response for artifact tracing change
@@ -1448,7 +1448,7 @@ input ArtifactStatisticsChangeInput {
   environmentId: String!
   artifactType: String!
   artifactName: String!
-  statistics: String!
+  statistics: ArtifactState!
 }
 
 # Response for artifact statistics change

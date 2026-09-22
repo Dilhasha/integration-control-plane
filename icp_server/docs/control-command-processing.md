@@ -229,13 +229,13 @@ Intended states ensure that newly registered or reconnecting runtimes converge t
 ### MI Control Commands
 
 7. **Artifact status change via mutation (RUNNING runtime)**
-   - Call `updateArtifactStatus` with status="active" for a component with a RUNNING MI runtime.
+   - Call `updateArtifactStatus` with status=`ENABLED` for a component with a RUNNING MI runtime.
    - Verify a command is inserted with status=`sent` and `sent_at` is set.
    - Verify the intended state is recorded in `mi_artifact_intended_status`.
    - Verify an HTTP POST is fired to `/icp/artifacts/status`.
 
 8. **Artifact status change via mutation (OFFLINE runtime)**
-   - Call `updateArtifactStatus` with status="active" for a component with an OFFLINE MI runtime.
+   - Call `updateArtifactStatus` with status=`ENABLED` for a component with an OFFLINE MI runtime.
    - Verify a command is inserted with status=`pending` and `sent_at` is NULL.
    - Verify no HTTP POST is fired.
    - Verify the intended state is still recorded in `mi_artifact_intended_status`.
@@ -244,13 +244,13 @@ Intended states ensure that newly registered or reconnecting runtimes converge t
    - Verify the command status changes from `pending` to `sent`.
 
 9. **Artifact tracing change via mutation (RUNNING runtime)**
-   - Call `updateArtifactTracingStatus` with trace="enable" for a RUNNING MI runtime.
+   - Call `updateArtifactTracingStatus` with trace=`ENABLED` for a RUNNING MI runtime.
    - Verify a command is inserted with status=`sent` and `sent_at` is set.
    - Verify the intended state is recorded in `mi_artifact_intended_tracing`.
    - Verify an HTTP POST is fired to `/icp/artifacts/tracing`.
 
 10. **Artifact tracing change via mutation (OFFLINE runtime)**
-    - Call `updateArtifactTracingStatus` with trace="enable" for an OFFLINE MI runtime.
+    - Call `updateArtifactTracingStatus` with trace=`ENABLED` for an OFFLINE MI runtime.
     - Verify a command is inserted with status=`pending` and `sent_at` is NULL.
     - Verify no HTTP POST is fired.
     - Verify the command is delivered on the next heartbeat.
