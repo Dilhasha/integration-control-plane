@@ -240,7 +240,7 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
       const previousValue = tracingEnabled;
       setTracingEnabled(pendingToggle.checked);
       updateTracingStatus.mutate(
-        { envId, componentId, artifactType, artifactName, trace: pendingToggle.checked ? 'enable' : 'disable' },
+        { envId, componentId, artifactType, artifactName, trace: pendingToggle.checked ? 'ENABLED' : 'DISABLED' },
         {
           onError: () => setTracingEnabled(previousValue),
           onSettled: () => queryClient.invalidateQueries({ queryKey: artifactQueryKey }),
@@ -250,7 +250,7 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
       const previousValue = statisticsEnabled;
       setStatisticsEnabled(pendingToggle.checked);
       updateStatisticsStatus.mutate(
-        { envId, componentId, artifactType, artifactName, statistics: pendingToggle.checked ? 'enable' : 'disable' },
+        { envId, componentId, artifactType, artifactName, statistics: pendingToggle.checked ? 'ENABLED' : 'DISABLED' },
         {
           onError: () => setStatisticsEnabled(previousValue),
           onSettled: () => queryClient.invalidateQueries({ queryKey: artifactQueryKey }),
@@ -260,7 +260,7 @@ function EntryPointDetail({ selected, onOpenDrawerTab }: { selected: SelectedArt
       const previousValue = statusEnabled;
       setStatusEnabled(pendingToggle.checked);
       updateArtifactStatus.mutate(
-        { envId, componentId, artifactType, artifactName, status: pendingToggle.checked ? 'active' : 'inactive' },
+        { envId, componentId, artifactType, artifactName, status: pendingToggle.checked ? 'ENABLED' : 'DISABLED' },
         {
           onError: () => setStatusEnabled(previousValue),
           onSettled: () => queryClient.invalidateQueries({ queryKey: artifactQueryKey }),

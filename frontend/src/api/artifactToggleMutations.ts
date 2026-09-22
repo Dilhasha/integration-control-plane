@@ -16,12 +16,25 @@ const UPDATE_ARTIFACT_STATISTICS_STATUS = `
     }
   }`;
 
+/**
+ * Desired state for an artifact toggle, matching the backend's `ArtifactState`
+ * GraphQL enum. Written as the enum NAME: the queries report `enabled` but the
+ * mutations take `ENABLED`, because Ballerina serialises an enum member by its
+ * value and matches it by name.
+ */
+export type ArtifactState = 'ENABLED' | 'DISABLED';
+
+/** The value the artifact queries report for a given toggle state. */
+export function toggleStateValue(state: ArtifactState): 'enabled' | 'disabled' {
+  return state === 'ENABLED' ? 'enabled' : 'disabled';
+}
+
 export interface ArtifactToggleStatusInput {
   envId: string;
   componentId: string;
   artifactType: string;
   artifactName: string;
-  value: 'enable' | 'disable';
+  value: ArtifactState;
 }
 
 export interface ArtifactTracingInput {
@@ -29,7 +42,7 @@ export interface ArtifactTracingInput {
   componentId: string;
   artifactType: string;
   artifactName: string;
-  trace: 'enable' | 'disable';
+  trace: ArtifactState;
 }
 
 export interface ArtifactStatisticsInput {
@@ -37,7 +50,7 @@ export interface ArtifactStatisticsInput {
   componentId: string;
   artifactType: string;
   artifactName: string;
-  statistics: 'enable' | 'disable';
+  statistics: ArtifactState;
 }
 
 export type ArtifactToggleKind = 'tracing' | 'statistics';
@@ -90,7 +103,7 @@ export function useUpdateArtifactToggleStatus(kind: ArtifactToggleKind) {
       const filters = { queryKey: ['artifacts', input.artifactType] as const, predicate: scope };
       await qc.cancelQueries(filters);
       const previous = qc.getQueriesData<GqlArtifact[]>(filters);
-      const newValue = input.value === 'enable' ? 'enabled' : 'disabled';
+      const newValue = toggleStateValue(input.value);
       qc.setQueriesData<GqlArtifact[]>(filters, (old) => old?.map((a) => (a.name === input.artifactName ? { ...a, [config.cacheField]: newValue } : a)));
       return { previous };
     },

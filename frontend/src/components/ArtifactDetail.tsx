@@ -192,7 +192,7 @@ function SelectedTypeArtifacts({
       });
     } else {
       // Direct toggle for other artifact types
-      toggleStatus.mutate({ envId, componentId, artifactType, artifactName: artifact.name?.toString() ?? '', status: enabled ? 'inactive' : 'active' });
+      toggleStatus.mutate({ envId, componentId, artifactType, artifactName: artifact.name?.toString() ?? '', status: enabled ? 'DISABLED' : 'ENABLED' });
     }
   };
 
@@ -204,7 +204,7 @@ function SelectedTypeArtifacts({
         componentId,
         artifactType,
         artifactName: artifact.name?.toString() ?? '',
-        trace: enabled ? 'disable' : 'enable',
+        trace: enabled ? 'DISABLED' : 'ENABLED',
       },
       {
         onSettled: () => {
@@ -223,7 +223,7 @@ function SelectedTypeArtifacts({
         componentId,
         artifactType,
         artifactName: artifact.name?.toString() ?? '',
-        statistics: enabled ? 'disable' : 'enable',
+        statistics: enabled ? 'DISABLED' : 'ENABLED',
       },
       {
         onSettled: () => {

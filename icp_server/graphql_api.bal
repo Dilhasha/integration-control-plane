@@ -3129,7 +3129,7 @@ service /graphql on graphqlListener {
         }
 
         types:ReconcileArtifactKey artifact = {artifactName: input.artifactName, artifactType: input.artifactType};
-        map<string> desiredProps = {"status": input.status == "active" ? "enabled" : "disabled"};
+        map<string> desiredProps = {"status": input.status};
         [int, int] counts = check reconcilePerEnv(runtimes, input.componentId, artifact, desiredProps, sync:dispatchMI);
 
         storage:logAuditEvent(storage:AUDIT_ARTIFACT_STATUS_CHANGE, userId = userContext.userId,
@@ -3174,7 +3174,7 @@ service /graphql on graphqlListener {
         }
 
         types:ReconcileArtifactKey artifact = {artifactName: input.artifactName, artifactType: input.artifactType};
-        map<string> desiredProps = {"tracing": input.trace == "enable" ? "enabled" : "disabled"};
+        map<string> desiredProps = {"tracing": input.trace};
         [int, int] counts = check reconcilePerEnv(runtimes, input.componentId, artifact, desiredProps, sync:dispatchMI);
 
         return {
@@ -3220,7 +3220,7 @@ service /graphql on graphqlListener {
         }
 
         types:ReconcileArtifactKey artifact = {artifactName: input.artifactName, artifactType: input.artifactType};
-        map<string> desiredProps = {"statistics": input.statistics == "enable" ? "enabled" : "disabled"};
+        map<string> desiredProps = {"statistics": input.statistics};
         [int, int] counts = check reconcilePerEnv(runtimes, input.componentId, artifact, desiredProps, sync:dispatchMI);
 
         return {

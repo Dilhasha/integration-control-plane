@@ -2608,11 +2608,25 @@ public type DataServiceOverview record {|
 |};
 
 // Input type for changing artifact status
+//
+// `status`, and the `trace`/`statistics` fields below, are typed as the same
+// ArtifactState the artifact queries report, rather than as a bare string.
+// These used to be strings mapped with a ternary that had no else-error
+// branch, so any unrecognised value — a typo, a case difference, or the
+// `enabled`/`disabled` the queries themselves return — silently meant
+// "disable" while the mutation still reported SUCCESS. As an enum, an
+// unrecognised value is rejected during schema validation, before the
+// resolver runs.
+//
+// Note the enum is written as `ENABLED`/`DISABLED` on input: Ballerina
+// serialises an enum member by its value on the way out, but matches it by
+// name on the way in. So a value read from a query still is not accepted
+// verbatim — it is now a loud validation error rather than a silent inversion.
 public type ArtifactStatusChangeInput record {|
     string componentId;
     string artifactType; // e.g., "proxy-service", "endpoint", "inbound-endpoint", "message-processor"
     string artifactName;
-    string status; // "active" or "inactive"
+    ArtifactState status;
 |};
 
 public enum Status {
@@ -2636,7 +2650,7 @@ public type ArtifactTracingChangeInput record {|
     string environmentId;
     string artifactType; // e.g., "proxy-service"
     string artifactName;
-    string trace; // "enable" or "disable"
+    ArtifactState trace;
 |};
 
 // Response for artifact tracing change
@@ -2654,7 +2668,7 @@ public type ArtifactStatisticsChangeInput record {|
     string environmentId;
     string artifactType; // e.g., "proxy-service"
     string artifactName;
-    string statistics; // "enable" or "disable"
+    ArtifactState statistics;
 |};
 
 // Response for artifact statistics change
