@@ -482,7 +482,9 @@ function testCreateComponentAcceptsEveryIntegrationType() returns error? {
         ["miCronjob", "MI"],
         ["ballerinaEventHandler", "BI"],
         ["miEventHandler", "MI"],
-        ["ballerinaWorkflow", "BI"]
+        ["ballerinaWorkflow", "BI"],
+        ["unspecified", "BI"],
+        ["unspecified", "MI"]
     ];
 
     foreach int i in 0 ..< displayTypes.length() {
@@ -535,4 +537,49 @@ function testCreateComponentRejectsUnknownIntegrationType() returns error? {
     // Assert on the message too, so an unrelated failure (permissions, validation) cannot pass.
     test:assertTrue(response.toJsonString().includes("Unsupported integration type"),
             string `Rejection must come from the display-type allowlist, got: ${response.toJsonString()}`);
+}
+
+// Clearing a specific type must also clear its subtype, for both runtimes.
+@test:Config {
+    groups: ["component-graphql", "update-component"]
+}
+function testUpdateComponentToUnspecifiedType() returns error? {
+    string createMutation = string `
+        mutation CreateComponent($component: ComponentInput!) {
+            createComponent(component: $component) { id }
+        }
+    `;
+    string updateMutation = string `
+        mutation UpdateComponent($component: ComponentUpdateInput!) {
+            updateComponent(component: $component) { displayType componentSubType }
+        }
+    `;
+
+    foreach string runtimeType in ["BI", "MI"] {
+        json createdResponse = check executeGraphQL(createMutation, project1AdminToken, {
+            component: {
+                name: string `test-clear-type-${runtimeType.toLowerAscii()}`,
+                displayName: "Clear integration type",
+                description: "Integration containing multiple types",
+                projectId: PROJECT_1_ID,
+                componentType: runtimeType,
+                displayType: runtimeType == "BI" ? "ballerinaService" : "miApiService",
+                componentSubType: "aiAgent"
+            }
+        });
+        test:assertFalse(createdResponse.errors is json, "Creating a typed integration must succeed");
+        json created = check (check createdResponse.data).createComponent;
+        string componentId = check created.id;
+
+        json updatedResponse = check executeGraphQL(updateMutation, project1AdminToken, {
+            component: {
+                id: componentId,
+                displayType: "unspecified"
+            }
+        });
+        test:assertFalse(updatedResponse.errors is json, "Clearing the integration type must succeed");
+        json updated = check (check updatedResponse.data).updateComponent;
+        test:assertEquals(check updated.displayType, "unspecified");
+        test:assertEquals(check updated.componentSubType, ());
+    }
 }

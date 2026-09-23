@@ -37,11 +37,13 @@ const string GENERIC_DISPLAY_TYPE = "service";
 // workflow integration that carries the generic type shows no workflow features.
 const string WORKFLOW_DISPLAY_TYPE = "ballerinaWorkflow";
 
+// "unspecified" records an explicit choice to leave the integration unclassified.
+// Keep it distinct from the legacy "service" default used by older clients.
 final readonly & map<string[]> SUPPORTED_DISPLAY_TYPES_BY_RUNTIME = {
     // The workflow engine and its management API are Ballerina-only, so
     // `ballerinaWorkflow` has no MI counterpart.
-    "BI": ["service", "ballerinaService", "scheduledTask", "ballerinaEventHandler", "ballerinaWorkflow"],
-    "MI": ["service", "miApiService", "miCronjob", "miEventHandler"]
+    "BI": ["unspecified", "service", "ballerinaService", "scheduledTask", "ballerinaEventHandler", "ballerinaWorkflow"],
+    "MI": ["unspecified", "service", "miApiService", "miCronjob", "miEventHandler"]
 };
 
 // Subtypes for the integration types that share a generic service display_type and
