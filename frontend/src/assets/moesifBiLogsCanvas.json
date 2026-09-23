@@ -99,21 +99,9 @@
       "analyticType": "evt_log",
       "chartType": "table",
       "settings": {
-        "shownFields": [
-          "request.time",
-          "log.severity.text",
-          "request.body._raw",
-          "metadata.module",
-          "resource.icp.runtimeId"
-        ],
+        "shownFields": ["request.time", "log.severity.text", "request.body._raw", "metadata.module", "resource.icp.runtimeId"],
         "columnSettings": {
-          "fieldNames": [
-            "request.time",
-            "log.severity.text",
-            "request.body._raw",
-            "metadata.module",
-            "resource.icp.runtimeId"
-          ],
+          "fieldNames": ["request.time", "log.severity.text", "request.body._raw", "metadata.module", "resource.icp.runtimeId"],
           "renames": [
             {
               "label": "request.time",

@@ -82,7 +82,8 @@ function BiLogsPublishInstructions(): JSX.Element {
         <strong>Restart the runtime</strong> after applying this configuration.
       </Alert>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Download the Fluent Bit bundle, set the Collector Application ID, service name, environment, BI log directory and ICP_RUNTIME_ID in <strong>.env</strong>, then run <strong>docker compose up -d</strong>. Run one sidecar per runtime. On Windows, use a Windows-style path and enable the drive under Docker Desktop file sharing.
+        Download the Fluent Bit bundle, set the Collector Application ID, service name, environment, BI log directory and ICP_RUNTIME_ID in <strong>.env</strong>, then run <strong>docker compose up -d</strong>. Run one sidecar per runtime. On Windows, use a
+        Windows-style path and enable the drive under Docker Desktop file sharing.
       </Typography>
       <Button size="small" variant="outlined" startIcon={<Download size={14} />} onClick={() => downloadMoesifBiLogsFluentBitFiles('<MOESIF_COLLECTOR_APPLICATION_ID>')} sx={{ mt: 1, alignSelf: 'flex-start', py: 0.25, px: 1, fontSize: 12 }}>
         Download Fluent Bit config
