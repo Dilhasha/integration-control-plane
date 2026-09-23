@@ -15,6 +15,8 @@
 // under the License.
 
 import icp_server.auth;
+import icp_server.storage;
+import icp_server.types;
 
 import ballerina/test;
 
@@ -581,5 +583,36 @@ function testUpdateComponentToUnspecifiedType() returns error? {
         json updated = check (check updatedResponse.data).updateComponent;
         test:assertEquals(check updated.displayType, "unspecified");
         test:assertEquals(check updated.componentSubType, ());
+    }
+}
+
+// Add Runtime auto-creates integrations without a user-selected classification.
+@test:Config {
+    groups: ["component-graphql", "runtime-registration"]
+}
+function testRuntimeRegistrationDefaultsToUnspecifiedType() returns error? {
+    foreach string runtimeType in ["BI", "MI"] {
+        string name = string `test-runtime-untyped-${runtimeType.toLowerAscii()}`;
+        string componentId = check storage:resolveOrCreateComponent(
+            PROJECT_1_ID, name, runtimeType, SUPER_ADMIN_USER_ID);
+        types:Component created = check storage:getComponentById(componentId);
+        test:assertEquals(created.displayType, "unspecified");
+        test:assertEquals(created.componentType, runtimeType);
+        test:assertEquals(created.componentSubType, ());
+
+        // Workflow discovery must not replace the unselected state.
+        check storage:promoteToWorkflowIntegration(componentId);
+        types:Component discovered = check storage:getComponentById(componentId);
+        test:assertEquals(discovered.displayType, "unspecified");
+
+        string selectedType = runtimeType == "BI" ? "ballerinaService" : "miApiService";
+        check storage:updateComponent(componentId, (), (), (), SUPER_ADMIN_USER_ID, selectedType, "aiAgent");
+        string resolvedId = check storage:resolveOrCreateComponent(
+            PROJECT_1_ID, name, runtimeType, SUPER_ADMIN_USER_ID);
+        test:assertEquals(resolvedId, componentId);
+        types:Component existing = check storage:getComponentById(resolvedId);
+        test:assertEquals(existing.displayType, selectedType,
+            "Registering another runtime must preserve the user-selected type");
+        test:assertEquals(existing.componentSubType, "aiAgent");
     }
 }
