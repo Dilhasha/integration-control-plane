@@ -21,8 +21,9 @@ import { downloadConfigBundle } from './moesifConfigBundle';
 // MI already writes server logs to <MI_HOME>/repository/logs/wso2carbon.log.
 // A Fluent Bit sidecar tails that file and sends records to Moesif over OTLP,
 // following the BI logs setup. No MI runtime configuration change is needed.
-// Each sidecar adds its ICP runtime id as a log attribute (icp_runtimeId),
-// which Moesif stores as metadata.icp_runtimeId for the logs canvas filter.
+// Each sidecar adds its ICP runtime id as the OTLP resource attribute
+// icp.runtimeId, which Moesif stores as resource.icp.runtimeId for the logs
+// canvas filter (the same attribute the BI logs sidecar sets).
 
 const MI_LOGS_FLUENT_BIT_YAML = `service:
   flush: 5
@@ -44,14 +45,7 @@ pipeline:
 
       processors:
         logs:
-          # Keep the original line as the body and the runtime id as a
-          # queryable log attribute for the ICP logs dashboard.
-          - name: content_modifier
-            action: upsert
-            context: body
-            key: icp_runtimeId
-            value: \${ICP_RUNTIME_ID}
-
+          # Wrap records in an OTLP envelope so resource attributes can be set.
           - name: opentelemetry_envelope
 
           - name: content_modifier
@@ -59,6 +53,15 @@ pipeline:
             context: otel_resource_attributes
             key: service.name
             value: WSO2-MI
+
+          # This sidecar tails exactly one runtime, so its id is set once as a
+          # resource attribute, matching the BI logs sidecar and the Runtime
+          # filter on the shared ICP logs canvas.
+          - name: content_modifier
+            action: upsert
+            context: otel_resource_attributes
+            key: icp.runtimeId
+            value: \${ICP_RUNTIME_ID}
 
   outputs:
     - name: opentelemetry
@@ -109,7 +112,7 @@ MOESIF_APPLICATION_ID=${applicationId}
 MI_HOME=<MI_HOME>
 
 # The ICP runtime id whose logs this sidecar ships, copied from the runtime's
-# details in ICP. Sent on every record as the icp_runtimeId log attribute and
+# details in ICP. Sent on every record as the icp.runtimeId resource attribute and
 # matched by the Runtime filter on the ICP logs dashboard, so logs stay
 # attributed to the right runtime. Run one sidecar per runtime.
 ICP_RUNTIME_ID=<RUNTIME_ID>

@@ -31,10 +31,9 @@ import { downloadConfigBundle } from './moesifConfigBundle';
 //                          ID, service name, environment,
 //                          log dir)
 //
-// Parsed BI log fields are promoted to OTLP log attributes. This includes the
-// `icp.runtimeId` emitted by the runtime, allowing the logs canvas to scope
-// itself to an integration's runtimes without a sidecar-specific runtime-id
-// setting.
+// Parsed BI log fields are promoted to OTLP log attributes. The sidecar also
+// adds `icp.runtimeId` as an OTLP resource attribute, allowing the logs canvas
+// to scope itself to an integration's runtimes.
 
 // docker-compose.yaml: runs the Fluent Bit sidecar. Mounts the BI log directory
 // (BALLERINA_LOG_DIR) read-only into the container and passes the Moesif app id,
@@ -53,6 +52,7 @@ const BI_LOGS_DOCKER_COMPOSE_YAML = `services:
       - MOESIF_HOST=\${MOESIF_HOST:-api.moesif.net}
       - OTEL_SERVICE_NAME=\${OTEL_SERVICE_NAME:-ballerina-service}
       - DEPLOYMENT_ENVIRONMENT=\${DEPLOYMENT_ENVIRONMENT:-prod}
+      - ICP_RUNTIME_ID=\${ICP_RUNTIME_ID:-unknown}
     # Fluent Bit's HTTP server (health endpoint) listens on 2020 inside the
     # container. The fluent/fluent-bit image is distroless and ships no HTTP
     # client (curl/wget), so a container-level healthcheck can't be run inside
@@ -145,6 +145,16 @@ pipeline:
             key: deployment.environment
             value: \${DEPLOYMENT_ENVIRONMENT}
 
+          # ICP runtime identity. The ICP/OpenSearch pipeline gets this from an
+          # \`icp.runtimeId\` key the ICP-enabled runtime stamps on every log line;
+          # this sidecar tails exactly one runtime, so it is set once here as a
+          # resource attribute instead of being re-parsed per record.
+          - name: content_modifier
+            action: upsert
+            context: otel_resource_attributes
+            key: icp.runtimeId
+            value: \${ICP_RUNTIME_ID}
+
           # The parser already promoted "time" to the OTLP Timestamp, so drop it
           # from the body to avoid a duplicate log attribute below.
           - name: content_modifier
@@ -165,8 +175,9 @@ pipeline:
       # -> SeverityNumber (== OTel Collector severity mapping).
       logs_severity_text_message_key: level
       logs_severity_number_message_key: severity_number
-      # Promote remaining parsed JSON keys (including icp.runtimeId, module,
-      # traceId, spanId and error fields) to queryable OTLP log attributes.
+      # Promote remaining parsed JSON keys (module, traceId, spanId and error
+      # fields) to queryable OTLP log attributes. A per-line icp.runtimeId, if
+      # the runtime emits one, is promoted here too and overrides nothing.
       logs_body_key_attributes: on
       header:
         - X-Moesif-Application-Id \${MOESIF_APPLICATION_ID}
@@ -202,6 +213,11 @@ MOESIF_HOST=api.moesif.net
 
 # OTLP resource attribute service.name — set to your integration's service name
 OTEL_SERVICE_NAME=<SERVICE_NAME>
+
+# OTLP resource attribute icp.runtimeId — the ID of the ICP runtime whose
+# logs this sidecar tails. Copy it from the ICP console (Runtimes page) or from
+# the runtime's ICP agent configuration. One sidecar per runtime.
+ICP_RUNTIME_ID=<RUNTIME_ID>
 
 # OTLP resource attribute deployment.environment — set to the environment name
 DEPLOYMENT_ENVIRONMENT=<ENVIRONMENT>
