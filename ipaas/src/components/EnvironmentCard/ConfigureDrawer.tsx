@@ -33,6 +33,8 @@ import { toEndpointOptions } from '../../utils/endpoints';
 import { EndpointCard, VISIBILITY_OPTS } from '../EndpointCard';
 import { ConfigForm, type BaseType, type LinkingInfo, type JSONSchema } from '../SchemaConfigForm';
 import ImportConfigTomlButton from '../ImportConfigTomlButton';
+import MiConfigureDrawer from './MiConfigureDrawer';
+import { runtimeFromDisplayType } from '../../utils/identifyIntegration';
 
 // ── Step indicator ────────────────────────────────────────────────────────────
 
@@ -825,6 +827,11 @@ export interface ConfigureDrawerProps {
 }
 
 export default function ConfigureDrawer(props: ConfigureDrawerProps) {
+  // MI has no configuration schema: it takes free-form env vars and secrets.
+  if (runtimeFromDisplayType(props.displayType ?? '') === 'mi') {
+    // envId, not envTemplateId: MI configs live on the environment's ReleaseBinding.
+    return <MiConfigureDrawer open={props.open} onClose={props.onClose} onSaved={props.onSaved} projectId={props.projectId} componentId={props.componentId} envId={props.envId} releaseId={props.releaseId} />;
+  }
   if (props.isAutomation) {
     return (
       <AutomationConfigureDrawer
