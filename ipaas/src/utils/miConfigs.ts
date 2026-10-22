@@ -39,7 +39,10 @@ export function toMiConfig(groups: EnvGroup[], envVarValues: Record<string, stri
   const envGroup = groups.find((g) => g.name === MI_ENV_VARS_GROUP && !g.sensitive);
   const envVars = (envGroup?.keys ?? []).map((key) => ({ key, value: envVarValues[key] ?? '' }));
   const secrets = groups
-    .filter((g) => g.sensitive && g.name.startsWith(MI_SECRET_GROUP_PREFIX))
+    // Only groups named exactly as miSecretGroup names them: writes and deletes address
+    // a secret by that name, so a look-alike group (e.g. `mi-secret-db` with two keys)
+    // is left to the Configs & Secrets page.
+    .filter((g) => g.sensitive && g.keys.length === 1 && g.name === miSecretGroup(g.keys[0]))
     .flatMap((g) => g.keys)
     .sort();
   return { envVars, secrets };

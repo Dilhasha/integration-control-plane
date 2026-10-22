@@ -38,6 +38,12 @@ describe('toMiConfig', () => {
     const groups = [group('db-settings', false, ['DB_URL']), group('db-creds', true, ['DB_PASSWORD'])];
     expect(toMiConfig(groups, {})).toEqual({ envVars: [], secrets: [] });
   });
+
+  it('ignores secret groups that only look like MI ones', () => {
+    // Prefix matches but the name is not miSecretGroup(key): multiple keys, or a key that differs.
+    const groups = [group('mi-secret-db', true, ['DB_USER', 'DB_PASS']), group('mi-secret-OTHER', true, ['TOKEN']), group(miSecretGroup('API_KEY'), true, ['API_KEY'])];
+    expect(toMiConfig(groups, {}).secrets).toEqual(['API_KEY']);
+  });
 });
 
 describe('miConfigCount', () => {
