@@ -58,12 +58,14 @@ export const miConfigCount = (config: MiConfig): number => config.envVars.length
  */
 export function validateMiConfigDraft(draft: MiConfigDraft, storedSecrets: string[]): Map<string, string> {
   const errors = new Map<string, string>();
-  const seen = new Set<string>();
+  // Every row of a duplicated key is flagged, not just the later one: the row the user
+  // is typing in may be the earlier one (an env var clashing with a stored secret).
+  const uses = new Map<string, number>();
+  [...draft.envVars, ...draft.secrets].forEach(({ key }) => uses.set(key, (uses.get(key) ?? 0) + 1));
   const check = (id: string, key: string) => {
     const keyErr = validateConfigKey(key);
     if (keyErr) errors.set(id, keyErr);
-    else if (seen.has(key)) errors.set(id, `'${key}' is defined more than once.`);
-    seen.add(key);
+    else if ((uses.get(key) ?? 0) > 1) errors.set(id, `'${key}' is defined more than once.`);
   };
   draft.envVars.forEach((e, i) => check(`env:${i}`, e.key));
   draft.secrets.forEach((s, i) => {

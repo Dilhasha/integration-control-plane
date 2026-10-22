@@ -227,6 +227,7 @@ export default function MiConfigureDrawer({ open, onClose, onSaved, projectId, c
         </Alert>
         {renderSection('Environment Variables', 'Plain values, visible to anyone who can configure the integration.', envVars, setEnvVars, 'env', 'Add Environment Variable')}
         {renderSection('Secrets', 'Stored encrypted. Values cannot be viewed after saving.', secrets, setSecrets, 'secret', 'Add Secret')}
+        {showErrors && errors.size > 0 && <Alert severity="error">Fix the highlighted keys before saving.</Alert>}
         {saveError && <Alert severity="error">{saveError}</Alert>}
       </>
     );

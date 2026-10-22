@@ -63,8 +63,10 @@ describe('validateMiConfigDraft', () => {
     expect(errors.has('env:0')).toBe(true);
   });
 
-  it('rejects a key used twice, even across env vars and secrets', () => {
-    const errors = validateMiConfigDraft({ envVars: [{ key: 'KEY', value: 'x' }], secrets: [{ key: 'KEY', value: 'y' }] }, []);
+  it('flags every row of a key used twice, even across env vars and secrets', () => {
+    // The env var is the row being typed; the clashing secret is already stored.
+    const errors = validateMiConfigDraft({ envVars: [{ key: 'KEY', value: 'x' }], secrets: [{ key: 'KEY', value: '' }] }, ['KEY']);
+    expect(errors.get('env:0')).toMatch(/more than once/);
     expect(errors.get('secret:0')).toMatch(/more than once/);
   });
 
