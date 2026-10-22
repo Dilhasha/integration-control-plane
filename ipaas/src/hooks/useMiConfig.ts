@@ -45,17 +45,23 @@ export function useSaveMiConfig(projectId: string, componentId: string, envId: s
   return useMutation({
     // Sequential on purpose: each write is a read-modify-write of the same
     // ReleaseBinding annotation in the BFF, so parallel writes would race.
+    // Removals go before writes: deleting a group also drops its keys from the
+    // container env, so a key moved between groups (a secret turned into an env
+    // var, or back) must leave its old group before its new one sets it.
     mutationFn: async (plan: MiConfigSavePlan) => {
+      for (const key of plan.secretsToDelete) await deleteEnvGroup(projectId, componentId, envId, miSecretGroup(key));
       if (plan.envVars === null) await deleteEnvGroup(projectId, componentId, envId, MI_ENV_VARS_GROUP);
       else if (plan.envVars) await putEnvGroup(projectId, componentId, envId, MI_ENV_VARS_GROUP, false, plan.envVars);
       for (const s of plan.secretsToPut) await putEnvGroup(projectId, componentId, envId, miSecretGroup(s.key), true, { [s.key]: s.value });
-      for (const key of plan.secretsToDelete) await deleteEnvGroup(projectId, componentId, envId, miSecretGroup(key));
     },
     // Settled, not success: a partial failure has still changed some groups.
+    // The miConfig refetch is returned so the caller's onSuccess (which closes the
+    // drawer) runs only after fresh data is in; a quick reopen would otherwise seed
+    // from the stale cache, and its next save would undo this one.
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ['miConfig', projectId, componentId, envId] });
       qc.invalidateQueries({ queryKey: ['devopsConfigs'] });
       qc.invalidateQueries({ queryKey: ['componentDeployment'] });
+      return qc.invalidateQueries({ queryKey: ['miConfig', projectId, componentId, envId] });
     },
   });
 }
