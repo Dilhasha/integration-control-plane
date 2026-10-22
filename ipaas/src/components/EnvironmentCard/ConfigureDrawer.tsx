@@ -830,7 +830,19 @@ export default function ConfigureDrawer(props: ConfigureDrawerProps) {
   // MI has no configuration schema: it takes free-form env vars and secrets.
   if (runtimeFromDisplayType(props.displayType ?? '') === 'mi') {
     // envId, not envTemplateId: MI configs live on the environment's ReleaseBinding.
-    return <MiConfigureDrawer open={props.open} onClose={props.onClose} onSaved={props.onSaved} projectId={props.projectId} componentId={props.componentId} envId={props.envId} releaseId={props.releaseId} />;
+    // Keyed by target so a new component/env remounts with fresh rows, never the previous target's.
+    return (
+      <MiConfigureDrawer
+        key={`${props.projectId}/${props.componentId}/${props.envId}`}
+        open={props.open}
+        onClose={props.onClose}
+        onSaved={props.onSaved}
+        projectId={props.projectId}
+        componentId={props.componentId}
+        envId={props.envId}
+        releaseId={props.releaseId}
+      />
+    );
   }
   if (props.isAutomation) {
     return (
