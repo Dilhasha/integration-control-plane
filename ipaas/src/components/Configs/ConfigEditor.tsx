@@ -109,16 +109,20 @@ export default function ConfigEditor({ ctx, existing, onBack, onSaved, onError }
   const nameErr = validateDisplayName(name);
   const draftKeyErr = draftKey ? validateConfigKey(draftKey) : '';
   const pathErr = validateMountPath(mountPath);
+  // A key/value typed but not yet added is saved with the rest, as if Add was clicked,
+  // instead of being dropped silently.
+  const pendingRow = kind === 'envVars' && draftKey.trim() ? { key: draftKey.trim(), value: draftValue } : null;
+  const effectiveRows = pendingRow ? [...rows, pendingRow] : rows;
   // Secret values are write-only, so existing-secret rows load blank and must be
   // re-entered — never persist a secret env var with an empty value.
-  const hasEmptySecretValue = isSecret && kind === 'envVars' && rows.some((r) => r.value === '');
-  const canSave = !save.isPending && !nameErr && !hasEmptySecretValue && (kind === 'envVars' ? rows.length > 0 : !pathErr && fileContent.trim().length > 0);
+  const hasEmptySecretValue = isSecret && kind === 'envVars' && effectiveRows.some((r) => r.value === '');
+  const canSave = !save.isPending && !nameErr && !hasEmptySecretValue && (kind === 'envVars' ? effectiveRows.length > 0 : !pathErr && fileContent.trim().length > 0);
   // Why Save is disabled, for causes no field already explains (a filled-in field shows its own error).
   const blockedReason = (() => {
     if (canSave || save.isPending) return '';
     if (!name.trim()) return 'Enter a display name.';
     if (hasEmptySecretValue) return 'Secret values are never shown. Re-enter every value to save.';
-    if (kind === 'envVars' && rows.length === 0) return draftKey.trim() ? 'Click Add to include the new variable.' : 'Add at least one variable.';
+    if (kind === 'envVars' && effectiveRows.length === 0) return 'Add at least one variable.';
     if (kind === 'fileMount' && !mountPath.trim()) return 'Enter the mount path.';
     if (kind === 'fileMount' && !fileContent.trim()) return 'Enter the file content.';
     return '';
@@ -162,7 +166,11 @@ export default function ConfigEditor({ ctx, existing, onBack, onSaved, onError }
   const handleSave = () => {
     setError('');
     if (!canSave) return;
-    const data = kind === 'envVars' ? Object.fromEntries(rows.map((r) => [r.key, r.value])) : { data: fileContent };
+    if (pendingRow) {
+      if (draftKeyErr) return setError(draftKeyErr);
+      if (rows.some((r) => r.key === pendingRow.key)) return setError('A variable with this key already exists.');
+    }
+    const data = kind === 'envVars' ? Object.fromEntries(effectiveRows.map((r) => [r.key, r.value])) : { data: fileContent };
     save.mutate(
       {
         componentId: ctx.componentId,
