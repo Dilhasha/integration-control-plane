@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import { Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, IconButton, Paper, Stack, Typography } from '@wso2/oxygen-ui';
+import { Alert, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, FormControlLabel, IconButton, Paper, Stack, Typography } from '@wso2/oxygen-ui';
 import TextField from '../common/TextField';
 import { ArrowLeft, Trash2, Upload } from '@wso2/oxygen-ui-icons-react';
 import BusyFields from '../common/BusyFields';
@@ -93,6 +93,9 @@ export default function ConfigEditor({ ctx, existing, onBack, onSaved, onError }
   const [mountPath, setMountPath] = useState(existing?.mount.mount_path ?? '');
   const [fileContent, setFileContent] = useState('');
   const [error, setError] = useState('');
+  // Set by any user edit (not the prefill), so Back can warn before discarding it.
+  const [dirty, setDirty] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
   const envImportRef = useRef<HTMLInputElement>(null);
   const fileUploadRef = useRef<HTMLInputElement>(null);
 
@@ -110,6 +113,18 @@ export default function ConfigEditor({ ctx, existing, onBack, onSaved, onError }
   // re-entered — never persist a secret env var with an empty value.
   const hasEmptySecretValue = isSecret && kind === 'envVars' && rows.some((r) => r.value === '');
   const canSave = !save.isPending && !nameErr && !hasEmptySecretValue && (kind === 'envVars' ? rows.length > 0 : !pathErr && fileContent.trim().length > 0);
+  // Why Save is disabled, for causes no field already explains (a filled-in field shows its own error).
+  const blockedReason = (() => {
+    if (canSave || save.isPending) return '';
+    if (!name.trim()) return 'Enter a display name.';
+    if (hasEmptySecretValue) return 'Secret values are never shown. Re-enter every value to save.';
+    if (kind === 'envVars' && rows.length === 0) return draftKey.trim() ? 'Click Add to include the new variable.' : 'Add at least one variable.';
+    if (kind === 'fileMount' && !mountPath.trim()) return 'Enter the mount path.';
+    if (kind === 'fileMount' && !fileContent.trim()) return 'Enter the file content.';
+    return '';
+  })();
+
+  const handleBack = () => (dirty ? setConfirmLeave(true) : onBack());
 
   const addRow = () => {
     const keyErr = validateConfigKey(draftKey);
@@ -166,8 +181,8 @@ export default function ConfigEditor({ ctx, existing, onBack, onSaved, onError }
   };
 
   return (
-    <Box sx={{ maxWidth: 720, '& .MuiFormLabel-asterisk': { color: 'error.main' } }}>
-      <Button size="small" startIcon={<ArrowLeft size={14} />} onClick={onBack} sx={{ mb: 2 }}>
+    <Box sx={{ maxWidth: 720, '& .MuiFormLabel-asterisk': { color: 'error.main' } }} onChangeCapture={() => setDirty(true)}>
+      <Button size="small" startIcon={<ArrowLeft size={14} />} onClick={handleBack} sx={{ mb: 2 }}>
         Back to Configs List
       </Button>
       <Typography variant="h5" sx={{ fontWeight: 600, mb: 2 }}>
@@ -222,7 +237,14 @@ export default function ConfigEditor({ ctx, existing, onBack, onSaved, onError }
                       fullWidth
                       sx={{ flex: 1 }}
                     />
-                    <IconButton size="small" color="error" aria-label={`Remove ${r.key}`} onClick={() => setRows((prev) => prev.filter((_, idx) => idx !== i))}>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      aria-label={`Remove ${r.key}`}
+                      onClick={() => {
+                        setDirty(true);
+                        setRows((prev) => prev.filter((_, idx) => idx !== i));
+                      }}>
                       <Trash2 size={16} />
                     </IconButton>
                   </Stack>
@@ -278,11 +300,29 @@ export default function ConfigEditor({ ctx, existing, onBack, onSaved, onError }
         )}
       </BusyFields>
 
-      <Box sx={{ mt: 3 }}>
+      <Stack direction="row" alignItems="center" gap={1.5} sx={{ mt: 3 }}>
         <Button variant="contained" onClick={handleSave} disabled={!canSave} startIcon={save.isPending ? <CircularProgress size={16} color="inherit" /> : undefined}>
           {save.isPending ? 'Saving…' : isEdit ? 'Update' : 'Create'}
         </Button>
-      </Box>
+        {blockedReason && (
+          <Typography variant="body2" color="text.secondary">
+            {blockedReason}
+          </Typography>
+        )}
+      </Stack>
+
+      <Dialog open={confirmLeave} onClose={() => setConfirmLeave(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Discard changes?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>Your changes to this config haven&apos;t been saved.</DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmLeave(false)}>Keep Editing</Button>
+          <Button color="error" variant="contained" onClick={onBack}>
+            Discard
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
